@@ -12,16 +12,17 @@
 
 module Main(main, createGolds) where
 
-import Control.Monad(when)
-import System.Directory(doesDirectoryExist, findExecutable)
-import System.Environment(getArgs)
-import System.Exit
-import System.FilePath((</>))
-import Test.HUnit
+import Control.Monad           (when)
+import System.Directory        (doesDirectoryExist, findExecutable)
+import System.Environment      (getArgs, getEnv)
+import System.Exit             (exitWith, ExitCode(..))
+import System.FilePath         ((</>))
+import System.Process          (readProcessWithExitCode)
+import Test.HUnit              (Test(..), Counts(..), runTestTT)
 
-import Data.SBV
-import Data.SBV.Utils.SBVTest
-import Paths_sbv(getDataDir)
+import Data.SBV                (yices, SMTSolver(..))
+import Data.SBV.Utils.SBVTest  (SBVTestSuite(..), generateGoldCheck)
+import Paths_sbv               (getDataDir)
 
 -- To add a new collection of tests, import below and add to testCollection variable
 import qualified Data.SBV.TestSuite.Arrays.Memory                 as T01(testSuite)
@@ -46,6 +47,8 @@ import qualified Data.SBV.TestSuite.Puzzles.PowerSet              as T19(testSui
 import qualified Data.SBV.TestSuite.Puzzles.Sudoku                as T20(testSuite)
 import qualified Data.SBV.TestSuite.Puzzles.Temperature           as T21(testSuite)
 import qualified Data.SBV.TestSuite.Puzzles.U2Bridge              as T22(testSuite)
+import qualified Data.SBV.TestSuite.Uninterpreted.AUF             as T23(testSuite)
+import qualified Data.SBV.TestSuite.Uninterpreted.Uninterpreted   as T24(testSuite)
 
 testCollection :: [SBVTestSuite]
 testCollection = [
@@ -54,7 +57,7 @@ testCollection = [
      , T09.testSuite, T10.testSuite, T11.testSuite, T12.testSuite
      , T13.testSuite, T14.testSuite, T15.testSuite, T16.testSuite
      , T17.testSuite, T18.testSuite, T19.testSuite, T20.testSuite
-     , T21.testSuite, T22.testSuite
+     , T21.testSuite, T22.testSuite, T23.testSuite, T24.testSuite
      ]
 -- No user serviceable parts below..
 
@@ -72,23 +75,40 @@ checkGoldDir gd = do e <- doesDirectoryExist gd
                                 putStrLn $ "*** Cannot run test cases, exiting."
                                 exitWith $ ExitFailure 1
 
-checkDefaultSolver :: IO ()
-checkDefaultSolver = do mbP <- findExecutable ex
-                        case mbP of
-                          Nothing -> do putStrLn $ "*** Cannot find default SMT solver executable for " ++ nm
-                                        putStrLn $ "*** Please make sure the executable " ++ show ex
-                                        putStrLn $ "*** is installed and is in your path."
-                                        putStrLn $ "*** Cannot run test cases, exiting."
-                                        exitWith $ ExitFailure 1
-                          Just p  -> putStrLn $ "*** Using solver : " ++ nm ++ " (" ++ show p ++ ")"
- where ex = executable $ solver $ defaultSMTCfg
-       nm = name $ solver $ defaultSMTCfg
+checkYices :: IO ()
+checkYices = do ex <- getEnv "SBV_YICES" `catch` (\_ -> return (executable yices))
+                mbP <- findExecutable ex
+                case mbP of
+                  Nothing -> do putStrLn $ "*** Cannot find default SMT solver executable for " ++ nm
+                                putStrLn $ "*** Please make sure the executable " ++ show ex
+                                putStrLn $ "*** is installed and is in your path."
+                                putStrLn $ "*** Cannot run test cases, exiting."
+                                exitWith $ ExitFailure 1
+                  Just p  -> do putStrLn $ "*** Using solver : " ++ nm ++ " (" ++ show p ++ ")"
+                                checkYicesVersion p
+ where nm = name yices
+
+checkYicesVersion :: FilePath -> IO ()
+checkYicesVersion p =
+        do (ec, yOut, _yErr) <- readProcessWithExitCode p ["-V"] ""
+           case ec of
+             ExitFailure _ -> do putStrLn $ "*** Cannot determine Yices version. Please install Yices version 2.X first."
+                                 exitWith $ ExitFailure 1
+             ExitSuccess   -> do let isYices1 = take 2 yOut == "1." -- crude test; might fail..
+                                 when isYices1 $ putStrLn $ "*** Yices version 1.X is detected. Version 2.X is strongly recommended!"
+                                 opts <- getEnv "SBV_YICES_OPTIONS" `catch` (\_ -> return (unwords (options yices)))
+                                 when (isYices1 && opts /= "-tc -smt -e") $ do
+                                           putStrLn $ "*** Either install Yices 2.X, or set the environment variable:"
+                                           putStrLn $ "***     SBV_YICES_OPTIONS=\"-tc -smt -e\""
+                                           putStrLn $ "*** To use Yices 1.X with SBV."
+                                           putStrLn $ "*** However, upgrading to Yices 2.X is highly recommended!"
+                                           exitWith $ ExitFailure 1
 
 run :: Bool -> [String] -> IO ()
 run shouldCreate [gd] =
         do putStrLn $ "*** Starting SBV unit tests..\n*** Gold files at: " ++ show gd
            checkGoldDir gd
-           checkDefaultSolver
+           checkYices
            let mkTst (SBVTestSuite f) = f $ generateGoldCheck gd shouldCreate
            cts <- runTestTT $ TestList $ map mkTst testCollection
            decide cts

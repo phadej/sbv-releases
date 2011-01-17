@@ -41,6 +41,7 @@ in Haskell. It introduces the types:
   - `SInt8`,  `SInt16`,  `SInt32`,  `SInt64`: Symbolic Ints (signed)
   - Arrays of symbolic values
   - Symbolic polynomials over GF(2^n ), and polynomial arithmetic
+  - Uninterpreted constants and functions over symbolic values
 
 The user can construct ordinary Haskell programs using these types, which behave
 very similar to their concrete counterparts. In particular these types belong to the
@@ -76,10 +77,10 @@ be hooked up with relative ease.
 
 Prerequisites
 =============
-You **should** download and install Yices on your machine, and make sure the
-"yices" executable is in your path before using the sbv library, as it is the
-current default solver. Alternatively, you can specify the location of yices
-executable in the environment variable `SBV_YICES` and the options to yices
+You **should** download and install Yices (version 2.X) on your machine, and
+make sure the "yices" executable is in your path before using the sbv library,
+as it is the current default solver. Alternatively, you can specify the location
+of yices executable in the environment variable `SBV_YICES` and the options to yices
 in `SBV_YICES_OPTIONS`. (The default for the latter is `"-m -f"`.)
 
 Examples

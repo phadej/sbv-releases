@@ -1,11 +1,12 @@
 Name:          sbv
-Version:       0.9.2
+Version:       0.9.3
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic Bit Vectors: Prove bit-precise program properties using SMT solvers.
 Description:   Adds support for symbolic bit vectors, allowing formal models of bit-precise
                programs to be created. Supports symbolic arrays and polynomials over GF(2^n).
-               Aims to provide seamless integration with SMT solvers to produce formal
-               property proofs of theoremhood and satisfiability, with counter-examples.
+               Supports uninterpreted constants and functions. Aims to provide seamless integration
+               with SMT solvers to produce formal property proofs of theoremhood and
+               satisfiability, with counter-examples.
 Copyright:     Levent Erkok, 2011
 License:       BSD3
 License-file:  LICENSE
@@ -46,6 +47,7 @@ Library
                   , Data.SBV.Examples.Puzzles.NQueens
                   , Data.SBV.Examples.Puzzles.Sudoku
                   , Data.SBV.Examples.Puzzles.U2Bridge
+                  , Data.SBV.Examples.Uninterpreted.AUF
   Other-modules   : Data.SBV.BitVectors.Data
                   , Data.SBV.BitVectors.Bit
                   , Data.SBV.BitVectors.Model
@@ -75,6 +77,7 @@ Library
                   , Data.SBV.Examples.PrefixSum.PrefixSum
                   , Data.SBV.Examples.Puzzles.PowerSet
                   , Data.SBV.Examples.Puzzles.Temperature
+                  , Data.SBV.Examples.Uninterpreted.Uninterpreted
                   , Data.SBV.TestSuite.Arrays.Memory
                   , Data.SBV.TestSuite.Basics.BasicTests
                   , Data.SBV.TestSuite.Basics.Higher
@@ -97,6 +100,8 @@ Library
                   , Data.SBV.TestSuite.Puzzles.Sudoku
                   , Data.SBV.TestSuite.Puzzles.U2Bridge
                   , Data.SBV.TestSuite.Puzzles.Temperature
+                  , Data.SBV.TestSuite.Uninterpreted.AUF
+                  , Data.SBV.TestSuite.Uninterpreted.Uninterpreted
 
 Executable SBVUnitTests
   main-is         : SBVUnitTest/SBVUnitTest.hs

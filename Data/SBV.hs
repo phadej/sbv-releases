@@ -46,6 +46,8 @@
 --
 --   * Symbolic polynomials over GF(2^n), and polynomial arithmetic
 --
+--   * Uninterpreted constants and functions over symbolic values
+--
 -- The user can construct ordinary Haskell programs using these types, which behave
 -- very similar to their concrete counterparts. In particular these types belong to the
 -- standard classes 'Num', 'Bits', custom versions of 'Eq' ('EqSymbolic') 
@@ -125,6 +127,8 @@ module Data.SBV (
   , bAnd, bOr, bAny, bAll
   -- ** Pretty-printing and reading numbers in Hex & Binary
   , PrettyNum(..), readBin
+  -- * Uninterpreted constants and functions
+  , Uninterpreted(..)
 
   -- * Proving properties
   -- $proveIntro
