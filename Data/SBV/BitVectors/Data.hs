@@ -38,6 +38,7 @@ import Control.DeepSeq                 (NFData(..))
 import Control.Monad.Reader            (MonadReader, ReaderT, ask, runReaderT)
 import Control.Monad.Trans             (MonadIO, liftIO)
 import Data.Bits                       (Bits(..))
+import Data.Char                       (isAlpha, isAlphaNum)
 import Data.Int                        (Int8, Int16, Int32, Int64)
 import Data.Word                       (Word8, Word16, Word32, Word64)
 import Data.IORef                      (IORef, newIORef, modifyIORef, readIORef, writeIORef)
@@ -336,7 +337,9 @@ type SInt64  = SBV Int64
 -- Needed to satisfy the Num hierarchy
 instance Show (SBV a) where
   show (SBV _         (Left c))  = show c
-  show (SBV (sgn, sz) (Right _)) = "<SBV> :: [" ++ show sz ++ (if sgn then "S" else "U") ++ "]"
+  show (SBV (sgn, sz) (Right _)) = "<symbolic> :: " ++ t
+                where t | not sgn && sz == 1 = "SBool"
+                        | True               = (if sgn then "SInt" else "SWord") ++ show sz
 
 instance Eq (SBV a) where
   SBV _ (Left a) == SBV _ (Left b) = a == b
@@ -355,11 +358,14 @@ incCtr s = do ctr <- readIORef (rctr s)
               return ctr
 
 newUninterpreted :: State -> String -> SBVType -> IO ()
-newUninterpreted st nm t = do
+newUninterpreted st nm t
+  | null nm || not (isAlpha (head nm)) || not (all isAlphaNum (tail nm))
+  = error $ "Bad uninterpreted constant name: " ++ show nm ++ ". Must be a valid identifier."
+  | True = do
         uiMap <- readIORef (rUIMap st)
         case nm `Map.lookup` uiMap of
           Just t' -> if t /= t'
-                     then error $  "Uninterpreted constant " ++ nm ++ " used at incompatible types\n"
+                     then error $  "Uninterpreted constant " ++ show nm ++ " used at incompatible types\n"
                                 ++ "      Current type      : " ++ show t ++ "\n"
                                 ++ "      Previously used at: " ++ show t'
                      else return ()
