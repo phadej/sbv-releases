@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.7
+Version:       0.9.8
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic Bit Vectors: Prove bit-precise program properties using SMT solvers.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -56,6 +56,10 @@ Cabal-Version: >= 1.6
 Data-Files: SBVUnitTest/GoldFiles/*.gold
 Extra-Source-Files: INSTALL, README, COPYRIGHT
 
+source-repository head
+    type:       git
+    location:   git://github.com/LeventErkok/sbv.git
+
 Flag test
   Description: Run the unit-test suite after build
   Default    : False
@@ -80,6 +84,7 @@ Library
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
                   , Data.SBV.Examples.Polynomials.Polynomials
+                  , Data.SBV.Examples.PrefixSum.PrefixSum
                   , Data.SBV.Examples.Puzzles.DogCatMouse
                   , Data.SBV.Examples.Puzzles.MagicSquare
                   , Data.SBV.Examples.Puzzles.NQueens
@@ -113,7 +118,6 @@ Library
                   , Data.SBV.Examples.CRC.GenPoly
                   , Data.SBV.Examples.CRC.Parity
                   , Data.SBV.Examples.CRC.USB5
-                  , Data.SBV.Examples.PrefixSum.PrefixSum
                   , Data.SBV.Examples.Puzzles.PowerSet
                   , Data.SBV.Examples.Puzzles.Temperature
                   , Data.SBV.Examples.Uninterpreted.Uninterpreted

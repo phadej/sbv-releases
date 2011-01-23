@@ -14,9 +14,9 @@
 
 module Data.SBV.Provers.Yices(yices, timeout) where
 
-import Control.Monad      (foldM)
 import Data.Char          (isDigit)
-import Data.List          (sortBy, isPrefixOf)
+import Data.List          (sortBy, isPrefixOf, intercalate, transpose, partition)
+import Data.Maybe         (catMaybes, isJust, fromJust)
 import System.Environment (getEnv)
 
 import Data.SBV.BitVectors.Data
@@ -32,11 +32,11 @@ yices = SMTSolver {
          , executable = "yices"
          -- , options    = ["-tc", "-smt", "-e"]   -- For Yices1
          , options    = ["-m", "-f"]  -- For Yices2
-         , engine     = \cfg inps pgm -> do
+         , engine     = \cfg inps modelMap pgm -> do
                                 execName <-                getEnv "SBV_YICES"           `catch` (\_ -> return (executable (solver cfg)))
                                 execOpts <- (words `fmap` (getEnv "SBV_YICES_OPTIONS")) `catch` (\_ -> return (options (solver cfg)))
                                 let cfg' = cfg { solver = (solver cfg) {executable = execName, options = execOpts} }
-                                standardSolver cfg' pgm (ProofError cfg) (interpret cfg inps)
+                                standardSolver cfg' pgm (ProofError cfg) (interpret cfg inps modelMap)
          }
 
 timeout :: Int -> SMTSolver -> SMTSolver
@@ -47,24 +47,30 @@ timeout n s
 sortByNodeId :: [(Int, a)] -> [(Int, a)]
 sortByNodeId = sortBy (\(x, _) (y, _) -> compare x y)
 
-interpret :: SMTConfig -> [NamedSymVar] -> [String] -> SMTResult
-interpret cfg _    ("unsat":_)      = Unsatisfiable cfg
-interpret cfg inps ("unknown":rest) = Unknown       cfg  $ extractMap inps rest
-interpret cfg inps ("sat":rest)     = Satisfiable   cfg  $ extractMap inps rest
-interpret cfg _    ("timeout":_)    = TimeOut       cfg
-interpret cfg _    ls               = ProofError    cfg  $ ls
+interpret :: SMTConfig -> [NamedSymVar] -> [(String, UnintKind)] -> [String] -> SMTResult
+interpret cfg _    _        ("unsat":_)      = Unsatisfiable cfg
+interpret cfg inps modelMap ("unknown":rest) = Unknown       cfg  $ extractMap inps modelMap rest
+interpret cfg inps modelMap ("sat":rest)     = Satisfiable   cfg  $ extractMap inps modelMap rest
+interpret cfg _    _        ("timeout":_)    = TimeOut       cfg
+interpret cfg _    _        ls               = ProofError    cfg  $ ls
 
-extractMap :: [NamedSymVar] -> [String] -> SMTModel
-extractMap inps solverLines =
+extractMap :: [NamedSymVar] -> [(String, UnintKind)] -> [String] -> SMTModel
+extractMap inps modelMap solverLines =
    SMTModel { modelAssocs    = map (\(_, y) -> y) $ sortByNodeId $ concatMap (getCounterExample inps) modelLines
-            , modelUninterps = extractUnints unintLines
+            , modelUninterps = [(n, ls) | (UFun _ n, ls) <- uis]
+            , modelArrays    = [(n, ls) | (UArr _ n, ls) <- uis]
             }
-  where (modelLines, unintLines) = break ("--- uninterpreted_" `isPrefixOf`) solverLines
+  where (modelLines, unintLines) = moveConstUIs $ break ("--- " `isPrefixOf`) solverLines
+        uis = extractUnints modelMap unintLines
+
+-- another crude hack
+moveConstUIs :: ([String], [String]) -> ([String], [String])
+moveConstUIs (pre, post) = (pre', concatMap mkDecl extras ++ post)
+  where (extras, pre') = partition ("(= uninterpreted_" `isPrefixOf`) pre
+        mkDecl s = ["--- " ++ takeWhile (/= ' ') (drop 3 s) ++ " ---", s]
 
 getCounterExample :: [NamedSymVar] -> String -> [(Int, (String, CW))]
-getCounterExample inps line
-    | isComment line = []
-    | True           = either err extract (parseSExpr line)
+getCounterExample inps line = either err extract (parseSExpr line)
   where err r =  error $  "*** Failed to parse Yices model output from: "
                        ++ "*** " ++ show line ++ "\n"
                        ++ "*** Reason: " ++ r ++ "\n"
@@ -81,48 +87,64 @@ getCounterExample inps line
         extract (S_App [S_Con "=", S_Num i, S_Con v]) | Just (n, s, nm) <- isInput v = [(n, (nm, mkConstCW (hasSign s, sizeOf s) i))]
         extract _                                                                    = []
 
--- this is largely by observation of Yices output; not quite sure if it captures all
-isComment :: String -> Bool
-isComment s = any (`isPrefixOf` s) prefixes
-  where prefixes = ["---", "default"]
+extractUnints :: [(String, UnintKind)] -> [String] -> [(UnintKind, [String])]
+extractUnints modelMap = catMaybes . map (extractUnint modelMap) . chunks
+  where chunks []     = []
+        chunks (x:xs) = let (f, r) = span (not . ("---" `isPrefixOf`)) xs in (x:f) : chunks r
 
-extractUnints :: [String] -> [(String, [String])]
-extractUnints [] = []
-extractUnints xs = case extractUnint first of
-                     Nothing -> extractUnints rest
-                     Just x   -> x : extractUnints rest
-  where first = takeWhile p xs
-        rest  = tail' (dropWhile p xs)
-        p = not . ("----" `isPrefixOf`)
-        tail' []       = []
-        tail' (_ : rs) = rs
-
-extractUnint :: [String] -> Maybe (String, [String])
-extractUnint []           = Nothing
-extractUnint (tag : rest)
-  | null tag' = Nothing
-  | True      = foldM (getUIVal f) (0, []) rest >>= \(_, xs) -> return (f, reverse xs)
-  where tag' = dropWhile (/= '_') tag
+-- Parsing the Yices output is done extremely crudely and designed
+-- mostly by observation of Yices output. Likely to have bugs and
+-- brittle as Yices evolves. We really need an SMT-Lib2 like interface.
+extractUnint :: [(String, UnintKind)] -> [String] -> Maybe (UnintKind, [String])
+extractUnint _    []           = Nothing
+extractUnint mmap (tag : rest)
+  | null tag'                  = Nothing
+  | not (isJust mbKnd)         = Nothing
+  | True                       = mapM (getUIVal knd) rest >>= \xs -> return (knd, format knd xs)
+  where mbKnd | "--- uninterpreted_" `isPrefixOf` tag = uf `lookup` mmap
+              | True                                  = af `lookup` mmap
+        knd = fromJust mbKnd
+        tag' = dropWhile (/= '_') tag
         f    = takeWhile (/= ' ') (tail tag')
+        uf   = f
+        af   = "array_" ++ f
 
-getUIVal :: String -> (Int, [String]) -> String -> Maybe (Int, [String])
-getUIVal f (cnt, sofar) s
+getUIVal :: UnintKind -> String -> Maybe (String, [String], String)
+getUIVal knd s
   | "default: " `isPrefixOf` s
-  = getDefaultVal cnt f (dropWhile (/= ' ') s) >>= \d -> return (cnt, d : sofar)
+  = getDefaultVal knd (dropWhile (/= ' ') s)
   | True
   = case parseSExpr s of
-       Right (S_App [S_Con "=", (S_App (S_Con v : args)), S_Num i]) | v == "uninterpreted_" ++ f
-              -> getCallVal cnt f args i >>= \(cnt', d) -> return (cnt', d : sofar)
+       Right (S_App [S_Con "=", (S_App (S_Con _ : args)), S_Num i]) -> getCallVal knd args i
+       Right (S_App [S_Con "=", S_Con _, S_Num i])                  -> getCallVal knd []   i
        _ -> Nothing
 
-getDefaultVal :: Int -> String -> String -> Maybe String
-getDefaultVal cnt f n = case parseSExpr n of
-                          Right (S_Num i) -> Just $ f ++ " " ++ unwords (replicate cnt "_") ++ " = " ++ show i
-                          _               -> Nothing
+getDefaultVal :: UnintKind -> String -> Maybe (String, [String], String)
+getDefaultVal knd n = case parseSExpr n of
+                        Right (S_Num i) -> Just $ showDefault knd (show i)
+                        _               -> Nothing
 
-getCallVal :: Int -> String -> [SExpr] -> Integer -> Maybe (Int, String)
-getCallVal cnt f args res = mapM getArg args >>= \as -> return (cnt `max` length as, f ++ " " ++ unwords as ++ " = " ++ show res)
+getCallVal :: UnintKind -> [SExpr] -> Integer -> Maybe (String, [String], String)
+getCallVal knd args res = mapM getArg args >>= \as -> return (showCall knd as (show res))
 
 getArg :: SExpr -> Maybe String
 getArg (S_Num i) = Just (show i)
 getArg _         = Nothing
+
+showDefault :: UnintKind -> String -> (String, [String], String)
+showDefault (UFun cnt f) res = (f, replicate cnt "_", res)
+showDefault (UArr cnt f) res = (f, replicate cnt "_", res)
+
+showCall :: UnintKind -> [String] -> String -> (String, [String], String)
+showCall (UFun _ f) as res = (f, as, res)
+showCall (UArr _ f) as res = (f, as, res)
+
+format :: UnintKind -> [(String, [String], String)] -> [String]
+format (UFun{}) eqns = fmtFun eqns
+format (UArr{}) eqns = let fmt (f, as, r) = f ++ "[" ++ intercalate ", " as ++ "] = " ++ r in map fmt eqns
+
+fmtFun :: [(String, [String], String)] -> [String]
+fmtFun ls = map fmt ls
+  where fmt (f, as, r) = f ++ " " ++ unwords (map align (zip as (lens ++ repeat 0))) ++ " = " ++ r
+        lens           = map (maximum . (0:)) $ map (map length) $ transpose [as | (_, as, _) <- ls]
+        align (s, i)   = take (i `max` length s) (s ++ repeat ' ')

@@ -26,12 +26,12 @@ module Data.SBV.BitVectors.Data
  , mkConstCW, liftCW2, mapCW, mapCW2
  , SW(..), trueSW, falseSW
  , SBV(..), NodeId(..), mkSymSBV
- , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), SArray(..)
+ , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), SArray(..), arrayUIKind
  , sbvToSW
  , SBVExpr(..), newExpr
  , cache, uncache, HasSignAndSize(..)
- , Op(..), NamedSymVar, getTableIndex, Pgm, Symbolic, runSymbolic, State, Size, output, Result(..)
- , SBVType(..), newUninterpreted
+ , Op(..), NamedSymVar, UnintKind(..), getTableIndex, Pgm, Symbolic, runSymbolic, State, Size, output, Result(..)
+ , SBVType(..), newUninterpreted, unintFnUIKind
  ) where
 
 import Control.DeepSeq                 (NFData(..))
@@ -76,6 +76,10 @@ trueSW  = SW (False, 1) $ NodeId (-1)
 newtype SBVType = SBVType [(Bool, Size)]
              deriving (Eq, Ord)
 
+-- how many arguments does the type take?
+typeArity :: SBVType -> Int
+typeArity (SBVType xs) = length xs - 1
+
 instance Show SBVType where
   show (SBVType []) = error "SBV: internal error, empty SBVType"
   show (SBVType xs) = intercalate " -> " $ map sh xs
@@ -108,6 +112,7 @@ class HasSignAndSize a where
     | True                             = if hasSign a then "SInt" else "SWord" ++ show (sizeOf a)
 
 instance HasSignAndSize Bit    where {sizeOf _ =  1; hasSign _ = False}
+instance HasSignAndSize Bool   where {sizeOf _ =  1; hasSign _ = False}
 instance HasSignAndSize Int8   where {sizeOf _ =  8; hasSign _ = True }
 instance HasSignAndSize Word8  where {sizeOf _ =  8; hasSign _ = False}
 instance HasSignAndSize Int16  where {sizeOf _ = 16; hasSign _ = True }
@@ -189,9 +194,9 @@ instance Show Op where
   show (LkUp (ti, at, rt, l) i e)
         = "lookup(" ++ tinfo ++ ", " ++ show i ++ ", " ++ show e ++ ")"
         where tinfo = "table" ++ show ti ++ "(" ++ show at ++ " -> " ++ show rt ++ ", " ++ show l ++ ")"
-  show (ArrEq i j)   = "array" ++ show i ++ " == array" ++ show j
-  show (ArrRead i)   = "select array" ++ show i
-  show (Uninterpreted i) = "ui_" ++ i
+  show (ArrEq i j)   = "array_" ++ show i ++ " == array_" ++ show j
+  show (ArrRead i)   = "select array_" ++ show i
+  show (Uninterpreted i) = "uninterpreted_" ++ i
   show op
     | Just s <- op `lookup` syms = s
     | True                       = error "impossible happened; can't find op!"
@@ -227,14 +232,19 @@ type Pgm         = S.Seq (SW, SBVExpr)
 -- | 'NamedSymVar' pairs symbolic words and user given/automatically generated names
 type NamedSymVar = (SW, String)
 
+-- | 'UnintKind' pairs array names and uninterpreted constants with their "kinds"
+-- used mainly for printing counterexamples
+data UnintKind = UFun Int String | UArr Int String      -- in each case, arity and the aliasing name
+ deriving Show
+
 -- | Result of running a symbolic computation
-data Result      = Result [NamedSymVar]                 -- inputs
-                          [(SW, CW)]                    -- constants
-                          [((Int, Int, Int), [SW])]     -- tables (automatically constructed)
-                          [(Int, ArrayInfo)]            -- arrays (user specified)
-                          [(String, SBVType)]           -- uninterpreted constants
-                          Pgm                           -- assignments
-                          [SW]                          -- outputs
+data Result = Result [NamedSymVar]                 -- inputs
+                     [(SW, CW)]                    -- constants
+                     [((Int, Int, Int), [SW])]     -- tables (automatically constructed)
+                     [(Int, ArrayInfo)]            -- arrays (user specified)
+                     [(String, SBVType)]           -- uninterpreted constants
+                     Pgm                           -- assignments
+                     [SW]                          -- outputs
 
 instance Show Result where
   show (Result _ cs _ _ [] _ [r])
@@ -267,21 +277,22 @@ instance Show Result where
             where mkT (b, s)
                    | s == 1  = "SBool"
                    | True    = if b then "SInt" else "SWord" ++ show s
-                  ni = "array" ++ show i
+                  ni = "array_" ++ show i
                   alias | ni == nm = ""
                         | True     = ", aliasing " ++ show nm
-          shui (nm, t) = "  ui_" ++ nm ++ " :: " ++ show t
+          shui (nm, t) = "  uninterpreted_" ++ nm ++ " :: " ++ show t
 
-data ArrayContext = ArrayFree
-                  | ArrayInit SW
+data ArrayContext = ArrayFree (Maybe SW)
+                  | ArrayReset Int SW
                   | ArrayMutate Int SW SW
                   | ArrayMerge  SW Int Int
 
 instance Show ArrayContext where
-  show ArrayFree           = " initialized with random elements"
-  show (ArrayInit s)       = " initialized with " ++ show s ++ ":: " ++ showType s
-  show (ArrayMutate i a b) = " cloned from array" ++ show i ++ " with " ++ show a ++ " :: " ++ showType a ++ " |-> " ++ show b ++ " :: " ++ showType b
-  show (ArrayMerge s i j)  = " merged arrays " ++ show i ++ " and " ++ show j ++ " on condition " ++ show s
+  show (ArrayFree Nothing)  = " initialized with random elements"
+  show (ArrayFree (Just s)) = " initialized with " ++ show s ++ " :: " ++ showType s
+  show (ArrayReset i s)     = " reset array_" ++ show i ++ " with " ++ show s ++ " :: " ++ showType s
+  show (ArrayMutate i a b)  = " cloned from array_" ++ show i ++ " with " ++ show a ++ " :: " ++ showType a ++ " |-> " ++ show b ++ " :: " ++ showType b
+  show (ArrayMerge s i j)   = " merged arrays " ++ show i ++ " and " ++ show j ++ " on condition " ++ show s
 
 type ExprMap    = Map.Map SBVExpr SW
 type CnstMap    = Map.Map CW SW
@@ -289,6 +300,19 @@ type TableMap   = Map.Map [SW] (Int, Int, Int)
 type ArrayInfo  = (String, ((Bool, Size), (Bool, Size)), ArrayContext)
 type ArrayMap   = IMap.IntMap ArrayInfo
 type UIMap      = Map.Map String SBVType
+
+
+unintFnUIKind :: (String, SBVType) -> (String, UnintKind)
+unintFnUIKind (s, t) = (s, UFun (typeArity t) s)
+
+arrayUIKind :: (Int, ArrayInfo) -> Maybe (String, UnintKind)
+arrayUIKind (i, (nm, _, ctx)) 
+  | external ctx = Just ("array_" ++ show i, UArr 1 nm) -- arrays are always 1-dimensional in the SMT-land. (Unless encoded explicitly)
+  | True         = Nothing
+  where external (ArrayFree{})   = True
+        external (ArrayReset{})  = False
+        external (ArrayMutate{}) = False
+        external (ArrayMerge{})  = False
 
 data State  = State { rctr       :: IORef Int
                     , rinps      :: IORef [NamedSymVar]
@@ -497,6 +521,8 @@ runSymbolic (Symbolic c) = do
 -- to be fed to a symbolic program. Note that these methods are typically not needed
 -- in casual uses with 'prove', 'sat', 'allSat' etc, as default instances automatically
 -- provide the necessary bits.
+--
+-- Minimal complete definiton: free, free_, literal, fromCW
 class Ord a => SymWord a where
   -- | Create a user named input
   free       :: String -> Symbolic (SBV a)
@@ -513,7 +539,7 @@ class Ord a => SymWord a where
   -- | Is the symbolic word really symbolic?
   isSymbolic :: SBV a -> Bool
 
-  -- | minimal complete definiton: free, free_, literal, fromCW
+  -- minimal complete definiton: free, free_, literal, fromCW
   unliteral (SBV _ (Left c))  = Just $ fromCW c
   unliteral _                 = Nothing
   isConcrete (SBV _ (Left _)) = True
@@ -528,17 +554,19 @@ class Ord a => SymWord a where
 -- An @array a b@ is an array indexed by the type @'SBV' a@, with elements of type @'SBV' b@
 -- If an initial value is not provided in 'newArray_' and 'newArray' methods, then the elements
 -- are left unspecified, i.e., the solver is free to choose any value. This is the right thing
--- to do if arrays are used as inputs to functions to be verified, typically. Reading an
--- uninitilized entry is an error.
+-- to do if arrays are used as inputs to functions to be verified, typically. 
+--
 -- While it's certainly possible for user to create instances of 'SymArray', the
 -- 'SArray' and 'SFunArray' instances already provided should cover most use cases
--- in practice.
+-- in practice. (There are some differences between these models, however, see the corresponding
+-- declaration.)
+--
 --
 -- Minimal complete definition: All methods are required, no defaults.
 class SymArray array where
   -- | Create a new array, with an optional initial value
   newArray_      :: (HasSignAndSize a, HasSignAndSize b) => Maybe (SBV b) -> Symbolic (array a b)
-  -- | Create a named new array with, with an optional initial value
+  -- | Create a named new array, with an optional initial value
   newArray       :: (HasSignAndSize a, HasSignAndSize b) => String -> Maybe (SBV b) -> Symbolic (array a b)
   -- | Read the array element at @a@
   readArray      :: array a b -> SBV a -> SBV b
@@ -552,6 +580,17 @@ class SymArray array where
   mergeArrays    :: SymWord b => SBV Bool -> array a b -> array a b -> array a b
 
 -- | Arrays implemented in terms of SMT-arrays: <http://goedel.cs.uiowa.edu/smtlib/theories/ArraysEx.smt2>
+--
+--   * Maps directly to SMT-lib arrays
+--
+--   * Reading from an unintialized value is OK and yields an uninterpreted result
+--
+--   * Can check for equality of these arrays
+--
+--   * Cannot quick-check theorems using @SArray@ values
+--
+--   * Typically slower as it heavily relies on SMT-solving for the array theory
+--
 data SArray a b = SArray ((Bool, Size), (Bool, Size)) (Cached ArrayIndex)
 type ArrayIndex = Int
 
@@ -559,17 +598,18 @@ instance (HasSignAndSize a, HasSignAndSize b) => Show (SArray a b) where
   show (SArray{}) = "SArray<" ++ showType (undefined :: a) ++ ":" ++ showType (undefined :: b) ++ ">"
 
 instance SymArray SArray where
-  newArray_  = declNewSArray (\t -> "array" ++ show t)
+  newArray_  = declNewSArray (\t -> "array_" ++ show t)
   newArray n = declNewSArray (const n)
   readArray (SArray (_, bsgnsz) f) a = SBV bsgnsz $ Right $ cache r
      where r st = do arr <- uncache f st
                      i   <- sbvToSW st a
                      newExpr st bsgnsz (SBVApp (ArrRead arr) [i])
-  resetArray (SArray ainfo _) b = SArray ainfo $ cache g
+  resetArray (SArray ainfo f) b = SArray ainfo $ cache g
      where g st = do amap <- readIORef (rArrayMap st)
                      val <- sbvToSW st b
+                     i <- uncache f st
                      let j = IMap.size amap
-                     j `seq` modifyIORef (rArrayMap st) (IMap.insert j ("array" ++ show j, ainfo, ArrayInit val))
+                     j `seq` modifyIORef (rArrayMap st) (IMap.insert j ("array_" ++ show j, ainfo, ArrayReset i val))
                      return j
   writeArray (SArray ainfo f) a b = SArray ainfo $ cache g
      where g st = do arr  <- uncache f st
@@ -577,7 +617,7 @@ instance SymArray SArray where
                      val  <- sbvToSW st b
                      amap <- readIORef (rArrayMap st)
                      let j = IMap.size amap
-                     j `seq` modifyIORef (rArrayMap st) (IMap.insert j ("array" ++ show j, ainfo, ArrayMutate arr addr val))
+                     j `seq` modifyIORef (rArrayMap st) (IMap.insert j ("array_" ++ show j, ainfo, ArrayMutate arr addr val))
                      return j
   mergeArrays t (SArray ainfo a) (SArray _ b) = SArray ainfo $ cache h
     where h st = do ai <- uncache a st
@@ -585,7 +625,7 @@ instance SymArray SArray where
                     ts <- sbvToSW st t
                     amap <- readIORef (rArrayMap st)
                     let k = IMap.size amap
-                    k `seq` modifyIORef (rArrayMap st) (IMap.insert k ("array" ++ show k, ainfo, ArrayMerge ts ai bi))
+                    k `seq` modifyIORef (rArrayMap st) (IMap.insert k ("array_" ++ show k, ainfo, ArrayMerge ts ai bi))
                     return k
 
 declNewSArray :: forall a b. (HasSignAndSize a, HasSignAndSize b) => (Int -> String) -> Maybe (SBV b) -> Symbolic (SArray a b)
@@ -596,13 +636,24 @@ declNewSArray mkNm mbInit = do
    amap <- liftIO $ readIORef $ rArrayMap st
    let i = IMap.size amap
        nm = mkNm i
-   actx <- case mbInit of
-             Nothing   -> return ArrayFree
-             Just ival -> liftIO $ ArrayInit `fmap` sbvToSW st ival
+   actx <- liftIO $ case mbInit of
+                     Nothing   -> return $ ArrayFree Nothing
+                     Just ival -> sbvToSW st ival >>= \sw -> return $ ArrayFree (Just sw)
    liftIO $ modifyIORef (rArrayMap st) (IMap.insert i (nm, (asgnsz, bsgnsz), actx))
    return $ SArray (asgnsz, bsgnsz) $ cache $ const $ return i
 
--- | Arrays implemented internally as functions, and rendered as SMT-Lib functions
+-- | Arrays implemented internally as functions
+--
+--    * Internally handled by the library and not mapped to SMT-Lib
+--
+--    * Reading an uninitialized value is considered an error (will throw exception)
+--
+--    * Cannot check for equality (internally represented as functions)
+--
+--    * Can quick-check
+--
+--    * Typically faster as it gets compiled away during translation
+--
 data SFunArray a b = SFunArray (SBV a -> SBV b)
 
 instance (HasSignAndSize a, HasSignAndSize b) => Show (SFunArray a b) where
@@ -659,6 +710,7 @@ instance NFData ArrayContext
 instance NFData Pgm
 instance NFData SW
 instance NFData SBVType
+instance NFData UnintKind
 
 -- Quickcheck interface on symbolic-booleans..
 instance Testable SBool where

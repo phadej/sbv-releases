@@ -36,7 +36,7 @@ module Data.SBV.Provers.Prover (
 import Control.Monad                  (when)
 import Control.Concurrent             (forkIO)
 import Control.Concurrent.Chan.Strict (newChan, writeChan, getChanContents)
-import Data.Maybe                     (fromJust, isJust)
+import Data.Maybe                     (fromJust, isJust, catMaybes)
 
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.Model
@@ -125,7 +125,7 @@ instance (SymWord a, Provable p) => Provable (SBV a -> p) where
   forAll (s:ss) k = free s >>= \a -> forAll ss $ k a
   forAll []     k = forAll_ k
 
--- Memory
+-- Arrays (memory)
 instance (HasSignAndSize a, HasSignAndSize b, SymArray array, Provable p) => Provable (array a b -> p) where
   forAll_       k = newArray_  Nothing >>= \a -> forAll_   $ k a
   forAll (s:ss) k = newArray s Nothing >>= \a -> forAll ss $ k a
@@ -178,6 +178,11 @@ sat = satWith defaultSMTCfg
 -- | Return all satisfying assignments for a predicate, equivalent to @'allSatWith' 'defaultSMTCfg'@.
 -- Satisfying assignments are constructed lazily, so they will be available as returned by the solver
 -- and on demand.
+--
+-- NB. Uninterpreted constant/function values and counter-examples for array values are ignored for
+-- the purposes of @'allSat'@. That is, only the satisfying assignments modulo uninterpreted functions and
+-- array inputs will be returned. This is due to the limitation of not having a robust means of getting a
+-- function counter-example back from the SMT solver.
 allSat :: Provable a => a -> IO AllSatResult
 allSat = allSatWith defaultSMTCfg
 
@@ -255,35 +260,37 @@ allSatWith config p = do when (verbose config) $ putStrLn  "** Checking Satisfia
           where loop !n nonEqConsts = do
                   SatResult r <- callSolver nonEqConsts ("Looking for solution " ++ show n) SatResult config sbvPgm
                   case r of
-                    Satisfiable _ (SMTModel [] _) -> final r
-                    Unknown _ (SMTModel [] _)     -> final r
-                    ProofError _ _                -> final r
-                    TimeOut _                     -> stop
-                    Unsatisfiable _               -> stop
-                    Satisfiable _ model           -> add r >> loop (n+1) (modelAssocs model : nonEqConsts)
-                    Unknown     _ model           -> add r >> loop (n+1) (modelAssocs model : nonEqConsts)
+                    Satisfiable _ (SMTModel [] _ _) -> final r
+                    Unknown _ (SMTModel [] _ _)     -> final r
+                    ProofError _ _                  -> final r
+                    TimeOut _                       -> stop
+                    Unsatisfiable _                 -> stop
+                    Satisfiable _ model             -> add r >> loop (n+1) (modelAssocs model : nonEqConsts)
+                    Unknown     _ model             -> add r >> loop (n+1) (modelAssocs model : nonEqConsts)
 
-callSolver :: [[(String, CW)]] -> String -> (SMTResult -> b) -> SMTConfig -> ([NamedSymVar], SMTLibPgm) -> IO b
-callSolver nonEqConstraints checkMsg wrap config (inps, smtLibPgm) = do
+callSolver :: [[(String, CW)]] -> String -> (SMTResult -> b) -> SMTConfig -> ([NamedSymVar], [(String, UnintKind)], SMTLibPgm) -> IO b
+callSolver nonEqConstraints checkMsg wrap config (inps, modelMap, smtLibPgm) = do
         let msg = when (verbose config) . putStrLn . ("** " ++)
         msg checkMsg
         let finalPgm = addNonEqConstraints nonEqConstraints smtLibPgm
         msg $ "Generated SMTLib program:\n" ++ finalPgm
-        smtAnswer <- engine (solver config) config inps finalPgm
+        smtAnswer <- engine (solver config) config inps modelMap finalPgm
         msg "Done.."
         return $ wrap smtAnswer
 
-generateTrace :: Provable a => SMTConfig -> Bool -> a -> IO ([NamedSymVar], SMTLibPgm)
+generateTrace :: Provable a => SMTConfig -> Bool -> a -> IO ([NamedSymVar], [(String, UnintKind)], SMTLibPgm)
 generateTrace config isSat predicate = do
         let msg = when (verbose config) . putStrLn . ("** " ++)
             isTiming = timing config
-        msg "Generating a symbolic trace.."
+        msg "Starting symbolic simulation.."
         res <- timeIf isTiming "problem construction" $ runSymbolic $ forAll_ predicate
         msg $ "Generated symbolic trace:\n" ++ show res
         msg "Translating to SMT-Lib.."
         case res of
-          Result is consts tbls arrs uis pgm [o@(SW{})] -> timeIf isTiming "translation" $ return (is, toSMTLib isSat is consts tbls arrs uis pgm o)
-          _                                             -> error $ "SBVProver.callSolver: Impossible happened: " ++ show res
+          Result is consts tbls arrs uis pgm [o@(SW{})] ->
+             timeIf isTiming "translation" $ let uiMap = catMaybes (map arrayUIKind arrs) ++ map unintFnUIKind uis
+                                             in return (is, uiMap, toSMTLib isSat is consts tbls arrs uis pgm o)
+          _ -> error $ "SBVProver.callSolver: Impossible happened: " ++ show res
 
 -- | Equality as a proof method. Allows for
 -- very concise construction of equivalence proofs, which is very typical in
