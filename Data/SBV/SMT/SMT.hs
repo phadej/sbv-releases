@@ -106,13 +106,15 @@ instance Show SatResult where
 
 instance Show AllSatResult where
   show (AllSatResult [])  =  "No solutions found"
-  show (AllSatResult [s]) =  "One solution found\n" ++ show (SatResult s)
-  show (AllSatResult ss)  =  "Multiple solutions found:\n"       -- shouldn't display how-many; would be too slow/leak-space to compute everything..
+  show (AllSatResult [s]) =  "Only one solution found:\n" ++ shUnique s
+        where shUnique = showSMTResult "Unsatisfiable"
+                                       ("Unknown (No assignment to variables returned)") "Unknown. Potential assignment:\n" "" ""
+  show (AllSatResult ss)  =  "Multiple solutions found:\n"      -- shouldn't display how-many; would be too slow/leak-space to compute everything..
                           ++ unlines (zipWith sh [(1::Int)..] ss)
                           ++ "Done."
-        where sh i s = showSMTResult "Unsatisfiable"
-                                     ("Unknown #" ++ show i ++ "(No assignment to variables returned)") "Unknown. Potential assignment:\n"
-                                     ("Solution #" ++ show i ++ " (No assignment to variables returned)") ("Solution #" ++ show i ++ ":\n") s
+        where sh i = showSMTResult "Unsatisfiable"
+                                   ("Unknown #" ++ show i ++ "(No assignment to variables returned)") "Unknown. Potential assignment:\n"
+                                   ("Solution #" ++ show i ++ " (No assignment to variables returned)") ("Solution #" ++ show i ++ ":\n")
 
 -- | Instances of 'SatModel' can be automatically extracted from models returned by the
 -- solvers. The idea is that the sbv infrastructure provides a stream of 'CW''s (constant-words)
@@ -277,11 +279,20 @@ pipeProcess nm execName opts script = do
                                 ExitSuccess  ->  if null errors
                                                  then return $ Right $ map clean (filter (not . null) (lines contents))
                                                  else return $ Left errors
-                                ExitFailure n -> return $ Left $  "Failed to invoke " ++ nm
-                                                               ++ "\nExecutable: " ++ show execPath
-                                                               ++ "\nOptions   : " ++ unwords opts
-                                                               ++ "\nExit code : " ++ show n
+                                ExitFailure n -> let errors' = if null (dropWhile isSpace errors)
+                                                               then "(No error message printed on stderr by the executable.)"
+                                                               else errors
+                                                 in return $ Left $  "Failed to complete the call to " ++ nm
+                                                                  ++ "\nExecutable: " ++ show execPath
+                                                                  ++ "\nOptions   : " ++ unwords opts
+                                                                  ++ "\nExit code : " ++ show n
+                                                                  ++ "\nError message:"
+                                                                  ++ "\n" ++ line ++ "\n"
+                                                                  ++ intercalate "\n" (lines errors')
+                                                                  ++ "\n" ++ line
+                                                                  ++ "\nGiving up.."
   where clean = reverse . dropWhile isSpace . reverse . dropWhile isSpace
+        line  = take 78 $ repeat '='
 
 standardSolver :: SMTConfig -> String -> ([String] -> a) -> ([String] -> a) -> IO a
 standardSolver config script failure success = do
