@@ -19,6 +19,7 @@
 module Data.SBV.Examples.PrefixSum.PrefixSum where
 
 import Data.SBV
+import Data.SBV.Internals(runSymbolic)
 
 ----------------------------------------------------------------------
 -- * Formalizing power-lists
@@ -64,10 +65,10 @@ ps (_, f) = scanl1 f
 lf :: (a, a -> a -> a) -> PowerList a -> PowerList a
 lf _ []         = error "lf: malformed (empty) powerlist"
 lf _ [x]        = [x]
-lf (zero, f) pl = zipPL (zipWith f (rsh flpq) p) flpq
+lf (zero, f) pl = zipPL (zipWith f (rsh lfpq) p) lfpq
    where (p, q) = unzipPL pl
          pq     = zipWith f p q
-         flpq   = lf (zero, f) pq
+         lfpq   = lf (zero, f) pq
          rsh xs = zero : init xs
 
 
@@ -78,7 +79,7 @@ lf (zero, f) pl = zipPL (zipWith f (rsh flpq) p) flpq
 -- | Correctness theorem, for a powerlist of given size, an associative operator, and its left-unit element
 flIsCorrect :: Int -> (forall a. (OrdSymbolic a, Bits a) => (a, a -> a -> a)) -> Symbolic SBool
 flIsCorrect n zf = do
-        args :: PowerList SWord32 <- mapM (const free_) [1..n]
+        args :: PowerList SWord32 <- mkFreeVars n
         output $ ps zf args .== lf zf args
 
 -- | Proves Ladner-Fischer is equivalent to reference specification for addition.
@@ -126,7 +127,7 @@ thm2 = prove $ flIsCorrect 16 (0, smax)
 -- Also, the unit @0@ is clearly not a left-unit for @flOp@, as the third
 -- equation for @flOp@ will simply map many elements to @0@.
 thm3 :: IO ThmResult
-thm3 = prove $ do args :: PowerList SWord32 <- mapM (const free_) [(1::Int)..8]
+thm3 = prove $ do args :: PowerList SWord32 <- mkFreeVars 8
                   output $ ps (u, op) args .== lf (u, op) args
   where op :: SWord32 -> SWord32 -> SWord32
         op = uninterpret "flOp"
@@ -140,7 +141,7 @@ thm3 = prove $ do args :: PowerList SWord32 <- mapM (const free_) [(1::Int)..8]
 -- the necessary axioms for associativity and left-unit. The first argument states how wide the power list should be.
 genPrefixSumInstance :: Int -> Symbolic SBool
 genPrefixSumInstance n = do
-     args :: PowerList SWord32 <- mapM (const free_) [1..n]
+     args :: PowerList SWord32 <- mkFreeVars n
      addAxiom "flOp is associative"     $ assocAxiom (sbvUFName opH)
      addAxiom "u is left-unit for flOp" $ leftUnitAxiom (sbvUFName opH) (sbvUFName uH)
      output $ ps (u, op) args .== lf (u, op) args
@@ -207,3 +208,97 @@ prefixSum i
         yices' = yices { options    = ["-tc", "-smt", "-e"]
                        , executable = "/usr/local/yices-1.0.28/bin/yices"
                        }
+
+----------------------------------------------------------------------
+-- * Inspecting symbolic traces
+----------------------------------------------------------------------
+
+-- | A symbolic trace can help illustrate the action of Ladner-Fischer. This
+-- generator produces the actions of Ladner-Fischer for addition, showing how
+-- the computation proceeds:
+--
+-- >>> ladnerFischerTrace 8
+-- INPUTS
+--   s0 :: SWord8
+--   s1 :: SWord8
+--   s2 :: SWord8
+--   s3 :: SWord8
+--   s4 :: SWord8
+--   s5 :: SWord8
+--   s6 :: SWord8
+--   s7 :: SWord8
+-- CONSTANTS
+--   s_2 = False
+--   s_1 = True
+-- TABLES
+-- ARRAYS
+-- UNINTERPRETED CONSTANTS
+-- AXIOMS
+-- DEFINE
+--   s8 :: SWord8 = s0 + s1
+--   s9 :: SWord8 = s2 + s8
+--   s10 :: SWord8 = s2 + s3
+--   s11 :: SWord8 = s8 + s10
+--   s12 :: SWord8 = s4 + s11
+--   s13 :: SWord8 = s4 + s5
+--   s14 :: SWord8 = s11 + s13
+--   s15 :: SWord8 = s6 + s14
+--   s16 :: SWord8 = s6 + s7
+--   s17 :: SWord8 = s13 + s16
+--   s18 :: SWord8 = s11 + s17
+-- OUTPUTS
+--   s0
+--   s8
+--   s9
+--   s11
+--   s12
+--   s14
+--   s15
+--   s18
+ladnerFischerTrace :: Int -> IO ()
+ladnerFischerTrace n = gen >>= print
+  where gen = runSymbolic $ do args :: [SWord8] <- mkFreeVars n
+                               mapM_ output $ lf (0, (+)) args
+
+-- | Trace generator for the reference spec. It clearly demonstrates that the reference
+-- implementation fewer operations, but is not parallelizable at all:
+--
+-- >>> scanlTrace 8
+-- INPUTS
+--   s0 :: SWord8
+--   s1 :: SWord8
+--   s2 :: SWord8
+--   s3 :: SWord8
+--   s4 :: SWord8
+--   s5 :: SWord8
+--   s6 :: SWord8
+--   s7 :: SWord8
+-- CONSTANTS
+--   s_2 = False
+--   s_1 = True
+-- TABLES
+-- ARRAYS
+-- UNINTERPRETED CONSTANTS
+-- AXIOMS
+-- DEFINE
+--   s8 :: SWord8 = s0 + s1
+--   s9 :: SWord8 = s2 + s8
+--   s10 :: SWord8 = s3 + s9
+--   s11 :: SWord8 = s4 + s10
+--   s12 :: SWord8 = s5 + s11
+--   s13 :: SWord8 = s6 + s12
+--   s14 :: SWord8 = s7 + s13
+-- OUTPUTS
+--   s0
+--   s8
+--   s9
+--   s10
+--   s11
+--   s12
+--   s13
+--   s14
+--
+scanlTrace :: Int -> IO ()
+scanlTrace n = gen >>= print
+  where gen = runSymbolic $ do args :: [SWord8] <- mkFreeVars n
+                               mapM_ output $ ps (0, (+)) args

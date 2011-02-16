@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.9
+Version:       0.9.10
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic Bit Vectors: Prove bit-precise program properties using SMT solvers.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -26,7 +26,8 @@ Description:   Express properties about bit-precise Haskell programs and automat
                .
                  * Symbolic polynomials over GF(2^n), and polynomial arithmetic
                .
-                 * Uninterpreted constants and functions over symbolic values
+                 * Uninterpreted constants and functions over symbolic values, with user
+                   defined SMT-Lib axioms
                .
                Predicates (i.e., functions that return 'SBool') built out of
                these types can be:
@@ -86,6 +87,7 @@ Library
                   , Data.SBV.Examples.Polynomials.Polynomials
                   , Data.SBV.Examples.PrefixSum.PrefixSum
                   , Data.SBV.Examples.Puzzles.DogCatMouse
+                  , Data.SBV.Examples.Puzzles.Euler185
                   , Data.SBV.Examples.Puzzles.MagicSquare
                   , Data.SBV.Examples.Puzzles.NQueens
                   , Data.SBV.Examples.Puzzles.Sudoku
@@ -93,7 +95,6 @@ Library
                   , Data.SBV.Examples.Uninterpreted.AUF
                   , Data.SBV.Examples.Uninterpreted.Function
   Other-modules   : Data.SBV.BitVectors.Data
-                  , Data.SBV.BitVectors.Bit
                   , Data.SBV.BitVectors.Model
                   , Data.SBV.BitVectors.Splittable
                   , Data.SBV.BitVectors.Polynomial

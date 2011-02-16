@@ -10,20 +10,20 @@
 -- Internal data-structures for the sbv library
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE Rank2Types #-}
-{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeSynonymInstances       #-}
+{-# LANGUAGE TypeOperators              #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE PatternGuards              #-}
 
 module Data.SBV.BitVectors.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
  , SInt8, SInt16, SInt32, SInt64
  , SymWord(..)
- , CW(..)
- , mkConstCW, liftCW2, mapCW, mapCW2
+ , CW, cwVal, cwSameType, cwIsBit, cwToBool
+ , mkConstCW ,liftCW2, mapCW, mapCW2
  , SW(..), trueSW, falseSW
  , SBV(..), NodeId(..), mkSymSBV
  , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), SArray(..), arrayUIKind
@@ -37,7 +37,6 @@ module Data.SBV.BitVectors.Data
 import Control.DeepSeq                 (NFData(..))
 import Control.Monad.Reader            (MonadReader, ReaderT, ask, runReaderT)
 import Control.Monad.Trans             (MonadIO, liftIO)
-import Data.Bits                       (Bits(..))
 import Data.Char                       (isAlpha, isAlphaNum)
 import Data.Int                        (Int8, Int16, Int32, Int64)
 import Data.Word                       (Word8, Word16, Word32, Word64)
@@ -52,17 +51,31 @@ import qualified Data.Sequence as S    (Seq, empty, (|>))
 import System.IO.Unsafe                (unsafePerformIO) -- see the note at the bottom of the file
 import Test.QuickCheck                 (Testable(..))
 
-import Data.SBV.BitVectors.Bit
 
 -- | 'CW' represents a concrete word of a fixed size:
--- The unsigned variants are: 'W1', 'W8', 'W16', 'W32', and 'W64'
--- The signed variants are  : 'I8', 'I16', 'I32', I64'
 -- Endianness is mostly irrelevant (see the 'FromBits' class).
 -- For signed words, the most significant digit is considered to be the sign
-data CW = W1  { wcToW1 :: Bit   }
-        | W8  { wcToW8 :: Word8 }  | W16 { wcToW16 :: Word16} | W32 { wcToW32 :: Word32} | W64 { wcToW64 :: Word64 }
-        | I8  { wcToI8 :: Int8  }  | I16 { wcToI16 :: Int16 } | I32 { wcToI32 :: Int32 } | I64 { wcToI64 :: Int64  }
+data CW = CW { cwSigned :: !Bool, cwSize :: !Size, cwVal :: !Integer }
         deriving (Eq, Ord)
+
+cwSameType :: CW -> CW -> Bool
+cwSameType x y = cwSigned x == cwSigned y && cwSize x == cwSize y
+
+cwIsBit :: CW -> Bool
+cwIsBit x = not (cwSigned x) && cwSize x == 1
+
+cwToBool :: CW -> Bool
+cwToBool x = cwVal x /= 0
+
+normCW :: CW -> CW
+normCW x = x { cwVal = norm }
+  where norm | cwSize x == 0  = 0
+             | cwSigned x     = let rg = 2 ^ (cwSize x - 1)
+                                in case divMod (cwVal x) rg of
+                                    (a,b) | even a  -> b
+                                    (_,b)           -> b - rg
+             | True           = cwVal x `mod` (2 ^ cwSize x)
+
 type Size      = Int
 newtype NodeId = NodeId Int
                deriving (Eq, Ord)
@@ -109,9 +122,8 @@ class HasSignAndSize a where
   showType :: a -> String
   showType a
     | not (hasSign a) && sizeOf a == 1 = "SBool"
-    | True                             = if hasSign a then "SInt" else "SWord" ++ show (sizeOf a)
+    | True                             = (if hasSign a then "SInt" else "SWord") ++ show (sizeOf a)
 
-instance HasSignAndSize Bit    where {sizeOf _ =  1; hasSign _ = False}
 instance HasSignAndSize Bool   where {sizeOf _ =  1; hasSign _ = False}
 instance HasSignAndSize Int8   where {sizeOf _ =  8; hasSign _ = True }
 instance HasSignAndSize Word8  where {sizeOf _ =  8; hasSign _ = False}
@@ -122,63 +134,32 @@ instance HasSignAndSize Word32 where {sizeOf _ = 32; hasSign _ = False}
 instance HasSignAndSize Int64  where {sizeOf _ = 64; hasSign _ = True }
 instance HasSignAndSize Word64 where {sizeOf _ = 64; hasSign _ = False}
 
-liftCW :: (forall a. (Ord a, Bits a) => a -> b) -> CW -> b
-liftCW f (W1  w) = f w
-liftCW f (W8  w) = f w
-liftCW f (W16 w) = f w
-liftCW f (W32 w) = f w
-liftCW f (W64 w) = f w
-liftCW f (I8  w) = f w
-liftCW f (I16 w) = f w
-liftCW f (I32 w) = f w
-liftCW f (I64 w) = f w
+liftCW :: (Integer -> b) -> CW -> b
+liftCW f x = f (cwVal x)
 
-liftCW2 :: (forall a. (Ord a, Bits a) => a -> a -> b) -> CW -> CW -> b
-liftCW2 f (W1  a) (W1  b) = a `f` b
-liftCW2 f (W8  a) (W8  b) = a `f` b
-liftCW2 f (W16 a) (W16 b) = a `f` b
-liftCW2 f (W32 a) (W32 b) = a `f` b
-liftCW2 f (W64 a) (W64 b) = a `f` b
-liftCW2 f (I8  a) (I8  b) = a `f` b
-liftCW2 f (I16 a) (I16 b) = a `f` b
-liftCW2 f (I32 a) (I32 b) = a `f` b
-liftCW2 f (I64 a) (I64 b) = a `f` b
+liftCW2 :: (Integer -> Integer -> b) -> CW -> CW -> b
+liftCW2 f x y | cwSameType x y = f (cwVal x) (cwVal y)
 liftCW2 _ a b = error $ "SBV.liftCW2: impossible, incompatible args received: " ++ show (a, b)
 
-mapCW :: (forall a. (Ord a, Bits a) => a -> a) -> CW -> CW
-mapCW f (W1  w) = W1  $ f w
-mapCW f (W8  w) = W8  $ f w
-mapCW f (W16 w) = W16 $ f w
-mapCW f (W32 w) = W32 $ f w
-mapCW f (W64 w) = W64 $ f w
-mapCW f (I8  w) = I8  $ f w
-mapCW f (I16 w) = I16 $ f w
-mapCW f (I32 w) = I32 $ f w
-mapCW f (I64 w) = I64 $ f w
+mapCW :: (Integer -> Integer) -> CW -> CW
+mapCW f x  = normCW $ x { cwVal = f (cwVal x) }
 
-mapCW2 :: (forall a. (Ord a, Bits a) => a -> a -> a) -> CW -> CW -> CW
-mapCW2 f (W1  a) (W1  b) = W1   $ a `f` b
-mapCW2 f (W8  a) (W8  b) = W8   $ a `f` b
-mapCW2 f (W16 a) (W16 b) = W16  $ a `f` b
-mapCW2 f (W32 a) (W32 b) = W32  $ a `f` b
-mapCW2 f (W64 a) (W64 b) = W64  $ a `f` b
-mapCW2 f (I8  a) (I8  b) = I8   $ a `f` b
-mapCW2 f (I16 a) (I16 b) = I16  $ a `f` b
-mapCW2 f (I32 a) (I32 b) = I32  $ a `f` b
-mapCW2 f (I64 a) (I64 b) = I64  $ a `f` b
-mapCW2 _ a       b       = error $ "SBV.mapCW2: impossible, incompatible args received: " ++ show (a, b)
+mapCW2 :: (Integer -> Integer -> Integer) -> CW -> CW -> CW
+mapCW2 f x y
+  | cwSameType x y = normCW $ CW (cwSigned x) (cwSize y) (f (cwVal x) (cwVal y))
+mapCW2 _ a b = error $ "SBV.mapCW2: impossible, incompatible args received: " ++ show (a, b)
 
 instance HasSignAndSize CW where
-  sizeOf  = liftCW bitSize
-  hasSign = liftCW isSigned
+  sizeOf  = cwSize
+  hasSign = cwSigned
 
 instance HasSignAndSize SW where
   sizeOf  (SW (_, s) _) = s
   hasSign (SW (b, _) _) = b
 
 instance Show CW where
-  show (W1 b) = show (bit2Bool b)
-  show w      = liftCW show w ++ " :: " ++ showType w
+  show w | cwIsBit w = show (cwToBool w)
+  show w             = liftCW show w ++ " :: " ++ showType w
 
 instance Show SW where
   show (SW _ (NodeId n))
@@ -422,17 +403,7 @@ getTableIndex st at rt elts = do
                           return i
 
 mkConstCW :: Integral a => (Bool, Size) -> a -> CW
-mkConstCW (False, 1)  0 = W1  Zero
-mkConstCW (False, 1)  1 = W1  One
-mkConstCW (False, 8)  i = W8  (fromIntegral i)
-mkConstCW (True,  8)  i = I8  (fromIntegral i)
-mkConstCW (False, 16) i = W16 (fromIntegral i)
-mkConstCW (True,  16) i = I16 (fromIntegral i)
-mkConstCW (False, 32) i = W32 (fromIntegral i)
-mkConstCW (True,  32) i = I32 (fromIntegral i)
-mkConstCW (False, 64) i = W64 (fromIntegral i)
-mkConstCW (True,  64) i = I64 (fromIntegral i)
-mkConstCW sgnsz       i = error $ "SBV.mkConstCW: Received unexpected input: " ++ show (sgnsz, i)
+mkConstCW (signed,size) a = normCW $ CW signed size (toInteger a)
 
 -- Create a new expression; hash-cons as necessary
 newExpr :: State -> (Bool, Size) -> SBVExpr -> IO SW
@@ -515,8 +486,8 @@ runSymbolic (Symbolic c) = do
                   , rUIMap    = uis
                   , raxioms   = axioms
                   }
-   _ <- newConst st $ W1 Zero -- s(-2) == falseSW
-   _ <- newConst st $ W1 One  -- s(-1) == trueSW
+   _ <- newConst st (mkConstCW (False,1) (0::Integer)) -- s(-2) == falseSW
+   _ <- newConst st (mkConstCW (False,1) (1::Integer)) -- s(-1) == trueSW
    _ <- runReaderT c st
    rpgm  <- readIORef pgm
    inpsR <- readIORef inps
@@ -544,6 +515,8 @@ class Ord a => SymWord a where
   free       :: String -> Symbolic (SBV a)
   -- | Create an automatically named input
   free_      :: Symbolic (SBV a)
+  -- | Get a bunch of new words
+  mkFreeVars   :: Int -> Symbolic [SBV a]
   -- | Turn a literal constant to symbolic
   literal    :: a -> SBV a
   -- | Extract a literal, if the value is concrete
@@ -554,13 +527,19 @@ class Ord a => SymWord a where
   isConcrete :: SBV a -> Bool
   -- | Is the symbolic word really symbolic?
   isSymbolic :: SBV a -> Bool
+  -- | Does it concretely satisfy the given predicate?
+  isConcretely :: SBV a -> (a -> Bool) -> Bool
 
   -- minimal complete definiton: free, free_, literal, fromCW
+  mkFreeVars n = mapM (const free_) [1 .. n]
   unliteral (SBV _ (Left c))  = Just $ fromCW c
   unliteral _                 = Nothing
   isConcrete (SBV _ (Left _)) = True
   isConcrete _                = False
   isSymbolic = not . isConcrete
+  isConcretely s p
+    | Just i <- unliteral s = p i
+    | True                  = False
 
 ---------------------------------------------------------------------------------
 -- * Symbolic Arrays
@@ -709,15 +688,7 @@ cache = Cached
 
 -- Technicalities..
 instance NFData CW where
-  rnf (W1  w) = rnf w `seq` ()
-  rnf (W8  w) = rnf w `seq` ()
-  rnf (W16 w) = rnf w `seq` ()
-  rnf (W32 w) = rnf w `seq` ()
-  rnf (W64 w) = rnf w `seq` ()
-  rnf (I8  w) = rnf w `seq` ()
-  rnf (I16 w) = rnf w `seq` ()
-  rnf (I32 w) = rnf w `seq` ()
-  rnf (I64 w) = rnf w `seq` ()
+  rnf (CW x y z) = x `seq` y `seq` z `seq` ()
 
 instance NFData Result where
   rnf (Result inps consts tbls arrs uis axs pgm outs)
@@ -731,5 +702,5 @@ instance NFData UnintKind
 
 -- Quickcheck interface on symbolic-booleans..
 instance Testable SBool where
-  property (SBV _ (Left (W1 b))) = property . bit2Bool $ b
+  property (SBV _ (Left b)) = property (cwToBool b)
   property s                     = error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show s ++ ")"
