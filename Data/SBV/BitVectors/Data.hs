@@ -24,13 +24,13 @@ module Data.SBV.BitVectors.Data
  , SymWord(..)
  , CW, cwVal, cwSameType, cwIsBit, cwToBool
  , mkConstCW ,liftCW2, mapCW, mapCW2
- , SW(..), trueSW, falseSW
+ , SW(..), trueSW, falseSW, trueCW, falseCW
  , SBV(..), NodeId(..), mkSymSBV
- , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), SArray(..), arrayUIKind
+ , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), mkSFunArray, SArray(..), arrayUIKind
  , sbvToSW
  , SBVExpr(..), newExpr
  , cache, uncache, HasSignAndSize(..)
- , Op(..), NamedSymVar, UnintKind(..), getTableIndex, Pgm, Symbolic, runSymbolic, State, Size, output, Result(..)
+ , Op(..), NamedSymVar, UnintKind(..), getTableIndex, Pgm, Symbolic, runSymbolic, runSymbolic', State, Size, Outputtable(..), Result(..)
  , SBVType(..), newUninterpreted, unintFnUIKind, addAxiom
  ) where
 
@@ -50,6 +50,8 @@ import qualified Data.Sequence as S    (Seq, empty, (|>))
 
 import System.IO.Unsafe                (unsafePerformIO) -- see the note at the bottom of the file
 import Test.QuickCheck                 (Testable(..))
+
+import Data.SBV.Utils.Lib
 
 
 -- | 'CW' represents a concrete word of a fixed size:
@@ -72,8 +74,8 @@ normCW x = x { cwVal = norm }
   where norm | cwSize x == 0  = 0
              | cwSigned x     = let rg = 2 ^ (cwSize x - 1)
                                 in case divMod (cwVal x) rg of
-                                    (a,b) | even a  -> b
-                                    (_,b)           -> b - rg
+                                    (a, b) | even a -> b
+                                    (_, b)          -> b - rg
              | True           = cwVal x `mod` (2 ^ cwSize x)
 
 type Size      = Int
@@ -85,6 +87,10 @@ data SW        = SW (Bool, Size) NodeId
 falseSW, trueSW :: SW
 falseSW = SW (False, 1) $ NodeId (-2)
 trueSW  = SW (False, 1) $ NodeId (-1)
+
+falseCW, trueCW :: CW
+falseCW = CW False 1 0
+trueCW  = CW False 1 1
 
 newtype SBVType = SBVType [(Bool, Size)]
              deriving (Eq, Ord)
@@ -108,7 +114,7 @@ data Op = Plus | Times | Minus
         | Shl Int | Shr Int | Rol Int | Ror Int
         | Extract Int Int -- Extract i j: extract bits i to j. Least significant bit is 0 (big-endian)
         | Join  -- Concat two words to form a bigger one, in the order given
-        | LkUp (Int, Int, Int, Int) !SW !SW   -- (table-index, arg-type, res-type, length of the table) index out-of-bounds-value
+        | LkUp (Int, (Bool, Int), (Bool, Int), Int) !SW !SW   -- (table-index, arg-type, res-type, length of the table) index out-of-bounds-value
         | ArrEq   Int Int
         | ArrRead Int
         | Uninterpreted String
@@ -219,14 +225,14 @@ data UnintKind = UFun Int String | UArr Int String      -- in each case, arity a
  deriving Show
 
 -- | Result of running a symbolic computation
-data Result = Result [NamedSymVar]                 -- inputs
-                     [(SW, CW)]                    -- constants
-                     [((Int, Int, Int), [SW])]     -- tables (automatically constructed)
-                     [(Int, ArrayInfo)]            -- arrays (user specified)
-                     [(String, SBVType)]           -- uninterpreted constants
-                     [(String, [String])]          -- axioms
-                     Pgm                           -- assignments
-                     [SW]                          -- outputs
+data Result = Result [NamedSymVar]                              -- inputs
+                     [(SW, CW)]                                 -- constants
+                     [((Int, (Bool, Int), (Bool, Int)), [SW])]  -- tables (automatically constructed) (tableno, index-type, result-type) elts
+                     [(Int, ArrayInfo)]                         -- arrays (user specified)
+                     [(String, SBVType)]                        -- uninterpreted constants
+                     [(String, [String])]                       -- axioms
+                     Pgm                                        -- assignments
+                     [SW]                                       -- outputs
 
 instance Show Result where
   show (Result _ cs _ _ [] [] _ [r])
@@ -281,7 +287,7 @@ instance Show ArrayContext where
 
 type ExprMap    = Map.Map SBVExpr SW
 type CnstMap    = Map.Map CW SW
-type TableMap   = Map.Map [SW] (Int, Int, Int)
+type TableMap   = Map.Map [SW] (Int, (Bool, Int), (Bool, Int))
 type ArrayInfo  = (String, ((Bool, Size), (Bool, Size)), ArrayContext)
 type ArrayMap   = IMap.IntMap ArrayInfo
 type UIMap      = Map.Map String SBVType
@@ -393,7 +399,7 @@ newConst st c = do
                   return sw
 
 -- Create a new table; hash-cons as necessary
-getTableIndex :: State -> Int -> Int -> [SW] -> IO Int
+getTableIndex :: State -> (Bool, Int) -> (Bool, Int) -> [SW] -> IO Int
 getTableIndex st at rt elts = do
   tblMap <- readIORef (rtblMap st)
   case elts `Map.lookup` tblMap of
@@ -403,7 +409,7 @@ getTableIndex st at rt elts = do
                           return i
 
 mkConstCW :: Integral a => (Bool, Size) -> a -> CW
-mkConstCW (signed,size) a = normCW $ CW signed size (toInteger a)
+mkConstCW (signed, size) a = normCW $ CW signed size (toInteger a)
 
 -- Create a new expression; hash-cons as necessary
 newExpr :: State -> (Bool, Size) -> SBVExpr -> IO SW
@@ -442,17 +448,38 @@ mkSymSBV sgnsz mbNm = do
 
 -- | Mark an interim result as an output. Useful when constructing Symbolic programs
 -- that return multiple values, or when the result is programmatically computed.
-output :: SBV a -> Symbolic (SBV a)
-output i@(SBV _ (Left c)) = do
-        st <- ask
-        sw <- liftIO $ newConst st c
-        liftIO $ modifyIORef (routs st) (sw:)
-        return i
-output i@(SBV _ (Right f)) = do
-        st <- ask
-        sw <- liftIO $ uncache f st
-        liftIO $ modifyIORef (routs st) (sw:)
-        return i
+class Outputtable a where
+  output :: a -> Symbolic a
+
+instance Outputtable (SBV a) where
+  output i@(SBV _ (Left c)) = do
+          st <- ask
+          sw <- liftIO $ newConst st c
+          liftIO $ modifyIORef (routs st) (sw:)
+          return i
+  output i@(SBV _ (Right f)) = do
+          st <- ask
+          sw <- liftIO $ uncache f st
+          liftIO $ modifyIORef (routs st) (sw:)
+          return i
+
+instance (Outputtable a, Outputtable b) => Outputtable (a, b) where
+  output = mlift2 (,) output output
+
+instance (Outputtable a, Outputtable b, Outputtable c) => Outputtable (a, b, c) where
+  output = mlift3 (,,) output output output
+
+instance (Outputtable a, Outputtable b, Outputtable c, Outputtable d) => Outputtable (a, b, c, d) where
+  output = mlift4 (,,,) output output output output
+
+instance (Outputtable a, Outputtable b, Outputtable c, Outputtable d, Outputtable e) => Outputtable (a, b, c, d, e) where
+  output = mlift5 (,,,,) output output output output output
+
+instance (Outputtable a, Outputtable b, Outputtable c, Outputtable d, Outputtable e, Outputtable f) => Outputtable (a, b, c, d, e, f) where
+  output = mlift6 (,,,,,) output output output output output output
+
+instance (Outputtable a, Outputtable b, Outputtable c, Outputtable d, Outputtable e, Outputtable f, Outputtable g) => Outputtable (a, b, c, d, e, f, g) where
+  output = mlift7 (,,,,,,) output output output output output output output
 
 -- | Add a user specified axiom to the generated SMT-Lib file. Note that the input is a
 -- mere string; we perform no checking on the input that it's well-formed or is sensical.
@@ -464,7 +491,12 @@ addAxiom nm ax = do
 
 -- | Run a symbolic computation and return a 'Result'
 runSymbolic :: Symbolic a -> IO Result
-runSymbolic (Symbolic c) = do
+runSymbolic c = do (_, r) <- runSymbolic' c
+                   return r
+
+-- | Run a symbolic computation, and return a extra value paired up with the 'Result'
+runSymbolic' :: Symbolic a -> IO (a, Result)
+runSymbolic' (Symbolic c) = do
    ctr    <- newIORef (-2) -- start from -2; False and True will always occupy the first two elements
    pgm    <- newIORef S.empty
    emap   <- newIORef Map.empty
@@ -488,7 +520,7 @@ runSymbolic (Symbolic c) = do
                   }
    _ <- newConst st (mkConstCW (False,1) (0::Integer)) -- s(-2) == falseSW
    _ <- newConst st (mkConstCW (False,1) (1::Integer)) -- s(-1) == trueSW
-   _ <- runReaderT c st
+   r <- runReaderT c st
    rpgm  <- readIORef pgm
    inpsR <- readIORef inps
    outsR <- readIORef outs
@@ -499,7 +531,7 @@ runSymbolic (Symbolic c) = do
    arrs  <- IMap.toAscList `fmap` readIORef arrays
    unint <- Map.toList `fmap` readIORef uis
    axs   <- reverse `fmap` readIORef axioms
-   return $ Result (reverse inpsR) cnsts tbls arrs unint axs rpgm (reverse outsR)
+   return $ (r, Result (reverse inpsR) cnsts tbls arrs unint axs rpgm (reverse outsR))
 
 -------------------------------------------------------------------------------
 -- * Symbolic Words
@@ -653,6 +685,11 @@ data SFunArray a b = SFunArray (SBV a -> SBV b)
 
 instance (HasSignAndSize a, HasSignAndSize b) => Show (SFunArray a b) where
   show (SFunArray _) = "SFunArray<" ++ showType (undefined :: a) ++ ":" ++ showType (undefined :: b) ++ ">"
+
+-- | Make a constant fun-array always returning a fixed value.
+-- Useful for creating arrays in a pure context. (Otherwise use `newArray`.)
+mkSFunArray :: SBV b -> SFunArray a b
+mkSFunArray i = SFunArray (const i)
 
 ---------------------------------------------------------------------------------
 -- * Cached values

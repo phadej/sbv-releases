@@ -1,10 +1,11 @@
 Name:          sbv
-Version:       0.9.11
+Version:       0.9.12
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic Bit Vectors: Prove bit-precise program properties using SMT solvers.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
-               them using SMT solvers. The SBV library adds support for symbolic bit vectors,
-               allowing formal models of bit-precise programs to be created.
+               them using SMT solvers. Automatically generate C programs from Haskell functions.
+               The SBV library adds support for symbolic bit vectors, allowing formal models of
+               bit-precise programs to be created.
                .
                >   $ ghci -XScopedTypeVariables
                >   Prelude> :m Data.SBV
@@ -51,6 +52,7 @@ License-file:  LICENSE
 Stability:     Experimental
 Author:        Levent Erkok
 Homepage:      http://github.com/LeventErkok/sbv
+Bug-reports:   http://github.com/LeventErkok/sbv/issues
 Maintainer:    Levent Erkok (erkokl@gmail.com)
 Build-Type:    Custom
 Cabal-Version: >= 1.6
@@ -80,10 +82,14 @@ Library
                   , HUnit               >= 1.2.2.3
                   , directory           >= 1.0.1.1
                   , filepath            >= 1.1.0.4
+                  , pretty              >= 1.0.1.1
+                  , random              >= 1.0.0.2
   Exposed-modules : Data.SBV
                   , Data.SBV.Internals
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
+                  , Data.SBV.Examples.CodeGeneration.AddSub
+                  , Data.SBV.Examples.CodeGeneration.PopulationCount
                   , Data.SBV.Examples.Polynomials.Polynomials
                   , Data.SBV.Examples.PrefixSum.PrefixSum
                   , Data.SBV.Examples.Puzzles.DogCatMouse
@@ -99,6 +105,8 @@ Library
                   , Data.SBV.BitVectors.Splittable
                   , Data.SBV.BitVectors.Polynomial
                   , Data.SBV.BitVectors.PrettyNum
+                  , Data.SBV.Compilers.C
+                  , Data.SBV.Compilers.CodeGen
                   , Data.SBV.SMT.SMT
                   , Data.SBV.SMT.SMTLib
                   , Data.SBV.Provers.Prover
@@ -107,6 +115,7 @@ Library
                   , Data.SBV.Utils.Boolean
                   , Data.SBV.Utils.TDiff
                   , Data.SBV.Utils.SBVTest
+                  , Data.SBV.Utils.Lib
                   , Data.SBV.Examples.Arrays.Memory
                   , Data.SBV.Examples.Basics.BasicTests
                   , Data.SBV.Examples.Basics.Higher
@@ -131,6 +140,9 @@ Library
                   , Data.SBV.TestSuite.Basics.UnsafeFunctionEquality
                   , Data.SBV.TestSuite.BitPrecise.BitTricks
                   , Data.SBV.TestSuite.BitPrecise.Legato
+                  , Data.SBV.TestSuite.CodeGeneration.AddSub
+                  , Data.SBV.TestSuite.CodeGeneration.CgTests
+                  , Data.SBV.TestSuite.CodeGeneration.PopulationCount
                   , Data.SBV.TestSuite.CRC.CCITT
                   , Data.SBV.TestSuite.CRC.CCITT_Unidir
                   , Data.SBV.TestSuite.CRC.GenPoly

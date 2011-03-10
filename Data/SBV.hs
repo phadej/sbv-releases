@@ -101,7 +101,7 @@ module Data.SBV (
   -- *** Signed symbolic bit-vectors
   , SInt8, SInt16, SInt32, SInt64
   -- *** Arrays of symbolic values
-  , SymArray(..), SArray, SFunArray
+  , SymArray(..), SArray, SFunArray, mkSFunArray
   -- ** Operations on symbolic words
   -- *** Word level
   , bitValue, setBitTo, oneIf, lsb, msb
@@ -166,6 +166,9 @@ module Data.SBV (
   -- * Getting SMT-Lib output (for offline analysis)
   , compileToSMTLib
 
+  -- * Compiling symbolic programs to C
+  , CgPgmBundle(..), compileToC, compileToC'
+
   -- * Module exports
   -- $moduleExportIntro
 
@@ -179,6 +182,8 @@ import Data.SBV.BitVectors.Model
 import Data.SBV.BitVectors.PrettyNum
 import Data.SBV.BitVectors.Polynomial
 import Data.SBV.BitVectors.Splittable
+import Data.SBV.Compilers.C
+import Data.SBV.Compilers.CodeGen
 import Data.SBV.Provers.Prover
 import Data.SBV.Utils.Boolean
 import Data.Bits

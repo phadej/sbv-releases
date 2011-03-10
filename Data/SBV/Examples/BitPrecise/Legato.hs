@@ -114,6 +114,27 @@ peek a m = readArray (memory m) a
 poke :: Address -> Value -> Program
 poke a v m = m {memory = writeArray (memory m) a v}
 
+-- | Checking overflow. In Legato's multipler the @ADC@ instruction
+-- needs to see if the expression x + y + c overflowed, as checked
+-- by this function. Note that we verify the correctness of this check
+-- separately below in `checkOverflowCorrect`.
+checkOverflow :: SWord8 -> SWord8 -> SBool -> SBool
+checkOverflow x y c = s .< x ||| s .< y ||| s' .< s
+  where s  = x + y
+        s' = s + (ite c 1 0)
+
+-- | Correctness theorem for our `checkOverflow` implementation.
+--
+--   We have:
+--
+--   >>> checkOverflowCorrect
+--   Q.E.D.
+checkOverflowCorrect :: IO ThmResult
+checkOverflowCorrect = checkOverflow === overflow
+  where -- Reference spec for overflow. We do the addition
+        -- using 16 bits and check that it's larger than 255
+        overflow :: SWord8 -> SWord8 -> SBool -> SBool
+        overflow x y c = (0 # x) + (0 # y) + ite c 1 0 .> 255
 ------------------------------------------------------------------
 -- * Instruction set
 ------------------------------------------------------------------
@@ -167,8 +188,8 @@ adc a k m = k . setFlag FlagZ (v' .== 0) . setFlag FlagC c' . setReg RegA v' $ m
   where v  = peek a m
         ra = getReg RegA m
         c  = getFlag FlagC m
-        v' = v + ra + ite (c .== true) 1 0
-        c' = bitValue v' 7 -- c is true if the sum overflowed
+        v' = v + ra + ite c 1 0
+        c' = checkOverflow v ra c
 
 -- | DEX: Decrement the value of register @X@
 dex :: Instruction
@@ -210,7 +231,6 @@ legato f1Addr f2Addr lowAddr = start
                    $ bne loop
                    $ end
 
-
 ------------------------------------------------------------------
 -- * Verification interface
 ------------------------------------------------------------------
@@ -246,8 +266,11 @@ legatoIsCorrect mem (addrX, x) (addrY, y) addrLow initVals
         = allDifferent [addrX, addrY, addrLow]    -- note the conditional: addresses must be distinct!
                 ==> result .== expected
     where (hi, lo) = runLegato (addrX, x) (addrY, y) addrLow (initMachine mem initVals)
-          result   = 256 * hi + lo
-          expected = x * y
+          -- NB. perform the comparison over 16 bit values to avoid overflow!
+          -- If Value changes to be something else, modify this accordingly.
+          result, expected :: SWord16
+          result   = 256 * (0 # hi) + (0 # lo)
+          expected = (0 # x) * (0 # y)
 
 ------------------------------------------------------------------
 -- * Verification
@@ -259,9 +282,27 @@ type Model = SFunArray
 -- type Model = SArray
 
 -- | The correctness theorem.
---   On a decent MacBook Pro, this proof takes about 30 seconds with 'SFunArray' memory model above
---   and about 30 minutes with the 'SArray' memory model
+--   On a decent MacBook Pro, this proof takes about 3 minutes with the 'SFunArray' memory model
+--   and about 30 minutes with the 'SArray' model.
 correctnessTheorem :: IO ThmResult
 correctnessTheorem = proveWith timingSMTCfg $
     forAll ["mem", "addrX", "x", "addrY", "y", "addrLow", "regX", "regA", "memVals", "flagC", "flagZ"]
            legatoIsCorrect
+
+------------------------------------------------------------------
+-- * C Code generation
+------------------------------------------------------------------
+
+-- | A version of `runLegato` that is suitable for code-generation.
+-- This essentially means uncurrying the arguments and providing values for
+-- parameters that are not necessary for code-generation; such as the arbitrary
+-- mostek state or addresses for the values. Depending on the needs, more parameters
+-- can be included.
+cg_runLegato :: (Value, Value) -> (Value, Value)
+cg_runLegato (x, y) = runLegato (0, x) (1, y) 2 (initMachine (mkSFunArray 0) (0, 0, 0, false, false))
+
+-- | Generate a C program that implements Legato's algorithm automatically.
+--   (You can change the second argument of `compileToC` to @`Just` \"dirName\"@ to place the output
+--   files in that directory.)
+legatoInC :: IO ()
+legatoInC = compileToC True Nothing "runLegato" ["x", "y", "hi", "lo"] cg_runLegato
