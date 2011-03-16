@@ -199,7 +199,13 @@ instance EqSymbolic (SBV a) where
   (.==) = liftSym2B (mkSymOpSC opt Equal)    (==)
              where opt x y = if x == y then Just trueSW else Nothing
   (./=) = liftSym2B (mkSymOpSC opt NotEqual) (/=)
-             where opt x y = if x == y then Just falseSW else Nothing
+             where -- N.B. we can't say 
+                   --   opt x y = if x /= y then Just trueSW else Nothing
+                   -- here as it would be unsound.. There's no guarantee
+                   -- that the SW value corresponding to x and y won't equal
+                   -- the following is a more conservative optimization
+                   -- that says Nothing if it can't deduce otherwise
+                   opt x y = if x == y then Just falseSW else Nothing
 
 instance SymWord a => OrdSymbolic (SBV a) where
   (.<)  = liftSym2B (mkSymOp LessThan)    (<)
@@ -295,23 +301,37 @@ instance (OrdSymbolic a, OrdSymbolic b, OrdSymbolic c, OrdSymbolic d, OrdSymboli
 instance Boolean SBool where
   true  = literal True
   false = literal False
-  bnot  = liftSym1Bool (mkSymOp1 Not) not
-  (&&&) = liftSym2Bool (mkSymOpSC opt And) (&&)
-            where opt x y
-                   | x == falseSW || y == falseSW = Just falseSW
-                   | x == trueSW                  = Just y
-                   | y == trueSW                  = Just x
-                   | True                         = Nothing
-  (|||) = liftSym2Bool (mkSymOpSC opt Or)  (||)
-            where opt x y
-                   | x == trueSW || y == trueSW = Just trueSW
-                   | x == falseSW               = Just y
-                   | y == falseSW               = Just x
-                   | True                       = Nothing
-  (<+>) = liftSym2Bool (mkSymOpSC opt XOr) (<+>)
-            where opt x y
-                   | x == y = Just falseSW
-                   | True   = Nothing
+  bnot  b | b `isConcretely` (== False) = true
+          | b `isConcretely` (== True)  = false
+          | True                        = liftSym1Bool (mkSymOp1 Not) not b
+  a &&& b | a `isConcretely` (== False) || b `isConcretely` (== False) = false
+          | a `isConcretely` (== True)                                 = b
+          | b `isConcretely` (== True)                                 = a
+          | True                                                       = liftSym2Bool (mkSymOpSC opt And) (&&) a b
+          where opt x y
+                 | x == falseSW || y == falseSW = Just falseSW
+                 | x == trueSW                  = Just y
+                 | y == trueSW                  = Just x
+                 | True                         = Nothing
+  a ||| b | a `isConcretely` (== True)  || b `isConcretely` (== True) = true
+          | a `isConcretely` (== False)                               = b
+          | b `isConcretely` (== False)                               = a
+          | True                                                      = liftSym2Bool (mkSymOpSC opt Or)  (||) a b
+          where opt x y
+                 | x == trueSW || y == trueSW = Just trueSW
+                 | x == falseSW               = Just y
+                 | y == falseSW               = Just x
+                 | True                       = Nothing
+  a <+> b | a `isConcretely` (== False) = b
+          | b `isConcretely` (== False) = a
+          | a `isConcretely` (== True)  = bnot b
+          | b `isConcretely` (== True)  = bnot a
+          | True                        = liftSym2Bool (mkSymOpSC opt XOr) (<+>) a b
+          where opt x y
+                 | x == y       = Just falseSW
+                 | x == falseSW = Just y
+                 | y == falseSW = Just x
+                 | True         = Nothing
 
 -- | Returns (symbolic) true if all the elements of the given list are different
 allDifferent :: (Eq a, SymWord a) => [SBV a] -> SBool
@@ -403,6 +423,57 @@ lsb x = bitValue x 0
 -- | Most significant bit of a word, always stored at the last position
 msb :: (Bits a, SymWord a) => SBV a -> SBool
 msb x = bitValue x ((sizeOf x) - 1)
+
+-- | Enum instance. These instances are suitable for use with concrete values,
+-- and will be less useful for symbolic values around. Note that `fromEnum` requires
+-- a concrete argument for obvious reasons. Other variants (succ, pred, [x..]) etc are similarly
+-- limited. While symbolic variants can be defined for many of these, but they will just diverge
+-- as final sizes cannot be determined statically.
+instance (Bounded a, Integral a, Num a, SymWord a) => Enum (SBV a) where
+  succ x
+    | v == (maxBound :: a) = error $ "Enum.succ{" ++ showType x ++ "}: tried to take `succ' of maxBound"
+    | True                 = fromIntegral $ v + 1
+    where v = enumCvt "succ" x
+  pred x
+    | v == (minBound :: a) = error $ "Enum.pred{" ++ showType x ++ "}: tried to take `pred' of minBound"
+    | True                 = fromIntegral $ v - 1
+    where v = enumCvt "pred" x
+  toEnum x
+    | xi < fromIntegral (minBound :: a) || xi > fromIntegral (maxBound :: a)
+    = error $ "Enum.toEnum{" ++ showType r ++ "}: " ++ show x ++ " is out-of-bounds " ++ show (minBound :: a, maxBound :: a)
+    | True
+    = r
+    where xi :: Integer
+          xi = fromIntegral x
+          r  :: SBV a
+          r  = fromIntegral x
+  fromEnum x
+     | r < fromIntegral (minBound :: Int) || r > fromIntegral (maxBound :: Int)
+     = error $ "Enum.fromEnum{" ++ showType x ++ "}:  value " ++ show r ++ " is outside of Int's bounds " ++ show (minBound :: Int, maxBound :: Int)
+     | True
+     = fromIntegral r
+    where r :: Integer
+          r = enumCvt "fromEnum" x
+  enumFrom x = map fromIntegral [xi .. fromIntegral (maxBound :: a)]
+     where xi :: Integer
+           xi = enumCvt "enumFrom" x
+  enumFromThen x y
+     | yi >= xi  = map fromIntegral [xi, yi .. fromIntegral (maxBound :: a)]
+     | True      = map fromIntegral [xi, yi .. fromIntegral (minBound :: a)]
+       where xi, yi :: Integer
+             xi = enumCvt "enumFromThen.x" x
+             yi = enumCvt "enumFromThen.y" y
+  enumFromThenTo x y z = map fromIntegral [xi, yi .. zi]
+       where xi, yi, zi :: Integer
+             xi = enumCvt "enumFromThenTo.x" x
+             yi = enumCvt "enumFromThenTo.y" y
+             zi = enumCvt "enumFromThenTo.z" z
+
+-- | Helper function for use in enum operations
+enumCvt :: (SymWord a, Integral a, Num b) => String -> SBV a -> b
+enumCvt w x = case unliteral x of
+                Nothing -> error $ "Enum." ++ w ++ "{" ++ showType x ++ "}: Called on symbolic value " ++ show x
+                Just v  -> fromIntegral v
 
 -- | The 'BVDivisible' class captures the essence of division of words.
 -- Unfortunately we cannot use Haskell's 'Integral' class since the 'Real'

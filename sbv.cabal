@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.12
+Version:       0.9.13
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic Bit Vectors: Prove bit-precise program properties using SMT solvers.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -39,12 +39,21 @@ Description:   Express properties about bit-precise Haskell programs and automat
                .
                  * quick-checked
                .
+               The SBV library can also compile Haskell functions that manipulate symbolic
+               values directly to C, rendering them as straight-line C programs that can be
+               executed in, say, embedded platforms.
+               .
                In addition to the library, the installation will create the
                executable @SBVUnitTests@. You should run it once the installation is complete,
                to make sure the unit tests are run and all is well.
                .
                SBV is hosted at GitHub: <http://github.com/LeventErkok/sbv>. Comments,
                bug reports, and patches are always welcome.
+               .
+               Galois, Inc. (<http://www.galois.com>) has contributed to the development of SBV,
+               by providing time and computing machinery. The following people reported bugs,
+               provided comments/feedback, or contributed to the development of SBV in various ways:
+               Iavor Diatchki, Lee Pike, Don Stewart, and Josef Svenningsson.
 
 Copyright:     Levent Erkok, 2011
 License:       BSD3
@@ -53,7 +62,7 @@ Stability:     Experimental
 Author:        Levent Erkok
 Homepage:      http://github.com/LeventErkok/sbv
 Bug-reports:   http://github.com/LeventErkok/sbv/issues
-Maintainer:    Levent Erkok (erkokl@gmail.com)
+Maintainer:    Levent Erkok (levent.erkok@galois.com)
 Build-Type:    Custom
 Cabal-Version: >= 1.6
 Data-Files: SBVUnitTest/GoldFiles/*.gold
@@ -89,6 +98,8 @@ Library
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
                   , Data.SBV.Examples.CodeGeneration.AddSub
+                  , Data.SBV.Examples.CodeGeneration.Fibonacci
+                  , Data.SBV.Examples.CodeGeneration.GCD
                   , Data.SBV.Examples.CodeGeneration.PopulationCount
                   , Data.SBV.Examples.Polynomials.Polynomials
                   , Data.SBV.Examples.PrefixSum.PrefixSum
@@ -142,6 +153,8 @@ Library
                   , Data.SBV.TestSuite.BitPrecise.Legato
                   , Data.SBV.TestSuite.CodeGeneration.AddSub
                   , Data.SBV.TestSuite.CodeGeneration.CgTests
+                  , Data.SBV.TestSuite.CodeGeneration.Fibonacci
+                  , Data.SBV.TestSuite.CodeGeneration.GCD
                   , Data.SBV.TestSuite.CodeGeneration.PopulationCount
                   , Data.SBV.TestSuite.CRC.CCITT
                   , Data.SBV.TestSuite.CRC.CCITT_Unidir
