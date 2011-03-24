@@ -142,14 +142,14 @@ specifier (s, sz)     = die $ "Format specifier at type " ++ (if s then "SInt" e
 --   shows the result as an integer, which is OK as far as C is concerned.
 mkConst :: Integer -> (Bool, Int) -> Doc
 mkConst i   (False,  1) = integer i
-mkConst i   (False,  8) = integer i
-mkConst i   (True,   8) = integer i
-mkConst i t@(False, 16) = text (shex False t i) <> text "U"
-mkConst i t@(True,  16) = text (shex False t i)
-mkConst i t@(False, 32) = text (shex False t i) <> text "UL"
-mkConst i t@(True,  32) = text (shex False t i) <> text "L"
-mkConst i t@(False, 64) = text (shex False t i) <> text "ULL"
-mkConst i t@(True,  64) = text (shex False t i) <> text "LL"
+mkConst i t@(False,  8) = text (shex False True t i)
+mkConst i t@(True,   8) = text (shex False True t i)
+mkConst i t@(False, 16) = text (shex False True t i) <> text "U"
+mkConst i t@(True,  16) = text (shex False True t i)
+mkConst i t@(False, 32) = text (shex False True t i) <> text "UL"
+mkConst i t@(True,  32) = text (shex False True t i) <> text "L"
+mkConst i t@(False, 64) = text (shex False True t i) <> text "ULL"
+mkConst i t@(True,  64) = text (shex False True t i) <> text "LL"
 mkConst i   (True,  1)  = die $ "Signed 1-bit value " ++ show i
 mkConst i   (s, sz)     = die $ "Constant " ++ show i ++ " at type " ++ (if s then "SInt" else "SWord") ++ show sz
 
@@ -305,7 +305,7 @@ genCProg rtc fn proto (Result inps preConsts tbls arrs uints axms asgns outs) ou
          | True         = declSW typeWidth sw <+> text "=" <+> text n <> semi
        genTbl :: ((Int, (Bool, Int), (Bool, Int)), [SW]) -> (Int, Doc)
        genTbl ((i, _, (sg, sz)), elts) =  (location, static <+> mkParam ("table" ++ show i, (sg, sz)) <> text "[] = {"
-                                                     $$ nest 4 (fsep (punctuate comma (map (showSW consts) elts)))
+                                                     $$ nest 4 (fsep (punctuate comma (align (map (showSW consts) elts))))
                                                      $$ text "};")
          where static   = if location == -1 then text "static" else empty
                location = maximum (-1 : map getNodeId elts)
@@ -327,6 +327,13 @@ genCProg rtc fn proto (Result inps preConsts tbls arrs uints axms asgns outs) ou
        merge ts@((i, t):trest) as@((i', a):arest)
          | i < i'                                 = t : merge trest as
          | True                                   = a : merge ts arest
+       -- Align a bunch of docs to occupy the exact same length by padding in the left by space
+       -- this is ugly and inefficient, but easy to code..
+       align :: [Doc] -> [Doc]
+       align ds = map (text . pad) ss
+         where ss    = map render ds
+               l     = maximum (0 : map length ss)
+               pad s = take (l - length s) (repeat ' ') ++ s
 
 ppExpr :: Bool -> [(SW, CW)] -> SBVExpr -> Doc
 ppExpr rtc consts (SBVApp op opArgs) = p op (map (showSW consts) opArgs)
@@ -340,8 +347,8 @@ ppExpr rtc consts (SBVApp op opArgs) = p op (map (showSW consts) opArgs)
         p (Uninterpreted s) _ = tbd $ "Uninterpreted constants (" ++ show s ++ ")"
         p (Extract i j) [a]   = extract i j (let s = head opArgs in (hasSign s, sizeOf s)) a
         p Join [a, b]         = join (let (s1 : s2 : _) = opArgs in ((hasSign s1, sizeOf s1), (hasSign s2, sizeOf s2), a, b))
-        p (Rol i) [a]         = rotate True  i a (sizeOf (head opArgs))
-        p (Ror i) [a]         = rotate False i a (sizeOf (head opArgs))
+        p (Rol i) [a]         = rotate True  i a (let s = head opArgs in (hasSign s, sizeOf s))
+        p (Ror i) [a]         = rotate False i a (let s = head opArgs in (hasSign s, sizeOf s))
         p (Shl i) [a]         = shift True  i a (let s = head opArgs in (hasSign s, sizeOf s))
         p (Shr i) [a]         = shift False i a (let s = head opArgs in (hasSign s, sizeOf s))
         p Not [a] = text "~" <> a
@@ -371,10 +378,12 @@ ppExpr rtc consts (SBVApp op opArgs) = p op (map (showSW consts) opArgs)
           | True    = a <+> text cop <+> int i
           where cop | toLeft = "<<"
                     | True   = ">>"
-        rotate toLeft i a sz
-          | i < 0   = rotate (not toLeft) (-i) a sz
+        rotate toLeft i a (True, sz)
+          = tbd $ "Rotation of signed words at size " ++ show (toLeft, i, a, sz)
+        rotate toLeft i a (False, sz)
+          | i < 0   = rotate (not toLeft) (-i) a (False, sz)
           | i == 0  = a
-          | i >= sz = rotate toLeft (i `mod` sz) a sz
+          | i >= sz = rotate toLeft (i `mod` sz) a (False, sz)
           | True    =     parens (a <+> text cop  <+> int i)
                       <+> text "|"
                       <+> parens (a <+> text cop' <+> int (sz - i))
