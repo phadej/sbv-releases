@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.15
+Version:       0.9.16
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic Bit Vectors: Prove bit-precise program properties using SMT solvers.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -98,6 +98,7 @@ Library
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
                   , Data.SBV.Examples.CodeGeneration.AddSub
+                  , Data.SBV.Examples.CodeGeneration.AES
                   , Data.SBV.Examples.CodeGeneration.Fibonacci
                   , Data.SBV.Examples.CodeGeneration.GCD
                   , Data.SBV.Examples.CodeGeneration.PopulationCount
@@ -151,6 +152,7 @@ Library
                   , Data.SBV.TestSuite.BitPrecise.BitTricks
                   , Data.SBV.TestSuite.BitPrecise.Legato
                   , Data.SBV.TestSuite.CodeGeneration.AddSub
+                  , Data.SBV.TestSuite.CodeGeneration.AES
                   , Data.SBV.TestSuite.CodeGeneration.CgTests
                   , Data.SBV.TestSuite.CodeGeneration.Fibonacci
                   , Data.SBV.TestSuite.CodeGeneration.GCD
