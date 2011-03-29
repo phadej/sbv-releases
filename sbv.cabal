@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.16
+Version:       0.9.17
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic Bit Vectors: Prove bit-precise program properties using SMT solvers.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -55,7 +55,7 @@ Description:   Express properties about bit-precise Haskell programs and automat
                provided comments/feedback, or contributed to the development of SBV in various ways:
                Iavor Diatchki, Lee Pike, Don Stewart, and Josef Svenningsson.
 
-Copyright:     Levent Erkok, 2011
+Copyright:     Levent Erkok, 2010-2011
 License:       BSD3
 License-file:  LICENSE
 Stability:     Experimental
@@ -71,10 +71,6 @@ Extra-Source-Files: INSTALL, README, COPYRIGHT
 source-repository head
     type:       git
     location:   git://github.com/LeventErkok/sbv.git
-
-Flag test
-  Description: Run the unit-test suite after build
-  Default    : False
 
 Library
   ghc-options     : -Wall
@@ -178,7 +174,3 @@ Library
 
 Executable SBVUnitTests
   main-is         : SBVUnitTest/SBVUnitTest.hs
-  if flag(test)
-    x-run-unittests: True
-  else
-    x-run-unittests: False

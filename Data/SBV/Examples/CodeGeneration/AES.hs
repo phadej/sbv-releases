@@ -40,12 +40,6 @@ import Data.List (transpose)
 -- maximum degree 7. They are conveniently represented as values between 0 and 255.
 type GF28 = SWord8
 
--- | Addition in GF(2^8). Addition corresponds to simple 'xor'. Note that we
--- define it for vectors of GF(2^8) values, as that version is more convenient to
--- use in AES.
-gf28Add :: [GF28] -> [GF28] -> [GF28]
-gf28Add = zipWith xor
-
 -- | Multiplication in GF(2^8). This is simple polynomial multipliation, followed
 -- by the irreducible polynomial @x^8+x^5+x^3+x^1+1@. We simply use the 'pMult'
 -- function exported by SBV to do the operation. 
@@ -127,45 +121,46 @@ rotR xs           i = error $ "rotR: Unexpected input: " ++ show (xs, i)
 -----------------------------------------------------------------------------
 
 -- | Definition of round-constants, as specified in Section 5.2 of the AES standard.
-rcon :: Int -> [GF28]
-rcon i = [roundConstants !! i, 0, 0, 0]
- where roundConstants :: [GF28]
-       roundConstants = 0 : [ gf28Pow 2 (k-1) | k <- [1 .. ] ]
-
--- | The @SubWord@ function, as specified in Section 5.2 of the AES standard.
-subWord :: [GF28] -> [GF28]
-subWord = map sbox
-
--- | The @RotWord@ function, as specified in Section 5.2 of the AES standard.
-rotWord :: [GF28] -> [GF28]
-rotWord [a, b, c, d] = [b, c, d, a]
-rotWord xs           = error $ "rotWord: Unexpected input: " ++ show xs
+roundConstants :: [GF28]
+roundConstants = 0 : [ gf28Pow 2 (k-1) | k <- [1 .. ] ]
 
 -- | The @InvMixColumns@ transformation, as described in Section 5.3.3 of the standard. Note
 -- that this transformation is only used explicitly during key-expansion in the T-Box implementation
 -- of AES.
 invMixColumns :: State -> State
 invMixColumns state = map fromBytes $ transpose $ mmult (map toBytes state)
- where dot v = foldr1 xor . zipWith gf28Mult v
-       mmult n = [map (dot r) n | r <- [ [0xe, 0xb, 0xd, 0x9]
-                                       , [0x9, 0xe, 0xb, 0xd]
-                                       , [0xd, 0x9, 0xe, 0xb]
-                                       , [0xb, 0xd, 0x9, 0xe]
+ where dot f   = foldr1 xor . zipWith ($) f
+       mmult n = [map (dot r) n | r <- [ [mE, mB, mD, m9]
+                                       , [m9, mE, mB, mD]
+                                       , [mD, m9, mE, mB]
+                                       , [mB, mD, m9, mE]
                                        ]]
+       -- table-lookup versions of gf28Mult with the constants used in invMixColumns
+       mE = select mETable 0
+       mB = select mBTable 0
+       mD = select mDTable 0
+       m9 = select m9Table 0
+       mETable = map (gf28Mult 0xE) [0..255]
+       mBTable = map (gf28Mult 0xB) [0..255]
+       mDTable = map (gf28Mult 0xD) [0..255]
+       m9Table = map (gf28Mult 0x9) [0..255]
 
 -- | Key expansion. Starting with the given key, returns an infinite sequence of
 -- words, as described by the AES standard, Section 5.2, Figure 11.
 keyExpansion :: Int -> Key -> [Key]
-keyExpansion nk key = chop4 (map fromBytes keys)
-   where keys :: [[GF28]]
-         keys = map toBytes key ++ [nextWord i prev old | i <- [nk ..] | prev <- drop (nk-1) keys | old <- keys]
+keyExpansion nk key = chop4 keys
+   where keys :: [SWord32]
+         keys = key ++ [nextWord i prev old | i <- [nk ..] | prev <- drop (nk-1) keys | old <- keys]
          chop4 :: [a] -> [[a]]
          chop4 xs = let (f, r) = splitAt 4 xs in f : chop4 r
-         nextWord :: Int -> [GF28] -> [GF28] -> [GF28]
+         nextWord :: Int -> SWord32 -> SWord32 -> SWord32
          nextWord i prev old
-           | i `mod` nk == 0           = old `gf28Add` (subWord (rotWord prev) `gf28Add` rcon (i `div` nk))
-           | i `mod` nk == 4 && nk > 6 = old `gf28Add` (subWord prev)
-           | True                      = old `gf28Add` prev
+           | i `mod` nk == 0           = old `xor` (subWordRcon (prev `rotateL` 8) (roundConstants !! (i `div` nk)))
+           | i `mod` nk == 4 && nk > 6 = old `xor` (subWordRcon prev 0)
+           | True                      = old `xor` prev
+         subWordRcon :: SWord32 -> GF28 -> SWord32
+         subWordRcon w rc = fromBytes [a `xor` rc, b, c, d]
+            where [a, b, c, d] = map sbox $ toBytes w
 
 -----------------------------------------------------------------------------
 -- ** The S-box transformation
@@ -187,7 +182,6 @@ sboxTable = [xformByte (gf28Inverse b) | b <- [0 .. 255]]
 sbox :: GF28 -> GF28
 sbox = select sboxTable 0
 
-
 -----------------------------------------------------------------------------
 -- ** The inverse S-box transformation
 -----------------------------------------------------------------------------
@@ -201,6 +195,14 @@ unSBoxTable = [gf28Inverse (xformByte b) | b <- [0 .. 255]]
 -- | The inverse s-box transformation.
 unSBox :: GF28 -> GF28
 unSBox = select unSBoxTable 0
+
+-- | Prove that the 'sbox' and 'unSBox' are inverses. We have:
+--
+-- >>> prove sboxInverseCorrect
+-- Q.E.D.
+--
+sboxInverseCorrect :: GF28 -> SBool
+sboxInverseCorrect x = unSBox (sbox x) .== x &&& sbox (unSBox x) .== x
 
 -----------------------------------------------------------------------------
 -- ** AddRoundKey transformation
@@ -276,11 +278,11 @@ aesRound :: Bool -> State -> Key -> State
 aesRound isFinal s key = d `addRoundKey` key
   where d = map (f isFinal) [0..3]
         a = map toBytes s
-        f True j = e0 `xor` e1 `xor` e2 `xor` e3
-              where e0 = fromBytes [sbox (a !! ((j+0) `mod` 4) !! 0), 0, 0, 0]
-                    e1 = fromBytes [0, sbox (a !! ((j+1) `mod` 4) !! 1), 0, 0]
-                    e2 = fromBytes [0, 0, sbox (a !! ((j+2) `mod` 4) !! 2), 0]
-                    e3 = fromBytes [0, 0, 0, sbox (a !! ((j+3) `mod` 4) !! 3)]
+        f True j = fromBytes $ [ sbox (a !! ((j+0) `mod` 4) !! 0)
+                               , sbox (a !! ((j+1) `mod` 4) !! 1)
+                               , sbox (a !! ((j+2) `mod` 4) !! 2)
+                               , sbox (a !! ((j+3) `mod` 4) !! 3)
+                               ]
         f False j = e0 `xor` e1 `xor` e2 `xor` e3
               where e0 = t0 (a !! ((j+0) `mod` 4) !! 0)
                     e1 = t1 (a !! ((j+1) `mod` 4) !! 1)
@@ -293,11 +295,11 @@ aesInvRound :: Bool -> State -> Key -> State
 aesInvRound isFinal s key = d `addRoundKey` key
   where d = map (f isFinal) [0..3]
         a = map toBytes s
-        f True j = e0 `xor` e1 `xor` e2 `xor` e3
-              where e0 = fromBytes [unSBox (a !! ((j+0) `mod` 4) !! 0), 0, 0, 0]
-                    e1 = fromBytes [0, unSBox (a !! ((j+3) `mod` 4) !! 1), 0, 0]
-                    e2 = fromBytes [0, 0, unSBox (a !! ((j+2) `mod` 4) !! 2), 0]
-                    e3 = fromBytes [0, 0, 0, unSBox (a !! ((j+1) `mod` 4) !! 3)]
+        f True j = fromBytes [ unSBox (a !! ((j+0) `mod` 4) !! 0)
+                             , unSBox (a !! ((j+3) `mod` 4) !! 1)
+                             , unSBox (a !! ((j+2) `mod` 4) !! 2)
+                             , unSBox (a !! ((j+1) `mod` 4) !! 3)
+                             ]
         f False j = e0 `xor` e1 `xor` e2 `xor` e3
               where e0 = u0 (a !! ((j+0) `mod` 4) !! 0)
                     e1 = u1 (a !! ((j+3) `mod` 4) !! 1)
@@ -501,13 +503,12 @@ aes128IsCorrect (i0, i1, i2, i3) (k0, k1, k2, k3) = pt .== pt'
 -- is a sample of the generated straightline C-code:
 --
 -- @
---   const SWord32 s1066 = s2 ^ s1065;
---   const SWord16 s1067 = (SWord16) s1066;
---   const SWord8  s1068 = (SWord8) (s1067 >> 8);
---   const SWord32 s1069 = table3[s1068];
---   const SWord32 s1070 = s801 ^ s1069;
---   const SWord16 s1326 = (SWord16) (s7 >> 16);
---   const SWord8  s1327 = (SWord8) (s1326 >> 8);
+--   const SWord8  s1915 = (SWord8) s1912;
+--   const SWord8  s1916 = table0[s1915];
+--   const SWord16 s1917 = (((SWord16) s1914) << 8) | ((SWord16) s1916);
+--   const SWord32 s1918 = (((SWord32) s1911) << 16) | ((SWord32) s1917);
+--   const SWord32 s1919 = s1844 ^ s1918;
+--   const SWord32 s1920 = s1903 ^ s1919;
 -- @
 --
 -- The GNU C-compiler does a fine job of optimizing this straightline code to generate a fairly efficient C implementation.
