@@ -7,16 +7,16 @@ CCFLAGS=-Wall -O3 -DNDEBUG -fomit-frame-pointer
 all: addSub_driver
 
 addSub.o: addSub.c addSub.h
-	${CC} ${CCFLAGS} -c addSub.c -o addSub.o
+	${CC} ${CCFLAGS} -c $< -o $@
 
 addSub_driver.o: addSub_driver.c
-	${CC} ${CCFLAGS} -c addSub_driver.c -o addSub_driver.o
+	${CC} ${CCFLAGS} -c $< -o $@
 
 addSub_driver: addSub.o addSub_driver.o
-	${CC} ${CCFLAGS} addSub.o addSub_driver.o -o addSub_driver
+	${CC} ${CCFLAGS} $^ -o $@
 
 clean:
-	rm -f addSub_driver.o addSub.o
+	rm -f *.o
 
 veryclean: clean
 	rm -f addSub_driver
@@ -63,12 +63,12 @@ int main(void)
   SWord8 sum;
   SWord8 dif;
   
-  addSub(0x4c, 0x5c, &sum, &dif);
+  addSub(76, 92, &sum, &dif);
   
-  printf("addSub(0x4c, 0x5c, &sum, &dif) ->\n");
+  printf("addSub(76, 92, &sum, &dif) ->\n");
   printf("  sum = %"PRIu8"\n", sum);
   printf("  dif = %"PRIu8"\n", dif);
-  
+
   return 0;
 }
 == END: "addSub_driver.c" ==================

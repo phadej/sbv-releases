@@ -27,7 +27,7 @@ module Data.SBV.BitVectors.Data
  , SW(..), trueSW, falseSW, trueCW, falseCW
  , SBV(..), NodeId(..), mkSymSBV
  , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), mkSFunArray, SArray(..), arrayUIKind
- , sbvToSW
+ , sbvToSW, sbvToSymSW
  , SBVExpr(..), newExpr
  , cache, uncache, uncacheAI, HasSignAndSize(..)
  , Op(..), NamedSymVar, UnintKind(..), getTableIndex, Pgm, Symbolic, runSymbolic, runSymbolic', State, Size, Outputtable(..), Result(..)
@@ -407,6 +407,7 @@ getTableIndex st at rt elts = do
                           modifyIORef (rtblMap st) (Map.insert elts (i, at, rt))
                           return i
 
+-- Create a constant word
 mkConstCW :: Integral a => (Bool, Size) -> a -> CW
 mkConstCW (signed, size) a = normCW $ CW signed size (toInteger a)
 
@@ -444,6 +445,11 @@ mkSymSBV sgnsz mbNm = do
             sw = SW sgnsz (NodeId ctr)
         liftIO $ modifyIORef (rinps st) ((sw, nm):)
         return $ SBV sgnsz $ Right $ cache (const (return sw))
+
+sbvToSymSW :: SBV a -> Symbolic SW
+sbvToSymSW sbv = do
+        st <- ask
+        liftIO $ sbvToSW st sbv
 
 -- | Mark an interim result as an output. Useful when constructing Symbolic programs
 -- that return multiple values, or when the result is programmatically computed.
@@ -548,7 +554,7 @@ runSymbolic' (Symbolic c) = do
 -- provide the necessary bits.
 --
 -- Minimal complete definiton: free, free_, literal, fromCW
-class Ord a => SymWord a where
+class (Bounded a, Ord a) => SymWord a where
   -- | Create a user named input
   free       :: String -> Symbolic (SBV a)
   -- | Create an automatically named input

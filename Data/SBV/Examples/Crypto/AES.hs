@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Examples.CodeGeneration.AES
+-- Module      :  Data.SBV.Examples.Crypto.AES
 -- Copyright   :  (c) Levent Erkok
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
@@ -27,7 +27,7 @@
 
 {-# LANGUAGE ParallelListComp #-}
 
-module Data.SBV.Examples.CodeGeneration.AES where
+module Data.SBV.Examples.Crypto.AES where
 
 import Data.SBV
 import Data.List (transpose)
@@ -513,13 +513,67 @@ aes128IsCorrect (i0, i1, i2, i3) (k0, k1, k2, k3) = pt .== pt'
 --
 -- The GNU C-compiler does a fine job of optimizing this straightline code to generate a fairly efficient C implementation.
 cgAES128BlockEncrypt :: IO ()
-cgAES128BlockEncrypt = compileToC True Nothing "aes128BlockEncrypt" args enc
-  where args     = inpWords ++ keyWords
-        inpWords = ["pt0", "pt1", "pt2", "pt3"]         -- names to use in the generated C prototype for the plain-text words
-        keyWords = ["key0", "key1", "key2", "key3"]     -- ditto for key-words
-        -- NB. The following can be written much more nicely once we have type-naturals added to GHC
-        enc (pt0, pt1, pt2, pt3, key0, key1, key2, key3) = (ct0, ct1, ct2, ct3)
-          where key = [key0, key1, key2, key3]
-                pt  = [pt0, pt1, pt2, pt3]
-                (encKS, _) = aesKeySchedule key
-                [ct0, ct1, ct2, ct3] = aesEncrypt pt encKS
+cgAES128BlockEncrypt = compileToC Nothing "aes128BlockEncrypt" $ do
+        pt  <- cgInputArr 4 "pt"        -- plain-text as an array of 4 Word32's
+        key <- cgInputArr 4 "key"       -- key as an array of 4 Word32s
+        -- Use the test values from Appendix C.1 of the AES standard as the driver values
+        cgSetDriverValues $    [0x00112233, 0x44556677, 0x8899aabb, 0xccddeeff]
+                            ++ [0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f]
+        let (encKs, _) = aesKeySchedule key
+        cgOutputArr "ct" $ aesEncrypt pt encKs
+
+-----------------------------------------------------------------------------
+-- * C-library generation
+-- ${libraryIntro}
+-----------------------------------------------------------------------------
+{- $libraryIntro
+   The 'cgAES128BlockEncrypt' example shows how to generate code for 128-bit AES encryption. As the generated
+   function performs encryption on a given block, it performs key expansion as necessary. However, this is
+   not quite practical: We would like to expand the key only once, and encrypt the stream of plain-text blocks using
+   the same expanded key (potentially using some crypto-mode), until we decide to change the key. In this
+   section, we show how to use SBV to instead generate a library of functions that can be used in such a scenario.
+   The generated library is a typical @.a@ archive, that can be linked using the C-compiler as usual.
+-}
+
+-- | Components of the AES-128 implementation that the library is generated from
+aes128LibComponents :: [(String, SBVCodeGen ())]
+aes128LibComponents = [ ("aes128KeySchedule",  keySchedule)
+                      , ("aes128BlockEncrypt", enc128)
+                      , ("aes128BlockDecrypt", dec128)
+                      ]
+  where -- key-schedule
+        keySchedule = do key <- cgInputArr 4 "key"     -- key
+                         let (encKS, decKS) = aesKeySchedule key
+                         cgOutputArr "encKS" (ksToXKey encKS)
+                         cgOutputArr "decKS" (ksToXKey decKS)
+        -- encryption
+        enc128 = do pt   <- cgInputArr 4  "pt"    -- plain-text
+                    xkey <- cgInputArr 44 "xkey"  -- expanded key, for 128-bit AES, the key-expansion has 44 Word32's
+                    cgOutputArr "ct" $ aesEncrypt pt (xkeyToKS xkey)
+        -- decryption
+        dec128 = do pt   <- cgInputArr 4  "ct"    -- cipher-text
+                    xkey <- cgInputArr 44 "xkey"  -- expanded key, for 128-bit AES, the key-expansion has 44 Word32's
+                    cgOutputArr "pt" $ aesDecrypt pt (xkeyToKS xkey)
+        -- Transforming back and forth from our KS type to a flat array used by the generated C code
+        -- Turn a series of expanded keys to our internal KS type
+        xkeyToKS :: [SWord32] -> KS
+        xkeyToKS xs = (f, m, l)
+           where f = take 4 xs                       -- first round key
+                 m = chop4 (take 36 (drop 4 xs))     -- middle rounds
+                 l = drop 40 xs                      -- last round key
+        -- Turn a KS to a series of expanded key words
+        ksToXKey :: KS -> [SWord32]
+        ksToXKey (f, m, l) = f ++ concat m ++ l
+        -- chunk in fours. (This function must be in some standard library, where?)
+        chop4 :: [a] -> [[a]]
+        chop4 [] = []
+        chop4 xs = let (f, r) = splitAt 4 xs in f : chop4 r
+
+-- | Generate a C library, containing functions for performing 128-bit enc/dec/key-expansion.
+-- A note on performance: In a very rough speed test, the generated code was able to do
+-- 6.3 million block encryptions per second on a decent MacBook Pro. On the same machine, OpenSSL
+-- reports 8.2 million block encryptions per second. So, the generated code is about 25% slower
+-- as compared to the highly optimized OpenSSL implementation. (Note that the speed test was done
+-- somewhat simplistically, so these numbers should be considered very rough estimates.)
+cgAES128Library :: IO ()
+cgAES128Library = compileToCLib Nothing "aes128Lib" aes128LibComponents

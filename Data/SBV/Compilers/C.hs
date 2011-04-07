@@ -12,22 +12,67 @@
 
 {-# LANGUAGE PatternGuards #-}
 
-module Data.SBV.Compilers.C(compileToC, compileToC') where
+module Data.SBV.Compilers.C(compileToC, compileToCLib, compileToC', compileToCLib') where
 
-import Data.Char(isSpace)
-import Data.Maybe(isJust)
+import Data.Char (isSpace)
+import Data.Maybe (isJust)
 import qualified Data.Foldable as F (toList)
 import Text.PrettyPrint.HughesPJ
+import System.FilePath (takeBaseName, replaceExtension)
 import System.Random
 
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.PrettyNum(shex)
 import Data.SBV.Compilers.CodeGen
 
+---------------------------------------------------------------------------
+-- * API
+---------------------------------------------------------------------------
+
+-- | Given a symbolic computation, render it as an equivalent collection of files
+-- that make up a C program:
+--
+--   * The first argument is the directory name under which the files will be saved. To save
+--     files in the current directory pass @'Just' \".\"@. Use 'Nothing' for printing to stdout.
+--
+--   * The second argument is the name of the C function to generate.
+--
+--   * The final argument is the function to be compiled.
+--
+-- Compilation will also generate a @Makefile@,  a header file, and a driver (test) program, etc.
+compileToC :: Maybe FilePath -> String -> SBVCodeGen () -> IO ()
+compileToC mbDirName nm f = compileToC' nm f >>= renderCgPgmBundle mbDirName
+
+-- | Lower level version of 'compileToC', producing a 'CgPgmBundle'
+compileToC' :: String -> SBVCodeGen () -> IO CgPgmBundle
+compileToC' nm f = do rands <- newStdGen >>= return . randoms
+                      codeGen SBVToC (defaultCgConfig { cgDriverVals = rands }) nm f
+
+-- | Create code to generate a library archive (.a) from given symbolic functions. Useful when generating code
+-- from multiple functions that work together as a library.
+--
+--   * The first argument is the directory name under which the files will be saved. To save
+--     files in the current directory pass @'Just' \".\"@. Use 'Nothing' for printing to stdout.
+--
+--   * The second argument is the name of the archive to generate.
+--
+--   * The third argument is the list of functions to include, in the form of function-name/code pairs, similar
+--     to the second and third arguments of 'compileToC', except in a list.
+compileToCLib :: Maybe FilePath -> String -> [(String, SBVCodeGen ())] -> IO ()
+compileToCLib mbDirName libName comps = compileToCLib' libName comps >>= renderCgPgmBundle mbDirName
+
+-- | Lower level version of 'compileToCLib', producing a 'CgPgmBundle'
+compileToCLib' :: String -> [(String, SBVCodeGen ())] -> IO CgPgmBundle
+compileToCLib' libName comps = mergeToLib libName `fmap` mapM (uncurry compileToC') comps
+
+---------------------------------------------------------------------------
+-- * Implementation
+---------------------------------------------------------------------------
+
 -- token for the target language
 data SBVToC = SBVToC
 
-instance SBVTarget SBVToC where
+instance CgTarget SBVToC where
   targetName _ = "C"
   translate _  = cgen
 
@@ -39,64 +84,39 @@ die msg = error $ "SBV->C: Unexpected: " ++ msg
 tbd :: String -> a
 tbd msg = error $ "SBV->C: Not yet supported: " ++ msg
 
--- | Given a symbolic computation, render it as an equivalent C program.
---
---    * First argument: States whether run-time-checks should be inserted for index-out-of-bounds or shifting-by-large values etc.
---      If `False`, such checks are ignored, gaining efficiency, at the cost of potential undefined behavior.
---
---    * Second argument is an optional directory name under which the files will be saved. If `Nothing`, the result
---      will be written to stdout. Use @`Just` \".\"@ for creating files in the current directory.
---
---    * The third argument is name of the function, which also forms the names of the C and header files.
---
---    * The fourth argument are the names of the arguments to be used and the names of the outputs, if any.
---       Provide as many arguments as you like, SBV will make up ones if you don't pass enough.
---
---    * The fifth and the final argument is the computation to be compiled.
---
--- Compilation will also generate a @Makefile@ and a sample driver program, which executes the program over random
--- input values.
-compileToC :: SymExecutable f => Bool -> Maybe FilePath -> String -> [String] -> f -> IO ()
-compileToC rtc mbDir fn extraNames f = do rands <- newStdGen >>= return . randoms
-                                          codeGen SBVToC rands rtc mbDir fn extraNames f
-
--- | Alternative interface for generating C. The output driver program uses the specified values (first argument) instead of random values.
--- Also this version returns the generated files for further manipulation. (Useful mainly for generating regression tests.)
-compileToC' :: SymExecutable f => [Integer] -> Bool -> String -> [String] -> f -> IO CgPgmBundle
-compileToC' dvals = codeGen' SBVToC (dvals ++ repeat 0)
-
-cgen :: [Integer] -> Bool -> String -> [String] -> Result -> CgPgmBundle
-cgen randVals rtc nm extraNames sbvProg@(Result ins _ _ _ _ _ _ outs) = CgPgmBundle
-        [ ("Makefile",  genMake   nm nmd)
-        , (nm  ++ ".h", genHeader nm sig)
-        , (nmd ++ ".c", genDriver randVals nm typ)
-        , (nm  ++ ".c", genCProg  rtc nm sig sbvProg (map fst outputVars))
+cgen :: Bool -> [Integer] -> String -> CgState -> Result -> CgPgmBundle
+cgen rtc randVals nm st sbvProg = CgPgmBundle
+        [ ("Makefile",  (CgMakefile,     [genMake   nm nmd]))
+        , (nm  ++ ".h", (CgHeader [sig], [genHeader nm [sig]]))
+        , (nmd ++ ".c", (CgDriver,       genDriver randVals nm ins outs mbRet))
+        , (nm  ++ ".c", (CgSource,       genCProg rtc nm sig sbvProg ins outs mbRet))
         ]
   where nmd = nm ++ "_driver"
-        typ@(CType (_, outputVars)) = mkCType extraNames ins outs
-        sig = pprCFunHeader nm typ
-
--- | A simple representation of C types for functions
--- sufficient enough to represent SBV generated functions
-newtype CType = CType ([(String, (Bool, Int))], [(String, (Bool, Int))])
-
-mkCType :: [String] -> [NamedSymVar] -> [SW] -> CType
-mkCType extraNames ins outs = CType (map mkVar ins, map mkVar (zip outs outNames))
-  where outNames = extraNames ++ ["out" ++ show i | i <- [length extraNames ..]]
-        mkVar (sw, n) = (n, (hasSign sw, sizeOf sw))
+        sig = pprCFunHeader nm ins outs mbRet
+        ins      = cgInputs st
+        outs     = cgOutputs st
+        mbRet    = case cgReturns st of
+                     []           -> Nothing
+                     [CgAtomic o] -> Just o
+                     [CgArray _]  -> tbd $ "Non-atomic return values"
+                     _            -> tbd $ "Multiple return values"
 
 -- | Pretty print a functions type. If there is only one output, we compile it
 -- as a function that returns that value. Otherwise, we compile it as a void function
 -- that takes return values as pointers to be updated.
-pprCFunHeader :: String -> CType -> Doc
-pprCFunHeader fn (CType (ins, outs)) = retType <+> text fn <> parens (fsep (punctuate comma (map mkParam ins ++ os)))
-  where (retType, os) = case outs of
-                          [(_, bs)] -> (pprCWord False bs, [])
-                          _         -> (text "void", map mkPParam outs)
+pprCFunHeader :: String -> [(String, CgVal)] -> [(String, CgVal)] -> Maybe SW -> Doc
+pprCFunHeader fn ins outs mbRet = retType <+> text fn <> parens (fsep (punctuate comma (map mkParam ins ++ map mkPParam outs)))
+  where retType = case mbRet of
+                   Nothing -> text "void"
+                   Just sw -> pprCWord False (hasSign sw, sizeOf sw)
 
-mkParam, mkPParam :: (String, (Bool, Int)) -> Doc
-mkParam  (n, bs) = pprCWord True  bs <+> text n
-mkPParam (n, bs) = pprCWord False bs <+> text "*" <> text n
+mkParam, mkPParam :: (String, CgVal) -> Doc
+mkParam  (n, CgAtomic sw)     = let sgsz = (hasSign sw, sizeOf sw) in pprCWord True  sgsz <+> text n
+mkParam  (_, CgArray  [])     = die $ "mkParam: CgArray with no elements!"
+mkParam  (n, CgArray  (sw:_)) = let sgsz = (hasSign sw, sizeOf sw) in pprCWord True  sgsz <+> text "*" <> text n
+mkPParam (n, CgAtomic sw)     = let sgsz = (hasSign sw, sizeOf sw) in pprCWord False sgsz <+> text "*" <> text n
+mkPParam (_, CgArray  [])     = die $ "mPkParam: CgArray with no elements!"
+mkPParam (n, CgArray  (sw:_)) = let sgsz = (hasSign sw, sizeOf sw) in pprCWord False sgsz <+> text "*" <> text n
 
 -- | Renders as "const SWord8 s0", etc. the first parameter is the width of the typefield
 declSW :: Int -> SW -> Doc
@@ -142,8 +162,8 @@ specifier (s, sz)     = die $ "Format specifier at type " ++ (if s then "SInt" e
 --   shows the result as an integer, which is OK as far as C is concerned.
 mkConst :: Integer -> (Bool, Int) -> Doc
 mkConst i   (False,  1) = integer i
-mkConst i t@(False,  8) = text (shex False True t i)
-mkConst i t@(True,   8) = text (shex False True t i)
+mkConst i   (False,  8) = integer i
+mkConst i   (True,   8) = integer i
 mkConst i t@(False, 16) = text (shex False True t i) <> text "U"
 mkConst i t@(True,  16) = text (shex False True t i)
 mkConst i t@(False, 32) = text (shex False True t i) <> text "UL"
@@ -157,7 +177,7 @@ mkConst i   (s, sz)     = die $ "Constant " ++ show i ++ " at type " ++ (if s th
 showConst :: CW -> Doc
 showConst cw = mkConst (cwVal cw) (hasSign cw, sizeOf cw)
 
--- | Generate a makefile for ease of experimentation..
+-- | Generate a makefile
 genMake :: String -> String -> Doc
 genMake fn dn =
      text "# Makefile for" <+> nm <> text ". Automatically generated by SBV. Do not edit!"
@@ -167,17 +187,17 @@ genMake fn dn =
   $$ text ""
   $$ text "all:" <+> nmd
   $$ text ""
-  $$ nmo <> text ":" <+> hsep [nmc, nmh]
-  $$ text "\t${CC} ${CCFLAGS}" <+> text "-c" <+> nmc <+> text "-o" <+> nmo
+  $$ nmo <> text (": " ++ ppSameLine (hsep [nmc, nmh]))
+  $$ text "\t${CC} ${CCFLAGS}" <+> text "-c $< -o $@"
   $$ text ""
   $$ nmdo <> text ":" <+> nmdc
-  $$ text "\t${CC} ${CCFLAGS}" <+> text "-c" <+> nmdc <+> text "-o" <+> nmdo
+  $$ text "\t${CC} ${CCFLAGS}" <+> text "-c $< -o $@"
   $$ text ""
-  $$ nmd <> text ":" <+> hsep [nmo, nmdo]
-  $$ text "\t${CC} ${CCFLAGS}" <+> nmo <+> nmdo <+> text "-o" <+> nmd
+  $$ nmd <> text (": " ++ ppSameLine (hsep [nmo, nmdo]))
+  $$ text "\t${CC} ${CCFLAGS}" <+> text "$^ -o $@"
   $$ text ""
   $$ text "clean:"
-  $$ text "\trm -f" <+> nmdo <+> nmo
+  $$ text "\trm -f *.o"
   $$ text ""
   $$ text "veryclean: clean"
   $$ text "\trm -f" <+> nmd
@@ -191,8 +211,8 @@ genMake fn dn =
        nmdo = nmd <> text ".o"
 
 -- | Generate the header
-genHeader :: String -> Doc -> Doc
-genHeader fn signature =
+genHeader :: String -> [Doc] -> Doc
+genHeader fn sigs =
      text "/* Header file for" <+> nm <> text ". Automatically generated by SBV. Do not edit! */"
   $$ text ""
   $$ text "#ifndef" <+> tag
@@ -214,81 +234,130 @@ genHeader fn signature =
   $$ text "typedef int32_t SInt32;"
   $$ text "typedef int64_t SInt64;"
   $$ text ""
-  $$ text "/* Entry point prototype: */"
-  $$ signature <> semi
+  $$ text ("/* Entry point prototype" ++ plu ++ ": */")
+  $$ vcat (map (<> semi) sigs)
   $$ text ""
   $$ text "#endif /*" <+> tag <+> text "*/"
   $$ text ""
  where nm  = text fn
        tag = text "__" <> nm <> text "__HEADER_INCLUDED__"
+       plu = if length sigs /= 1 then "s" else ""
 
 sepIf :: Bool -> Doc
 sepIf b = if b then text "" else empty
 
 -- | Generate an example driver program
-genDriver :: [Integer] -> String -> CType -> Doc
-genDriver randVals fn (CType (inps, outs)) =
-     text "/* Example driver program for" <+> nm <> text ". */"
-  $$ text "/* Automatically generated by SBV. Edit as you see fit! */"
-  $$ text ""
-  $$ text "#include <inttypes.h>"
-  $$ text "#include <stdint.h>"
-  $$ text "#include <stdio.h>"
-  $$ text "#include" <+> doubleQuotes (nm <> text ".h")
-  $$ text ""
-  $$ text "int main(void)"
-  $$ text "{"
-  $$ text ""
-  $$ nest 2 (   vcat (map (\ (n, bs) -> pprCWord False bs <+> text n <> semi) (if singleOut then [] else outs))
-             $$ sepIf (not singleOut)
-             $$ call
-             $$ text ""
-             $$ (case outs of
-                   [(n, bsz)] ->   text "printf" <> parens (printQuotes (fcall <+> text "=" <+> specifier bsz <> text "\\n") <> comma <+> text n) <> semi
-                   _          ->   text "printf" <> parens (printQuotes (fcall <+> text "->\\n")) <> semi
-                                 $$ vcat (map display outs))
-             $$ text ""
-             $$ text "return 0" <> semi)
-  $$ text "}"
-  $$ text ""
- where nm = text fn
-       singleOut = case outs of
-                    [_] -> True
-                    _   -> False
-       call = case outs of
-                [(n, bs)] -> pprCWord True bs <+> text n <+> text "=" <+> fcall <> semi
-                _         -> fcall <> semi
-       mkCVal (_, bsz@(b, sz)) r
-         | not b = mkConst (abs r `mod` (2^sz))                bsz
-         | True  = mkConst ((abs r `mod` (2^sz)) - (2^(sz-1))) bsz
-       fcall = case outs of
-                [_] -> nm <> parens (fsep (punctuate comma (zipWith mkCVal inps randVals)))
-                _   -> nm <> parens (fsep (punctuate comma (zipWith mkCVal inps randVals ++ map (\ (n, _) -> text "&" <> text n) outs)))
-       display (s, bsz) = text "printf" <> parens (printQuotes (text " " <+> text s <+> text "=" <+> specifier bsz <> text "\\n") <> comma <+> text s) <> semi
+genDriver :: [Integer] -> String -> [(String, CgVal)] -> [(String, CgVal)] -> Maybe SW -> [Doc]
+genDriver randVals fn inps outs mbRet = [pre, header, body, post]
+ where pre    =  text "/* Example driver program for" <+> nm <> text ". */"
+              $$ text "/* Automatically generated by SBV. Edit as you see fit! */"
+              $$ text ""
+              $$ text "#include <inttypes.h>"
+              $$ text "#include <stdint.h>"
+              $$ text "#include <stdio.h>"
+       header =  text "#include" <+> doubleQuotes (nm <> text ".h")
+              $$ text ""
+              $$ text "int main(void)"
+              $$ text "{"
+       body   =  text ""
+              $$ nest 2 (   vcat (map mkInp pairedInputs)
+                      $$ vcat (map mkOut outs)
+                      $$ sepIf (not (null [() | (_, _, CgArray{}) <- pairedInputs]) || not (null outs))
+                      $$ call
+                      $$ text ""
+                      $$ (case mbRet of
+                              Just sw -> text "printf" <> parens (printQuotes (fcall <+> text "=" <+> specifier (hasSign sw, sizeOf sw) <> text "\\n")
+                                                                              <> comma <+> resultVar) <> semi
+                              Nothing -> text "printf" <> parens (printQuotes (fcall <+> text "->\\n")) <> semi)
+                      $$ vcat (map display outs)
+                      )
+       post   =   text ""
+              $+$ nest 2 (text "return 0" <> semi)
+              $$  text "}"
+              $$  text ""
+       nm = text fn
+       pairedInputs = matchRands (map abs randVals) inps
+       matchRands _      []                                   = []
+       matchRands []     _                                    = die $ "Run out of driver values!"
+       matchRands (r:rs) ((n, CgAtomic sw)              : cs) = ([mkRVal sw r], n, CgAtomic sw) : matchRands rs cs
+       matchRands _      ((n, CgArray [])               : _ ) = die $ "Unsupported empty array input " ++ show n
+       matchRands rs     ((n, a@(CgArray sws@((sw:_)))) : cs)
+          | length frs /= l                                   = die $ "Run out of driver values!"
+          | True                                              = (map (mkRVal sw) frs, n, a) : matchRands srs cs
+          where l          = length sws
+                (frs, srs) = splitAt l rs
+       mkRVal sw r = mkConst ival sgsz
+         where sgsz@(sg, sz) = (hasSign sw, sizeOf sw)
+               ival | r >= minVal && r <= maxVal = r
+                    | not sg                     = r `mod` (2^sz)
+                    | True                       = (r `mod` (2^sz)) - (2^(sz-1))
+                    where expSz, expSz', minVal, maxVal :: Integer
+                          expSz  = 2^(sz-1)
+                          expSz' = 2*expSz
+                          minVal | not sg = 0
+                                 | True   = -expSz
+                          maxVal | not sg = expSz'-1
+                                 | True   = expSz-1
+       mkInp (_,  _, CgAtomic{})         = empty  -- constant, no need to declare
+       mkInp (_,  n, CgArray [])         = die $ "Unsupported empty array value for " ++ show n
+       mkInp (vs, n, CgArray sws@(sw:_)) =  pprCWord True (hasSign sw, sizeOf sw) <+> text n <> brackets (int (length sws)) <+> text "= {"
+                                                      $$ nest 4 (fsep (punctuate comma (align vs)))
+                                                      $$ text "};"
+                                         $$ text ""
+                                         $$ text "printf" <> parens (printQuotes (text "Contents of input array" <+> text n <> text ":\\n")) <> semi
+                                         $$ display (n, CgArray sws)
+                                         $$ text ""
+       mkOut (v, CgAtomic sw)            = let sgsz = (hasSign sw, sizeOf sw) in pprCWord False sgsz <+> text v <> semi
+       mkOut (v, CgArray [])             = die $ "Unsupported empty array value for " ++ show v
+       mkOut (v, CgArray sws@(sw:_))     = pprCWord False (hasSign sw, sizeOf sw) <+> text v <> brackets (int (length sws)) <> semi
+       resultVar = text "__result"
+       call = case mbRet of
+                Nothing -> fcall <> semi
+                Just sw -> pprCWord True (hasSign sw, sizeOf sw) <+> resultVar <+> text "=" <+> fcall <> semi
+       fcall = nm <> parens (fsep (punctuate comma (map mkCVal pairedInputs ++ map mkOVal outs)))
+       mkCVal ([v], _, CgAtomic{}) = v
+       mkCVal (vs,  n, CgAtomic{}) = die $ "Unexpected driver value computed for " ++ show n ++ render (hcat vs)
+       mkCVal (_,   n, CgArray{})  = text n
+       mkOVal (n, CgAtomic{})      = text "&" <> text n
+       mkOVal (n, CgArray{})       = text n
+       display (n, CgAtomic sw)         = text "printf" <> parens (printQuotes (text " " <+> text n <+> text "=" <+> specifier (hasSign sw, sizeOf sw)
+                                                                                <> text "\\n") <> comma <+> text n) <> semi
+       display (n, CgArray [])         =  die $ "Unsupported empty array value for " ++ show n
+       display (n, CgArray sws@(sw:_)) =   text "int" <+> nctr <> semi
+                                        $$ text "for(" <> nctr <+> text "= 0; " <+> nctr <+> text "<" <+> int (length sws) <+> text "; ++" <> nctr <> text ")"
+                                        $$ nest 2 (text "printf" <> parens (printQuotes (text " " <+> entrySpec <+> text "=" <+> spec <> text "\\n")
+                                                                 <> comma <+> nctr <+> comma <> entry) <> semi)
+                  where nctr      = text n <> text "_ctr"
+                        entry     = text n <> text "[" <> nctr <> text "]"
+                        entrySpec = text n <> text "[%d]"
+                        spec      = specifier (hasSign sw, sizeOf sw)
 
 -- | Generate the C program
-genCProg :: Bool -> String -> Doc -> Result -> [String] -> Doc
-genCProg rtc fn proto (Result inps preConsts tbls arrs uints axms asgns outs) outputVars
+genCProg :: Bool -> String -> Doc -> Result -> [(String, CgVal)] -> [(String, CgVal)] -> Maybe SW -> [Doc]
+genCProg rtc fn proto (Result _ preConsts tbls arrs uints axms asgns _) inVars outVars mbRet
   | not (null arrs)  = tbd "User specified arrays"
   | not (null uints) = tbd "Uninterpreted constants"
   | not (null axms)  = tbd "User given axioms"
   | True
-  =  text "/* File:" <+> doubleQuotes (nm <> text ".c") <> text ". Automatically generated by SBV. Do not edit! */"
-  $$ text ""
-  $$ text "#include <inttypes.h>"
-  $$ text "#include <stdint.h>"
-  $$ text "#include" <+> doubleQuotes (nm <> text ".h")
-  $$ text ""
-  $$ proto
-  $$ text "{"
-  $$ text ""
-  $$ nest 2 (   vcat (map genInp inps)
-             $$ vcat (merge (map genTbl tbls) (map genAsgn assignments))
-             $$ sepIf (not (null assignments) || not (null tbls))
-             $$ genOuts outs)
-  $$ text "}"
-  $$ text ""
- where nm = text fn
+  = [pre, header, post]
+ where pre    = text "/* File:" <+> doubleQuotes (nm <> text ".c") <> text ". Automatically generated by SBV. Do not edit! */"
+              $$ text ""
+              $$ text "#include <inttypes.h>"
+              $$ text "#include <stdint.h>"
+       header = text "#include" <+> doubleQuotes (nm <> text ".h")
+       post   =  text ""
+              $$ proto
+              $$ text "{"
+              $$ text ""
+              $$ nest 2 (   vcat (concatMap (genIO True) inVars)
+                         $$ vcat (merge (map genTbl tbls) (map genAsgn assignments))
+                         $$ sepIf (not (null assignments) || not (null tbls))
+                         $$ vcat (concatMap (genIO False) outVars)
+                         $$ maybe empty mkRet mbRet
+                        )
+              $$ text "}"
+              $$ text ""
+       nm = text fn
        assignments = F.toList asgns
        typeWidth = getMax 0 [len (hasSign s, sizeOf s) | (s, _) <- assignments]
                 where len (False, 1) = 5 -- SBool
@@ -299,12 +368,17 @@ genCProg rtc fn proto (Result inps preConsts tbls arrs uints axms asgns outs) ou
                       getMax m (x:xs) = getMax (m `max` x) xs
        consts = (falseSW, falseCW) : (trueSW, trueCW) : preConsts
        isConst s = isJust (lookup s consts)
-       genInp :: NamedSymVar -> Doc
-       genInp (sw, n)
-         | show sw == n = empty  -- no aliasing, so no need to assign
-         | True         = declSW typeWidth sw <+> text "=" <+> text n <> semi
+       genIO :: Bool -> (String, CgVal) -> [Doc]
+       genIO True  (cNm, CgAtomic sw) = [declSW typeWidth sw  <+> text "=" <+> text cNm         <> semi]
+       genIO False (cNm, CgAtomic sw) = [text "*" <> text cNm <+> text "=" <+> showSW consts sw <> semi]
+       genIO isInp (cNm, CgArray sws) = zipWith genElt sws [(0::Int)..]
+         where genElt sw i
+                 | isInp = declSW typeWidth sw <+> text "=" <+> text entry       <> semi
+                 | True  = text entry          <+> text "=" <+> showSW consts sw <> semi
+                 where entry = cNm ++ "[" ++ show i ++ "]"
+       mkRet sw = text "return" <+> showSW consts sw <> semi
        genTbl :: ((Int, (Bool, Int), (Bool, Int)), [SW]) -> (Int, Doc)
-       genTbl ((i, _, (sg, sz)), elts) =  (location, static <+> mkParam ("table" ++ show i, (sg, sz)) <> text "[] = {"
+       genTbl ((i, _, (sg, sz)), elts) =  (location, static <+> pprCWord True (sg, sz) <+> text ("table" ++ show i) <> text "[] = {"
                                                      $$ nest 4 (fsep (punctuate comma (align (map (showSW consts) elts))))
                                                      $$ text "};")
          where static   = if location == -1 then text "static" else empty
@@ -313,12 +387,6 @@ genCProg rtc fn proto (Result inps preConsts tbls arrs uints axms asgns outs) ou
                                      | True      = n
        genAsgn :: (SW, SBVExpr) -> (Int, Doc)
        genAsgn (sw, n) = (getNodeId sw, declSW typeWidth sw <+> text "=" <+> ppExpr rtc consts n <> semi)
-       genOuts :: [SW] -> Doc
-       genOuts [sw] = text "return" <+> showSW consts sw <> semi
-       genOuts os
-         | length os /= length outputVars = die $ "Mismatched outputs: " ++ show (os, outputVars)
-         | True                           = vcat (zipWith assignOut outputVars os)
-         where assignOut v sw = text "*" <> text v <+> text "=" <+> showSW consts sw <> semi
        -- merge tables intermixed with assignments, paying attention to putting tables as
        -- early as possible.. Note that the assignment list (second argument) is sorted on its order
        merge :: [(Int, Doc)] -> [(Int, Doc)] -> [Doc]
@@ -327,17 +395,10 @@ genCProg rtc fn proto (Result inps preConsts tbls arrs uints axms asgns outs) ou
        merge ts@((i, t):trest) as@((i', a):arest)
          | i < i'                                 = t : merge trest as
          | True                                   = a : merge ts arest
-       -- Align a bunch of docs to occupy the exact same length by padding in the left by space
-       -- this is ugly and inefficient, but easy to code..
-       align :: [Doc] -> [Doc]
-       align ds = map (text . pad) ss
-         where ss    = map render ds
-               l     = maximum (0 : map length ss)
-               pad s = take (l - length s) (repeat ' ') ++ s
 
 ppExpr :: Bool -> [(SW, CW)] -> SBVExpr -> Doc
 ppExpr rtc consts (SBVApp op opArgs) = p op (map (showSW consts) opArgs)
-  where cBinOps = [ (Plus, "+"), (Times, "*"), (Minus, "-"), (Quot, "/"), (Rem, "%")
+  where cBinOps = [ (Plus, "+"), (Times, "*"), (Minus, "-")
                   , (Equal, "=="), (NotEqual, "!=")
                   , (LessThan, "<"), (GreaterThan, ">"), (LessEq, "<="), (GreaterEq, ">=")
                   , (And, "&"), (Or, "|"), (XOr, "^")
@@ -367,6 +428,9 @@ ppExpr rtc consts (SBVApp op opArgs) = p op (map (showSW consts) opArgs)
                 checkBoth  = parens (checkLeft <+> text "||" <+> checkRight)
                 (needsCheckL, needsCheckR) | as   = (True,  (2::Integer)^(at-1)-1  >= (fromIntegral len))
                                            | True = (False, (2::Integer)^(at)  -1  >= (fromIntegral len))
+        -- Div/Rem should be careful on 0, in the SBV world x `div` 0 is 0, x `rem` 0 is x
+        p Quot [a, b] = parens (b <+> text "== 0") <+> text "?" <+> text "0" <+> text ":" <+> parens (a <+> text "/" <+> b)
+        p Rem  [a, b] = parens (b <+> text "== 0") <+> text "?" <+>    a     <+> text ":" <+> parens (a <+> text "%" <+> b)
         p o [a, b]
           | Just co <- lookup o cBinOps
           = a <+> text co <+> b
@@ -415,3 +479,90 @@ ppSameLine = trim . render
  where trim ""        = ""
        trim ('\n':cs) = ' ' : trim (dropWhile isSpace cs)
        trim (c:cs)    = c   : trim cs
+
+-- Align a bunch of docs to occupy the exact same length by padding in the left by space
+-- this is ugly and inefficient, but easy to code..
+align :: [Doc] -> [Doc]
+align ds = map (text . pad) ss
+  where ss    = map render ds
+        l     = maximum (0 : map length ss)
+        pad s = take (l - length s) (repeat ' ') ++ s
+
+-- | Merge a bunch of bundles to generate code for a library
+mergeToLib :: String -> [CgPgmBundle] -> CgPgmBundle
+mergeToLib libName bundles = CgPgmBundle $ sources ++ [libHeader, libDriver, libMake]
+  where files       = concat [fs | CgPgmBundle fs <- bundles]
+        sigs        = concat [ss | (_, (CgHeader ss, _)) <- files]
+        drivers     = [ds | (_, (CgDriver, ds)) <- files]
+        sources     = [(f, (CgSource, [pre, libHInclude, post])) | (f, (CgSource, [pre, _, post])) <- files]
+        sourceNms   = map fst sources
+        libHeader   = (libName ++ ".h", (CgHeader sigs, [genHeader libName sigs]))
+        libHInclude = text "#include" <+> text (show (libName ++ ".h"))
+        libMake     = ("Makefile", (CgMakefile, [genLibMake libName sourceNms]))
+        libDriver   = (libName ++ "_driver.c", (CgDriver, mergeDrivers libName libHInclude (zip (map takeBaseName sourceNms) drivers)))
+
+-- | Create a Makefile for the library
+genLibMake :: String -> [String] -> Doc
+genLibMake libName fs =
+     text "# Makefile for" <+> nm <> text ". Automatically generated by SBV. Do not edit!"
+  $$ text ""
+  $$ text "CC=gcc"
+  $$ text "CCFLAGS=-Wall -O3 -DNDEBUG -fomit-frame-pointer"
+  $$ text "AR=ar"
+  $$ text "ARFLAGS=cr"
+  $$ text ""
+  $$ text ("all: " ++ unwords [liba, libd])
+  $$ text ""
+  $$ text liba <> text (": " ++ unwords os)
+  $$ text "\t${AR} ${ARFLAGS} $@ $^"
+  $$ text ""
+  $$ text libd <> text (": " ++ unwords [libd ++ ".c", libh])
+  $$ text ("\t${CC} ${CCFLAGS} $< -o $@ " ++ liba)
+  $$ text ""
+  $$ vcat (zipWith mkObj os fs)
+  $$ text "clean:"
+  $$ text "\trm -f *.o"
+  $$ text ""
+  $$ text "veryclean: clean"
+  $$ text "\trm -f" <+> text (unwords [liba, libd])
+  $$ text ""
+ where nm = text libName
+       liba = libName ++ ".a"
+       libh = libName ++ ".h"
+       libd = libName ++ "_driver"
+       os   = map (flip replaceExtension ".o") fs
+       mkObj o f =  text o <> text (":" ++ unwords [f, libh])
+                 $$ text "\t${CC} ${CCFLAGS} -c $< -o $@"
+                 $$ text ""
+
+-- | Create a driver for a library
+mergeDrivers :: String -> Doc -> [(FilePath, [Doc])] -> [Doc]
+mergeDrivers libName inc ds = pre : concatMap mkDFun ds ++ [callDrivers (map fst ds)]
+  where pre =  text "/* Example driver program for" <+> text libName <> text ". */"
+            $$ text "/* Automatically generated by SBV. Edit as you see fit! */"
+            $$ text ""
+            $$ text "#include <inttypes.h>"
+            $$ text "#include <stdint.h>"
+            $$ text "#include <stdio.h>"
+            $$ inc
+        mkDFun (f, [_pre, _header, body, _post]) = [header, body, post]
+           where header =  text ""
+                        $$ text ("void " ++ f ++ "_driver(void)")
+                        $$ text "{"
+                 post   =  text "}"
+        mkDFun (f, _) = die $ "mergeDrivers: non-conforming driver program for " ++ show f
+        callDrivers fs =   text ""
+                       $$  text "int main(void)"
+                       $$  text "{"
+                       $+$ nest 2 (vcat (map call fs))
+                       $$  nest 2 (text "return 0;")
+                       $$  text "}"
+        call f =  text psep
+               $$ text ptag
+               $$ text psep
+               $$ text (f ++ "_driver();")
+               $$ text ""
+           where tag  = "** Driver run for " ++ f ++ ":"
+                 ptag = "printf(\"" ++ tag ++ "\\n\");"
+                 lsep = take (length tag) (repeat '=')
+                 psep = "printf(\"" ++ lsep ++ "\\n\");"

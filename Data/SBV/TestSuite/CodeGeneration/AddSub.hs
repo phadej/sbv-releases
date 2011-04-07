@@ -19,5 +19,13 @@ import Data.SBV.Examples.CodeGeneration.AddSub
 -- Test suite
 testSuite :: SBVTestSuite
 testSuite = mkTestSuite $ \goldCheck -> test [
-   "addSub" ~: compileToC' [76, 92] True "addSub" ["x", "y", "sum", "dif"] addSub `goldCheck` "addSub.gold"
+   "addSub" ~: code `goldCheck` "addSub.gold"
  ]
+ where code = compileToC' "addSub" $ do
+                cgSetDriverValues [76, 92]
+                cgPerformRTCs True
+                x <- cgInput "x"
+                y <- cgInput "y"
+                let (s, d) = addSub x y
+                cgOutput "sum" s
+                cgOutput "dif" d
