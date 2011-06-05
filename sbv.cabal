@@ -1,7 +1,7 @@
 Name:          sbv
-Version:       0.9.18
+Version:       0.9.19
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
-Synopsis:      Symbolic Bit Vectors: Prove bit-precise program properties using SMT solvers.
+Synopsis:      Symbolic bit vectors: Bit-precise verification and automatic C-code generation.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
                them using SMT solvers. Automatically generate C programs from Haskell functions.
                The SBV library adds support for symbolic bit vectors, allowing formal models of
@@ -25,6 +25,8 @@ Description:   Express properties about bit-precise Haskell programs and automat
                .
                  * 'SArray', 'SFunArray': Flat arrays of symbolic values
                .
+                 * 'STree': Full binary trees of symbolic values (for fast symbolic access)
+               .
                  * Symbolic polynomials over GF(2^n), and polynomial arithmetic
                .
                  * Uninterpreted constants and functions over symbolic values, with user
@@ -40,8 +42,7 @@ Description:   Express properties about bit-precise Haskell programs and automat
                  * quick-checked
                .
                The SBV library can also compile Haskell functions that manipulate symbolic
-               values directly to C, rendering them as straight-line C programs that can be
-               executed in, say, embedded platforms.
+               values directly to C, rendering them as straight-line C programs.
                .
                In addition to the library, the installation will create the
                executable @SBVUnitTests@. You should run it once the installation is complete,
@@ -53,7 +54,7 @@ Description:   Express properties about bit-precise Haskell programs and automat
                Galois, Inc. (<http://www.galois.com>) has contributed to the development of SBV,
                by providing time and computing machinery. The following people reported bugs,
                provided comments/feedback, or contributed to the development of SBV in various ways:
-               Ian Blumenfeld, Iavor Diatchki, Lee Pike, Austin Seipp, Don Stewart, and Josef Svenningsson.
+               Ian Blumenfeld, Ian Calvert, Iavor Diatchki, Lee Pike, Austin Seipp, Don Stewart, and Josef Svenningsson.
 
 Copyright:     Levent Erkok, 2010-2011
 License:       BSD3
@@ -93,13 +94,15 @@ Library
                   , Data.SBV.Internals
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
+                  , Data.SBV.Examples.BitPrecise.PrefixSum
                   , Data.SBV.Examples.CodeGeneration.AddSub
                   , Data.SBV.Examples.CodeGeneration.Fibonacci
                   , Data.SBV.Examples.CodeGeneration.GCD
                   , Data.SBV.Examples.CodeGeneration.PopulationCount
                   , Data.SBV.Examples.Crypto.AES
+                  , Data.SBV.Examples.Crypto.RC4
                   , Data.SBV.Examples.Polynomials.Polynomials
-                  , Data.SBV.Examples.PrefixSum.PrefixSum
+                  , Data.SBV.Examples.Puzzles.Counts
                   , Data.SBV.Examples.Puzzles.DogCatMouse
                   , Data.SBV.Examples.Puzzles.Euler185
                   , Data.SBV.Examples.Puzzles.MagicSquare
@@ -110,9 +113,11 @@ Library
                   , Data.SBV.Examples.Uninterpreted.Function
   Other-modules   : Data.SBV.BitVectors.Data
                   , Data.SBV.BitVectors.Model
-                  , Data.SBV.BitVectors.Splittable
                   , Data.SBV.BitVectors.Polynomial
                   , Data.SBV.BitVectors.PrettyNum
+                  , Data.SBV.BitVectors.SignCast
+                  , Data.SBV.BitVectors.Splittable
+                  , Data.SBV.BitVectors.STree
                   , Data.SBV.Compilers.C
                   , Data.SBV.Compilers.CodeGen
                   , Data.SBV.SMT.SMT
@@ -147,18 +152,19 @@ Library
                   , Data.SBV.TestSuite.Basics.QRem
                   , Data.SBV.TestSuite.BitPrecise.BitTricks
                   , Data.SBV.TestSuite.BitPrecise.Legato
+                  , Data.SBV.TestSuite.BitPrecise.PrefixSum
                   , Data.SBV.TestSuite.CodeGeneration.AddSub
                   , Data.SBV.TestSuite.CodeGeneration.CgTests
                   , Data.SBV.TestSuite.CodeGeneration.Fibonacci
                   , Data.SBV.TestSuite.CodeGeneration.GCD
                   , Data.SBV.TestSuite.CodeGeneration.PopulationCount
                   , Data.SBV.TestSuite.Crypto.AES
+                  , Data.SBV.TestSuite.Crypto.RC4
                   , Data.SBV.TestSuite.CRC.CCITT
                   , Data.SBV.TestSuite.CRC.CCITT_Unidir
                   , Data.SBV.TestSuite.CRC.GenPoly
                   , Data.SBV.TestSuite.CRC.Parity
                   , Data.SBV.TestSuite.CRC.USB5
-                  , Data.SBV.TestSuite.PrefixSum.PrefixSum
                   , Data.SBV.TestSuite.Polynomials.Polynomials
                   , Data.SBV.TestSuite.Puzzles.DogCatMouse
                   , Data.SBV.TestSuite.Puzzles.Euler185
