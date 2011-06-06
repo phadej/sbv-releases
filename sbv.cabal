@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.19
+Version:       0.9.20
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic bit vectors: Bit-precise verification and automatic C-code generation.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -166,6 +166,7 @@ Library
                   , Data.SBV.TestSuite.CRC.Parity
                   , Data.SBV.TestSuite.CRC.USB5
                   , Data.SBV.TestSuite.Polynomials.Polynomials
+                  , Data.SBV.TestSuite.Puzzles.Counts
                   , Data.SBV.TestSuite.Puzzles.DogCatMouse
                   , Data.SBV.TestSuite.Puzzles.Euler185
                   , Data.SBV.TestSuite.Puzzles.MagicSquare
