@@ -15,7 +15,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternGuards #-}
 
-module Data.SBV.BitVectors.Polynomial (Polynomial(..)) where
+module Data.SBV.BitVectors.Polynomial (Polynomial(..), crc, crcBV) where
 
 import Data.Bits  (Bits(..))
 import Data.List  (genericTake)
@@ -34,7 +34,7 @@ import Data.SBV.Utils.Boolean
 --
 -- for all @x@ (including @0@)
 --
--- Minimal complete definiton: 'pMult', 'pDivMod', 'showPoly'
+-- Minimal complete definiton: 'pMult', 'pDivMod', 'showPolynomial'
 class Bits a => Polynomial a where
  -- | Given bit-positions to be set, create a polynomial
  -- For instance
@@ -62,23 +62,28 @@ class Bits a => Polynomial a where
  pMod  :: a -> a -> a
  -- | Division and modulus packed together
  pDivMod :: a -> a -> (a, a)
- -- | Display a polynomial like a mathematician would (over the monomial @x@)
+ -- | Display a polynomial like a mathematician would (over the monomial @x@), with a type
  showPoly :: a -> String
+ -- | Display a polynomial like a mathematician would (over the monomial @x@), the first argument
+ -- controls if the final type is shown as well.
+ showPolynomial :: Bool -> a -> String
 
- -- defaults.. Minumum complete definition: pMult, pDivMod, showPoly
+ -- defaults.. Minumum complete definition: pMult, pDivMod, showPolynomial
  polynomial = foldr (flip setBit) 0
  pAdd       = xor
  pDiv x y   = fst (pDivMod x y)
  pMod x y   = snd (pDivMod x y)
+ showPoly   = showPolynomial False
 
-instance Polynomial Word8   where {showPoly = sp;       pMult = lift polyMult; pDivMod = liftC polyDivMod}
-instance Polynomial Word16  where {showPoly = sp;       pMult = lift polyMult; pDivMod = liftC polyDivMod}
-instance Polynomial Word32  where {showPoly = sp;       pMult = lift polyMult; pDivMod = liftC polyDivMod}
-instance Polynomial Word64  where {showPoly = sp;       pMult = lift polyMult; pDivMod = liftC polyDivMod}
-instance Polynomial SWord8  where {showPoly = liftS sp; pMult = polyMult;      pDivMod = polyDivMod}
-instance Polynomial SWord16 where {showPoly = liftS sp; pMult = polyMult;      pDivMod = polyDivMod}
-instance Polynomial SWord32 where {showPoly = liftS sp; pMult = polyMult;      pDivMod = polyDivMod}
-instance Polynomial SWord64 where {showPoly = liftS sp; pMult = polyMult;      pDivMod = polyDivMod}
+
+instance Polynomial Word8   where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
+instance Polynomial Word16  where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
+instance Polynomial Word32  where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
+instance Polynomial Word64  where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
+instance Polynomial SWord8  where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
+instance Polynomial SWord16 where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
+instance Polynomial SWord32 where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
+instance Polynomial SWord64 where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
 
 lift :: SymWord a => ((SBV a, SBV a, [Int]) -> SBV a) -> (a, a, [Int]) -> a
 lift f (x, y, z) = fromJust $ unliteral $ f (literal x, literal y, z)
@@ -90,11 +95,12 @@ liftS f s
   | True                  = show s
 
 -- | Pretty print as a polynomial
-sp :: Bits a => a -> String
-sp a
- | null cs = "0" ++ t
+sp :: Bits a => Bool -> a -> String
+sp st a
+ | null cs = '0' : t
  | True    = foldr (\x y -> sh x ++ " + " ++ y) (sh (last cs)) (init cs) ++ t
- where t  = " :: GF(2^" ++ show n ++ ")"
+ where t | st   = " :: GF(2^" ++ show n ++ ")"
+         | True = ""
        n  = bitSize a
        is = [n-1, n-2 .. 0]
        cs = map fst $ filter snd $ zip is (map (testBit a) is)
@@ -171,3 +177,50 @@ divx n i xs ys'        = (q:qs, rs)
   where q        = xs `idx` i
         xs'      = ites q (xs `addPoly` ys') xs
         (qs, rs) = divx (n-1) (i-1) xs' (tail ys')
+
+-- | Compute CRCs over bit-vectors. The call @crcBV n m p@ computes
+-- the CRC of the message @m@ with respect to polynomial @p@. The
+-- inputs are assumed to be blasted big-endian. The number
+-- @n@ specifies how many bits of CRC is needed. Note that @n@
+-- is actually the degree of the polynomial @p@, and thus it seems
+-- redundant to pass it in. However, in a typical proof context,
+-- the polynomial can be symbolic, so we cannot compute the degree
+-- easily. While this can be worked-around by generating code that
+-- accounts for all possible degrees, the resulting code would
+-- be unnecessarily big and complicated, and much harder to reason
+-- with. (Also note that a CRC is just the remainder from the
+-- polynomial division, but this routine is much faster in practice.)
+--
+-- NB. The @n@th bit of the polynomial @p@ /must/ be set for the CRC
+-- to be computed correctly. Note that the polynomial argument 'p' will
+-- not even have this bit present most of the time, as it will typically
+-- contain bits @0@ through @n-1@ as usual in the CRC literature. The higher
+-- order @n@th bit is simply assumed to be set, as it does not make
+-- sense to use a polynomial of a lesser degree. This is usually not a problem
+-- since CRC polynomials are designed and expressed this way.
+--
+-- NB. The literature on CRC's has many variants on how CRC's are computed.
+-- We follow the painless guide (<http://www.ross.net/crc/download/crc_v3.txt>)
+-- and compute the CRC as follows:
+--
+--     * Extend the message 'm' by adding 'n' 0 bits on the right
+--
+--     * Divide the polynomial thus obtained by the 'p'
+--
+--     * The remainder is the CRC value.
+--
+-- There are many variants on final XOR's, reversed polynomials etc., so
+-- it is essential to double check you use the correct /algorithm/.
+crcBV :: Int -> [SBool] -> [SBool] -> [SBool]
+crcBV n m p = take n $ go (replicate n false) (m ++ replicate n false)
+  where mask = drop (length p - n) p
+        go c []     = c
+        go c (b:bs) = go next bs
+          where c' = drop 1 c ++ [b]
+                next = ite (head c) (zipWith (<+>) c' mask) c'
+
+-- | Compute CRC's over polynomials, i.e., symbolic words. The first
+-- 'Int' argument plays the same role as the one in the 'crcBV' function.
+crc :: (FromBits (SBV a), FromBits (SBV b), Bits a, Bits b, SymWord a, SymWord b) => Int -> SBV a -> SBV b -> SBV b
+crc n m p = fromBitsBE $ replicate (sz - n) false ++ crcBV n (blastBE m) (blastBE p)
+  where sz = sizeOf p

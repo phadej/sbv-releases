@@ -40,7 +40,7 @@ in Haskell. It introduces the types:
   - `SWord8`, `SWord16`, `SWord32`, `SWord64`: Symbolic Words (unsigned)
   - `SInt8`,  `SInt16`,  `SInt32`,  `SInt64`: Symbolic Ints (signed)
   - Arrays of symbolic values
-  - Symbolic polynomials over GF(2^n ), and polynomial arithmetic
+  - Symbolic polynomials over GF(2^n ), polynomial arithmetic, and CRCs
   - Uninterpreted constants and functions over symbolic values, with user
     defined SMT-Lib axioms
 
@@ -53,7 +53,8 @@ framework takes full advantage of Haskell's type inference to avoid many common 
 Furthermore, predicates (i.e., functions that return `SBool`) built out of these types can also be:
 
   - proven correct via an external SMT solver (the `prove` function)
-  - checked for satisfiability (the `sat` and `allSat` functions)
+  - checked for satisfiability (the `sat`, and `allSat` functions)
+  - used in synthesis (the `sat` function with existentials)
   - quick-checked
 
 If a predicate is not valid, `prove` will return a counterexample: An 
@@ -69,15 +70,10 @@ Use of SMT solvers
 The sbv library uses third-party SMT solvers via the standard SMT-Lib interface: 
 [http://goedel.cs.uiowa.edu/smtlib/](http://goedel.cs.uiowa.edu/smtlib/)
 
-While the library is designed to work with any SMT-Lib compliant SMT-solver,
-solver specific support is required for parsing counter-example/model data since
-there is currently no agreed upon format for getting models from arbitrary SMT
-solvers. (The SMT-Lib2 initiative will potentially address this issue in the
-future, at which point the sbv library can be generalized as well.) Currently, we
-only support the Yices SMT solver from SRI as far as the counter-example
-and model generation support is concerned:
-[http://yices.csl.sri.com/](http://yices.csl.sri.com/) However, other solvers can
-be hooked up with relative ease.
+The SBV library is designed to work with any SMT-Lib compliant SMT-solver. 
+Currently, we support the Yices SMT solver from SRI:
+[http://yices.csl.sri.com/](http://yices.csl.sri.com/) and the Z3 SMT solver
+from Microsoft: [http://research.microsoft.com/en-us/um/redmond/projects/z3/](http://research.microsoft.com/en-us/um/redmond/projects/z3/)
 
 Prerequisites
 =============
@@ -85,7 +81,15 @@ You **should** download and install Yices (version 2.X) on your machine, and
 make sure the "yices" executable is in your path before using the sbv library,
 as it is the current default solver. Alternatively, you can specify the location
 of yices executable in the environment variable `SBV_YICES` and the options to yices
-in `SBV_YICES_OPTIONS`. (The default for the latter is `"-m -f"`.)
+in `SBV_YICES_OPTIONS`. The default for the latter is `"-m -f"`.
+
+If quantified bit-vectors are to be used, you should also install
+Microsoft's z3 SMT solver. Again, the environment variables 
+`SBV_Z3` and `SBV_Z3_OPTIONS` can be used for choosing executable location
+and custom options.  The default for the latter is `"/in /smt2"`. Microsoft
+releases Z3 natively on Windows, and Linux for SMT-Comp purposes, and you can
+also run it on Mac via Wine or similar emulators. You should download at least
+version 3.2.
 
 Examples
 =========
@@ -116,4 +120,5 @@ the [BSD3](http://en.wikipedia.org/wiki/BSD_licenses) verbiage.
 Thanks
 ======
 The following people reported bugs, provided comments/feedback, or contributed to the development of SBV in various ways:
-Ian Blumenfeld, Ian Calvert, Iavor Diatchki, Lee Pike, Austin Seipp, Don Stewart, Josef Svenningsson, and Nis Wegmann.
+Ian Blumenfeld, Ian Calvert, Iavor Diatchki, Tom Hawkins, Lee Pike, Austin Seipp, Don Stewart, Josef Svenningsson,
+and Nis Wegmann.

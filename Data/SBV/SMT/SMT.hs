@@ -14,15 +14,20 @@
 
 module Data.SBV.SMT.SMT where
 
-import Control.DeepSeq  (NFData(..))
-import Control.Monad    (when, zipWithM)
-import Data.Char        (isSpace)
-import Data.Int         (Int8, Int16, Int32, Int64)
-import Data.List        (intercalate)
-import Data.Word        (Word8, Word16, Word32, Word64)
-import System.Directory (findExecutable)
-import System.Process   (readProcessWithExitCode)
-import System.Exit      (ExitCode(..))
+import qualified Control.Exception as C
+
+import Control.Concurrent (newEmptyMVar, takeMVar, putMVar, forkIO)
+import Control.DeepSeq    (NFData(..))
+import Control.Monad      (when, zipWithM)
+import Data.Char          (isSpace)
+import Data.Int           (Int8, Int16, Int32, Int64)
+import Data.List          (intercalate, isPrefixOf)
+import Data.Maybe         (isNothing, fromJust)
+import Data.Word          (Word8, Word16, Word32, Word64)
+import System.Directory   (findExecutable)
+import System.Process     (readProcessWithExitCode, runInteractiveProcess, waitForProcess)
+import System.Exit        (ExitCode(..))
+import System.IO          (hClose, hFlush, hPutStr, hGetContents, hGetLine)
 
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.PrettyNum
@@ -30,13 +35,16 @@ import Data.SBV.Utils.TDiff
 
 -- | Solver configuration
 data SMTConfig = SMTConfig {
-         verbose   :: Bool      -- ^ Debug mode
-       , timing    :: Bool      -- ^ Print timing information on how long different phases took (construction, solving, etc.)
-       , printBase :: Int       -- ^ Print literals in this base
-       , solver    :: SMTSolver -- ^ The actual SMT solver
+         verbose    :: Bool           -- ^ Debug mode
+       , timing     :: Bool           -- ^ Print timing information on how long different phases took (construction, solving, etc.)
+       , timeOut    :: Maybe Int      -- ^ How much time to give to the solver. (In seconds)
+       , printBase  :: Int            -- ^ Print literals in this base
+       , solver     :: SMTSolver      -- ^ The actual SMT solver
+       , smtFile    :: Maybe FilePath -- ^ If Just, the generated SMT script will be put in this file (for debugging purposes mostly)
+       , useSMTLib2 :: Bool           -- ^ If True, we'll treat the solver as using SMTLib2 input format. Otherwise, SMTLib1
        }
 
-type SMTEngine = SMTConfig -> [NamedSymVar] -> [(String, UnintKind)] -> String -> IO SMTResult
+type SMTEngine = SMTConfig -> Bool -> [(Quantifier, NamedSymVar)] -> [(String, UnintKind)] -> [Either SW (SW, [SW])] -> String -> IO SMTResult
 
 -- | An SMT solver
 data SMTSolver = SMTSolver {
@@ -65,6 +73,12 @@ data SMTResult = Unsatisfiable SMTConfig            -- ^ Unsatisfiable
                | ProofError    SMTConfig [String]   -- ^ Prover errored out
                | TimeOut       SMTConfig            -- ^ Computation timed out (see the 'timeout' combinator)
 
+-- | A script, to be passed to the solver.
+data SMTScript = SMTScript {
+          scriptBody  :: String        -- ^ Initial feed
+        , scriptModel :: Maybe String  -- ^ Optional continuation script, if the result is sat
+        }
+
 resultConfig :: SMTResult -> SMTConfig
 resultConfig (Unsatisfiable c) = c
 resultConfig (Satisfiable c _) = c
@@ -89,8 +103,9 @@ newtype ThmResult    = ThmResult    SMTResult
 -- The reason for having a separate 'SatResult' is to have a more meaningful 'Show' instance.
 newtype SatResult    = SatResult    SMTResult
 
--- | An 'allSat' call results in a 'AllSatResult'
-newtype AllSatResult = AllSatResult [SMTResult]
+-- | An 'allSat' call results in a 'AllSatResult'. The boolean says whether
+-- we should warn the user about prefix-existentials.
+newtype AllSatResult = AllSatResult (Bool, [SMTResult])
 
 instance Show ThmResult where
   show (ThmResult r) = showSMTResult "Q.E.D."
@@ -103,17 +118,25 @@ instance Show SatResult where
                                      "Satisfiable" "Satisfiable. Model:\n" r
 
 
+-- NB. The Show instance of AllSatResults have to be careful in being lazy enough
+-- as the typical use case is to pull results out as they become available.
 instance Show AllSatResult where
-  show (AllSatResult [])  =  "No solutions found"
-  show (AllSatResult [s]) =  "Only one solution found:\n" ++ shUnique s
-        where shUnique = showSMTResult "Unsatisfiable"
-                                       ("Unknown (No assignment to variables returned)") "Unknown. Potential assignment:\n" "" ""
-  show (AllSatResult ss)  =  "Multiple solutions found:\n"      -- shouldn't display how-many; would be too slow/leak-space to compute everything..
-                          ++ unlines (zipWith sh [(1::Int)..] ss)
-                          ++ "Done."
-        where sh i = showSMTResult "Unsatisfiable"
-                                   ("Unknown #" ++ show i ++ "(No assignment to variables returned)") "Unknown. Potential assignment:\n"
-                                   ("Solution #" ++ show i ++ " (No assignment to variables returned)") ("Solution #" ++ show i ++ ":\n")
+  show (AllSatResult (e, xs)) = go (0::Int) xs
+    where uniqueWarn | e    = " (Unique up to prefix existentials.)"
+                     | True = ""
+          go c (s:ss) = let c'      = c+1
+                            (ok, o) = sh c' s
+                        in c' `seq` if ok then o ++ "\n" ++ go c' ss else o
+          go c []     = case c of
+                          0 -> "No solutions found."
+                          1 -> "This is the only solution." ++ uniqueWarn
+                          _ -> "Found " ++ show c ++ " different solutions." ++ uniqueWarn
+          sh i c = (ok, showSMTResult "Unsatisfiable"
+                                      ("Unknown #" ++ show i ++ "(No assignment to variables returned)") "Unknown. Potential assignment:\n"
+                                      ("Solution #" ++ show i ++ " (No assignment to variables returned)") ("Solution #" ++ show i ++ ":\n") c)
+              where ok = case c of
+                           Satisfiable{} -> True
+                           _             -> False
 
 -- | Instances of 'SatModel' can be automatically extracted from models returned by the
 -- solvers. The idea is that the sbv infrastructure provides a stream of 'CW''s (constant-words)
@@ -205,22 +228,22 @@ instance (SatModel a, SatModel b, SatModel c, SatModel d, SatModel e, SatModel f
                    return ((a, b, c, d, e, f, g), hs)
 
 -- | Given an 'SMTResult', extract an arbitrarily typed model from it, given a 'SatModel' instance
-getModel :: SatModel a => SMTResult -> a
-getModel (Unsatisfiable _) = error "SatModel.getModel: Unsatisfiable result"
-getModel (Unknown _ _)     = error "Impossible! Backend solver returned unknown for Bit-vector problem!"
-getModel (ProofError _ s)  = error $ unlines $ "An error happened: " : s
-getModel (TimeOut _)       = error $ "Timeout"
-getModel (Satisfiable _ m) = case parseCWs [c | (_, c) <- modelAssocs m] of
-                               Just (x, []) -> x
-                               Just (_, ys) -> error $ "SBV.getModel: Partially constructed model; remaining elements: " ++ show ys
-                               Nothing      -> error $ "SBV.getModel: Cannot construct a model from: " ++ show m
+getModel :: SatModel a => SatResult -> Either String a
+getModel (SatResult (Unsatisfiable _)) = Left "SatModel.getModel: Unsatisfiable result"
+getModel (SatResult (Unknown _ _))     = error "Impossible! Backend solver returned unknown for Bit-vector problem!"
+getModel (SatResult (ProofError _ s))  = error $ unlines $ "Backend solver complains: " : s
+getModel (SatResult (TimeOut _))       = Left "Timeout"
+getModel (SatResult (Satisfiable _ m)) = case parseCWs [c | (_, c) <- modelAssocs m] of
+                                           Just (x, []) -> Right x
+                                           Just (_, ys) -> error $ "SBV.getModel: Partially constructed model; remaining elements: " ++ show ys
+                                           Nothing      -> error $ "SBV.getModel: Cannot construct a model from: " ++ show m
 
 -- | Given an 'allSat' call, we typically want to iterate over it and print the results in sequence. The
 -- 'displayModels' function automates this task by calling 'disp' on each result, consecutively. The first
 -- 'Int' argument to 'disp' 'is the current model number.
 displayModels :: SatModel a => (Int -> a -> IO ()) -> AllSatResult -> IO Int
-displayModels disp (AllSatResult ms) = do
-    inds <- zipWithM display (map getModel ms) [(1::Int)..]
+displayModels disp (AllSatResult (_, ms)) = do
+    inds <- zipWithM display [a | Right a <- map (getModel . SatResult) ms] [(1::Int)..]
     return $ last (0:inds)
   where display r i = disp i r >> return i
 
@@ -264,18 +287,19 @@ shUA :: (String, [String]) -> [String]
 shUA (f, cases) = ("  -- array: " ++ f) : map shC cases
   where shC s = "       " ++ s
 
-pipeProcess :: String -> String -> [String] -> String -> IO (Either String [String])
-pipeProcess nm execName opts script = do
+pipeProcess :: Bool -> String -> String -> [String] -> SMTScript -> (String -> String) -> IO (Either String [String])
+pipeProcess verb nm execName opts script cleanErrs = do
         mbExecPath <- findExecutable execName
         case mbExecPath of
           Nothing -> return $ Left $ "Unable to locate executable for " ++ nm
                                    ++ "\nExecutable specified: " ++ show execName
-          Just execPath -> do (ec, contents, errors) <- readProcessWithExitCode execPath opts script
+          Just execPath -> do (ec, contents, allErrors) <- runSolver verb execPath opts script
+                              let errors = dropWhile isSpace (cleanErrs allErrors)
                               case ec of
                                 ExitSuccess  ->  if null errors
                                                  then return $ Right $ map clean (filter (not . null) (lines contents))
                                                  else return $ Left errors
-                                ExitFailure n -> let errors' = if null (dropWhile isSpace errors)
+                                ExitFailure n -> let errors' = if null errors
                                                                then (if null (dropWhile isSpace contents)
                                                                      then "(No error message printed on stderr by the executable.)"
                                                                      else contents)
@@ -290,10 +314,10 @@ pipeProcess nm execName opts script = do
                                                                   ++ "\n" ++ line
                                                                   ++ "\nGiving up.."
   where clean = reverse . dropWhile isSpace . reverse . dropWhile isSpace
-        line  = take 78 $ repeat '='
+        line  = replicate 78 '='
 
-standardSolver :: SMTConfig -> String -> ([String] -> a) -> ([String] -> a) -> IO a
-standardSolver config script failure success = do
+standardSolver :: SMTConfig -> SMTScript -> (String -> String) -> ([String] -> a) -> ([String] -> a) -> IO a
+standardSolver config script cleanErrs failure success = do
     let msg      = when (verbose config) . putStrLn . ("** " ++)
         smtSolver= solver config
         exec     = executable smtSolver
@@ -301,8 +325,46 @@ standardSolver config script failure success = do
         isTiming = timing config
         nmSolver = name smtSolver
     msg $ "Calling: " ++ show (unwords (exec:opts))
-    contents <- timeIf isTiming nmSolver $ pipeProcess nmSolver exec opts script
+    case smtFile config of
+      Nothing -> return ()
+      Just f  -> do putStrLn $ "** Saving the generated script in file: " ++ show f
+                    writeFile f (scriptBody script)
+    contents <- timeIf isTiming nmSolver $ pipeProcess (verbose config) nmSolver exec opts script cleanErrs
     msg $ nmSolver ++ " output:\n" ++ either id (intercalate "\n") contents
     case contents of
       Left e   -> return $ failure (lines e)
       Right xs -> return $ success xs
+
+-- A variant of readProcessWithExitCode; except it knows about continuation strings
+-- and can speak SMT-Lib2 (just a little)
+runSolver :: Bool -> FilePath -> [String] -> SMTScript -> IO (ExitCode, String, String)
+runSolver verb execPath opts script
+ | isNothing $ scriptModel script
+ = readProcessWithExitCode execPath opts (scriptBody script)
+ | True
+ = do (send, ask, cleanUp) <- do
+                (inh, outh, errh, pid) <- runInteractiveProcess execPath opts Nothing Nothing
+                let send l    = hPutStr inh (l ++ "\n") >> hFlush inh
+                    recv      = hGetLine outh
+                    ask l     = send l >> recv
+                    cleanUp r = do outMVar <- newEmptyMVar
+                                   out <- hGetContents outh
+                                   _ <- forkIO $ C.evaluate (length out) >> putMVar outMVar ()
+                                   err <- hGetContents errh
+                                   _ <- forkIO $ C.evaluate (length err) >> putMVar outMVar ()
+                                   hClose inh
+                                   takeMVar outMVar
+                                   takeMVar outMVar
+                                   hClose outh
+                                   hClose errh
+                                   ex <- waitForProcess pid
+                                   return (ex, r ++ "\n" ++ out, err)
+                return (send, ask, cleanUp)
+      mapM_ send (lines (scriptBody script))
+      r <- ask "(check-sat)"
+      when ("sat" `isPrefixOf` r) $ do
+        let mls = lines (fromJust (scriptModel script))
+        when verb $ do putStrLn "** Sending the following model extraction commands:"
+                       mapM_ putStrLn mls
+        mapM_ send mls
+      cleanUp r

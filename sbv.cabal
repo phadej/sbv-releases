@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.21
+Version:       0.9.22
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic bit vectors: Bit-precise verification and automatic C-code generation.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -37,7 +37,9 @@ Description:   Express properties about bit-precise Haskell programs and automat
                .
                  * proven correct via an external SMT solver (the 'prove' function)
                .
-                 * checked for satisfiability (the 'sat' and 'allSat' functions)
+                 * checked for satisfiability (the 'sat', 'allSat', and 'qbvf' functions)
+               .
+                 * used in synthesis (the 'qbvf' function)
                .
                  * quick-checked
                .
@@ -53,7 +55,7 @@ Description:   Express properties about bit-precise Haskell programs and automat
                .
                The following people reported bugs, provided comments/feedback, or contributed to the
                development of SBV in various ways: Ian Blumenfeld, Ian Calvert, Iavor Diatchki,
-               Lee Pike, Austin Seipp, Don Stewart, Josef Svenningsson, and Nis Wegmann.
+               Tom Hawkins, Lee Pike, Austin Seipp, Don Stewart, Josef Svenningsson, and Nis Wegmann.
 
 Copyright:     Levent Erkok, 2010-2011
 License:       BSD3
@@ -95,11 +97,13 @@ Library
                   , Data.SBV.Examples.BitPrecise.Legato
                   , Data.SBV.Examples.BitPrecise.PrefixSum
                   , Data.SBV.Examples.CodeGeneration.AddSub
+                  , Data.SBV.Examples.CodeGeneration.CRC_USB5
                   , Data.SBV.Examples.CodeGeneration.Fibonacci
                   , Data.SBV.Examples.CodeGeneration.GCD
                   , Data.SBV.Examples.CodeGeneration.PopulationCount
                   , Data.SBV.Examples.Crypto.AES
                   , Data.SBV.Examples.Crypto.RC4
+                  , Data.SBV.Examples.Existentials.CRCPolynomial
                   , Data.SBV.Examples.Polynomials.Polynomials
                   , Data.SBV.Examples.Puzzles.Counts
                   , Data.SBV.Examples.Puzzles.DogCatMouse
@@ -121,9 +125,12 @@ Library
                   , Data.SBV.Compilers.CodeGen
                   , Data.SBV.SMT.SMT
                   , Data.SBV.SMT.SMTLib
+                  , Data.SBV.SMT.SMTLib1
+                  , Data.SBV.SMT.SMTLib2
                   , Data.SBV.Provers.Prover
                   , Data.SBV.Provers.SExpr
                   , Data.SBV.Provers.Yices
+                  , Data.SBV.Provers.Z3
                   , Data.SBV.Utils.Boolean
                   , Data.SBV.Utils.TDiff
                   , Data.SBV.Utils.SBVTest
@@ -154,11 +161,13 @@ Library
                   , Data.SBV.TestSuite.BitPrecise.PrefixSum
                   , Data.SBV.TestSuite.CodeGeneration.AddSub
                   , Data.SBV.TestSuite.CodeGeneration.CgTests
+                  , Data.SBV.TestSuite.CodeGeneration.CRC_USB5
                   , Data.SBV.TestSuite.CodeGeneration.Fibonacci
                   , Data.SBV.TestSuite.CodeGeneration.GCD
                   , Data.SBV.TestSuite.CodeGeneration.PopulationCount
                   , Data.SBV.TestSuite.Crypto.AES
                   , Data.SBV.TestSuite.Crypto.RC4
+                  , Data.SBV.TestSuite.Existentials.CRCPolynomial
                   , Data.SBV.TestSuite.CRC.CCITT
                   , Data.SBV.TestSuite.CRC.CCITT_Unidir
                   , Data.SBV.TestSuite.CRC.GenPoly
@@ -180,3 +189,4 @@ Library
 
 Executable SBVUnitTests
   main-is         : SBVUnitTest/SBVUnitTest.hs
+  Other-modules   : SBVUnitTest.SBVUnitTestBuildTime

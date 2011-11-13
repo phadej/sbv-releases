@@ -43,7 +43,7 @@
 --
 --   * 'SArray', 'SFunArray': Flat arrays of symbolic values
 --
---   * Symbolic polynomials over GF(2^n), and polynomial arithmetic
+--   * Symbolic polynomials over GF(2^n), polynomial arithmetic, and CRCs
 --
 --   * Uninterpreted constants and functions over symbolic values, with user
 --     defined SMT-Lib axioms
@@ -60,7 +60,9 @@
 --
 --   * proven correct via an external SMT solver (the 'prove' function)
 --
---   * checked for satisfiability (the 'sat' and 'allSat' functions)
+--   * checked for satisfiability (the 'sat', 'allSat' functions)
+--
+--   * used in synthesis (the `sat` function with existentials)
 --
 --   * quick-checked
 --
@@ -72,20 +74,19 @@
 -- The sbv library uses third-party SMT solvers via the standard SMT-Lib interface:
 -- <http://goedel.cs.uiowa.edu/smtlib/>.
 --
--- While the library is designed to work with any SMT-Lib compliant SMT-solver,
--- solver specific support is required for parsing counter-example/model data since
--- there is currently no agreed upon format for getting models from arbitrary SMT
--- solvers. (The SMT-Lib2 initiative will potentially address this issue in the
--- future, at which point the sbv library can be generalized as well.) Currently, we
--- only support the Yices SMT solver from SRI as far as the counter-example
--- and model generation support is concerned: <http://yices.csl.sri.com/>.
--- However, other solvers can be hooked up with relative ease.
+-- The SBV library is designed to work with any SMT-Lib compliant SMT-solver.
+-- Currently, we support the Yices SMT solver from SRI: <http://yices.csl.sri.com/>,
+-- and the Z3 SMT solver from Microsoft: <http://research.microsoft.com/en-us/um/redmond/projects/z3/>.
 --
 -- You /should/ download and install Yices on your machine, and make sure the
 -- @yices@ executable is in your path before using the sbv library, as it is the
 -- current default solver. Alternatively, you can specify the location of yices
 -- executable in the environment variable @SBV_YICES@ and the options to yices
--- in @SBV_YICES_OPTIONS@. (The default for the latter is '\"-m -f\"'.)
+-- in @SBV_YICES_OPTIONS@.
+--
+-- Use of quantified variables require an installation of z3. Again,
+-- z3 must be in your path. Or, you can use the @SBV_Z3@ and @SBV_Z3_OPTIONS@
+-- environment variables to set the executable and the options.
 ---------------------------------------------------------------------------------
 
 module Data.SBV (
@@ -115,8 +116,8 @@ module Data.SBV (
   , Splittable(..)
   -- *** Sign-casting
   , SignCast(..)
-  -- ** Polynomial arithmetic
-  , Polynomial(..)
+  -- ** Polynomial arithmetic and CRCs
+  , Polynomial(..), crcBV, crc
   -- ** Conditionals: Mergeable values
   , Mergeable(..)
   -- ** Symbolic equality
@@ -149,6 +150,7 @@ module Data.SBV (
   , sat, satWith, isSatisfiable, isSatisfiableWithin
   -- ** Finding all satisfying assignments
   , allSat, allSatWith, numberOfModels
+
   -- * Model extraction
   -- $modelExtraction
 
@@ -161,8 +163,7 @@ module Data.SBV (
   , SatModel(..), getModel, displayModels
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), SMTSolver(..), defaultSMTCfg, verboseSMTCfg, timingSMTCfg, verboseTimingSMTCfg, timeout
-  , yices
+  , SMTConfig(..), SMTSolver(..), yices, z3
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
@@ -175,7 +176,7 @@ module Data.SBV (
   , SBVCodeGen
 
   -- ** Setting code-generation options
-  , cgPerformRTCs, cgSetDriverValues
+  , cgPerformRTCs, cgSetDriverValues, cgGenerateDriver
 
   -- ** Designating inputs
   , cgInput, cgInputArr
@@ -185,6 +186,9 @@ module Data.SBV (
 
   -- ** Designating return values
   , cgReturn, cgReturnArr
+
+  -- ** Code generation with uninterpreted functions
+  , cgAddPrototype, cgAddDecl, cgAddLDFlags
 
   -- ** Compilation to C
   , compileToC, compileToCLib

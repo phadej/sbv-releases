@@ -17,7 +17,6 @@
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE PatternGuards       #-}
 
 module Data.SBV.Examples.Crypto.RC4 where
 
@@ -137,8 +136,8 @@ decrypt key ct = map cvt $ zipWith xor (keyScheduleString key) ct
 -- large symbolic trace.
 rc4IsCorrect :: IO ThmResult
 rc4IsCorrect = prove $ do
-        key <- mkFreeVars 5
-        pt  <- mkFreeVars 5
+        key <- mkForallVars 5
+        pt  <- mkForallVars 5
         let ks  = keySchedule key
             ct  = zipWith xor ks pt
             pt' = zipWith xor ks ct

@@ -22,10 +22,10 @@ extendData :: SWord48 -> SWord64
 extendData (h, l) = h # l # 0
 
 mkFrame :: SWord64 -> SWord48 -> SWord64
-mkFrame poly msg@(h, l) = h # l # crc msg poly
+mkFrame poly msg@(h, l) = h # l # crc_48_16 msg poly
 
-crc :: SWord48 -> SWord64 -> SWord16
-crc msg poly = res
+crc_48_16 :: SWord48 -> SWord64 -> SWord16
+crc_48_16 msg poly = res
   where msg64 = extendData msg
         crc64 = pMod msg64 poly
         (_, res) = split (snd (split crc64))
@@ -56,7 +56,7 @@ genPoly hd = do putStrLn $ "*** Looking for polynomials with HD = " ++ show hd
                 mapM_ (\(i, s) -> putStrLn (show i ++ ". " ++ showPoly (mkPoly s)))  (zip [(1::Integer)..] res)
                 putStrLn $ "*** Skipped the followings, proof exceeded timeout value of " ++ show waitFor
                 mapM_ (\(i, s) -> putStrLn (show i ++ ". " ++ showPoly (mkPoly s)))  (zip [(1::Integer)..] skipped)
-                putStrLn $ "*** Done."
+                putStrLn "*** Done."
   where go :: SWord16 -> [SWord16] -> [SWord16] -> IO ([SWord16], [SWord16])
         go poly skip acc
          | poly == maxBound = return (skip, acc)

@@ -33,9 +33,14 @@ puzzle dog cat mouse =
 -- | Prints the only solution:
 --
 -- >>> solve
--- Only one solution found:
+-- Solution #1:
 --   dog = 3 :: SWord16
 --   cat = 41 :: SWord16
 --   mouse = 56 :: SWord16
+-- This is the only solution.
 solve :: IO AllSatResult
-solve = allSat $ forAll ["dog", "cat", "mouse"] puzzle
+solve = allSat $ do
+          d <- exists "dog"
+          c <- exists "cat"
+          m <- exists "mouse"
+          return $ puzzle d c m
