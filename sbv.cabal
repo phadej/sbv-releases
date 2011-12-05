@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.22
+Version:       0.9.23
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math
 Synopsis:      Symbolic bit vectors: Bit-precise verification and automatic C-code generation.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -23,6 +23,8 @@ Description:   Express properties about bit-precise Haskell programs and automat
                .
                  * 'SInt8',  'SInt16',  'SInt32',  'SInt64': Symbolic Ints (signed)
                .
+                 * 'SInteger': Symbolic unbounded integers (signed)
+               .
                  * 'SArray', 'SFunArray': Flat arrays of symbolic values
                .
                  * 'STree': Full binary trees of symbolic values (for fast symbolic access)
@@ -32,16 +34,21 @@ Description:   Express properties about bit-precise Haskell programs and automat
                  * Uninterpreted constants and functions over symbolic values, with user
                    defined SMT-Lib axioms
                .
-               Predicates (i.e., functions that return 'SBool') built out of
-               these types can be:
+               Functions built out of these types can be:
                .
                  * proven correct via an external SMT solver (the 'prove' function)
                .
-                 * checked for satisfiability (the 'sat', 'allSat', and 'qbvf' functions)
+                 * checked for satisfiability (the 'sat', and 'allSat' functions)
                .
-                 * used in synthesis (the 'qbvf' function)
+                 * used in synthesis (the 'sat' function with existential variables)
+               .
+                 * optimized with respect to cost functions (the 'optimize', 'maximize', and 'minimize' functions)
                .
                  * quick-checked
+               .
+               Predicates can have both existential and universal variables. Use of
+               alternating quantifiers provides considerable expressive power.
+               Furthermore, existential variables allow synthesis via model generation.
                .
                The SBV library can also compile Haskell functions that manipulate symbolic
                values directly to C, rendering them as straight-line C programs.
@@ -101,6 +108,7 @@ Library
                   , Data.SBV.Examples.CodeGeneration.Fibonacci
                   , Data.SBV.Examples.CodeGeneration.GCD
                   , Data.SBV.Examples.CodeGeneration.PopulationCount
+                  , Data.SBV.Examples.CodeGeneration.Uninterpreted
                   , Data.SBV.Examples.Crypto.AES
                   , Data.SBV.Examples.Crypto.RC4
                   , Data.SBV.Examples.Existentials.CRCPolynomial
@@ -116,6 +124,7 @@ Library
                   , Data.SBV.Examples.Uninterpreted.Function
   Other-modules   : Data.SBV.BitVectors.Data
                   , Data.SBV.BitVectors.Model
+                  , Data.SBV.BitVectors.Optimize
                   , Data.SBV.BitVectors.Polynomial
                   , Data.SBV.BitVectors.PrettyNum
                   , Data.SBV.BitVectors.SignCast
@@ -165,6 +174,7 @@ Library
                   , Data.SBV.TestSuite.CodeGeneration.Fibonacci
                   , Data.SBV.TestSuite.CodeGeneration.GCD
                   , Data.SBV.TestSuite.CodeGeneration.PopulationCount
+                  , Data.SBV.TestSuite.CodeGeneration.Uninterpreted
                   , Data.SBV.TestSuite.Crypto.AES
                   , Data.SBV.TestSuite.Crypto.RC4
                   , Data.SBV.TestSuite.Existentials.CRCPolynomial
