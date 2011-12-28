@@ -248,6 +248,7 @@ prefixSum i
 --   s16 :: SWord8 = s6 + s7
 --   s17 :: SWord8 = s13 + s16
 --   s18 :: SWord8 = s11 + s17
+-- CONSTRAINTS
 -- OUTPUTS
 --   s0
 --   s8
@@ -259,8 +260,8 @@ prefixSum i
 --   s18
 ladnerFischerTrace :: Int -> IO ()
 ladnerFischerTrace n = gen >>= print
-  where gen = runSymbolic $ do args :: [SWord8] <- mkForallVars n
-                               mapM_ output $ lf (0, (+)) args
+  where gen = runSymbolic True $ do args :: [SWord8] <- mkForallVars n
+                                    mapM_ output $ lf (0, (+)) args
 
 -- | Trace generator for the reference spec. It clearly demonstrates that the reference
 -- implementation fewer operations, but is not parallelizable at all:
@@ -291,6 +292,7 @@ ladnerFischerTrace n = gen >>= print
 --   s12 :: SWord8 = s5 + s11
 --   s13 :: SWord8 = s6 + s12
 --   s14 :: SWord8 = s7 + s13
+-- CONSTRAINTS
 -- OUTPUTS
 --   s0
 --   s8
@@ -303,5 +305,5 @@ ladnerFischerTrace n = gen >>= print
 --
 scanlTrace :: Int -> IO ()
 scanlTrace n = gen >>= print
-  where gen = runSymbolic $ do args :: [SWord8] <- mkForallVars n
-                               mapM_ output $ ps (0, (+)) args
+  where gen = runSymbolic True $ do args :: [SWord8] <- mkForallVars n
+                                    mapM_ output $ ps (0, (+)) args

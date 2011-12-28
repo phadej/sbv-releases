@@ -13,6 +13,7 @@
 
 module Data.SBV.SMT.SMTLib2(cvt, addNonEqConstraints) where
 
+import Data.Bits (bit)
 import qualified Data.Foldable as F (toList)
 import qualified Data.Map      as M
 import qualified Data.IntMap   as IM
@@ -64,9 +65,10 @@ cvt :: Bool                                        -- ^ has infinite precision v
     -> [(String, SBVType)]                         -- ^ uninterpreted functions/constants
     -> [(String, [String])]                        -- ^ user given axioms
     -> Pgm                                         -- ^ assignments
+    -> [SW]                                        -- ^ extra constraints
     -> SW                                          -- ^ output variable
     -> ([String], [String])
-cvt hasInf isSat comments _inps skolemInps consts tbls arrs uis axs asgnsSeq out = (pre, [])
+cvt hasInf isSat comments _inps skolemInps consts tbls arrs uis axs asgnsSeq cstrs out = (pre, [])
   where -- the logic is an over-approaximation
         logic
           | hasInf = ["; Has unbounded Integers; no logic specified."]   -- combination, let the solver pick
@@ -118,8 +120,14 @@ cvt hasInf isSat comments _inps skolemInps consts tbls arrs uis axs asgnsSeq out
           | null delayedEqualities = s
           | True                   = "     " ++ s
         align n s = replicate n ' ' ++ s
-        assertOut | isSat = "(= " ++ show out ++ " #b1)"
-                  | True  = "(= " ++ show out ++ " #b0)"
+        -- if sat,   we assert cstrs /\ out
+        -- if prove, we assert ~(cstrs => out) = cstrs /\ not out
+        assertOut
+           | null cstrs = o
+           | True       = "(and " ++ unwords (map mkConj cstrs ++ [o]) ++ ")"
+           where mkConj x = "(= " ++ cvtSW skolemMap x ++ " #b1)"
+                 o | isSat =            mkConj out
+                   | True  = "(not " ++ mkConj out ++ ")"
         skolemMap = M.fromList [(s, ss) | Right (s, ss) <- skolemInps, not (null ss)]
         tableMap  = IM.fromList $ map mkConstTable constTables ++ map mkSkTable skolemTables
           where mkConstTable (((t, _, _), _), _) = (t, "table" ++ show t)
@@ -261,15 +269,15 @@ cvtExp skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         ensureBV       = not hasInfPrecArgs || unbounded expr
         lift2  o _ [x, y] = "(" ++ o ++ " " ++ x ++ " " ++ y ++ ")"
         lift2  o _ sbvs   = error $ "SBV.SMTLib2.sh.lift2: Unexpected arguments: "   ++ show (o, sbvs)
-        lift2B oU oS sgn sbvs
+        lift2B oU oS sgn sbvs = "(ite " ++ lift2S oU oS sgn sbvs ++ " #b1 #b0)"
+        lift2S oU oS sgn sbvs
           | sgn
-          = "(ite " ++ lift2 oS sgn sbvs ++ " #b1 #b0)"
+          = lift2 oS sgn sbvs
           | True
-          = "(ite " ++ lift2 oU sgn sbvs ++ " #b1 #b0)"
+          = lift2 oU sgn sbvs
         lift2N o sgn sbvs = "(bvnot " ++ lift2 o sgn sbvs ++ ")"
         lift1  o _ [x]    = "(" ++ o ++ " " ++ x ++ ")"
         lift1  o _ sbvs   = error $ "SBV.SMT.SMTLib2.sh.lift1: Unexpected arguments: "   ++ show (o, sbvs)
-        -- Group 1: Same translation, regardless BV/Int
         sh (SBVApp Ite [a, b, c]) = "(ite (= #b1 " ++ ssw a ++ ") " ++ ssw b ++ " " ++ ssw c ++ ")"
         sh (SBVApp (LkUp (t, (_, atSz), _, l) i e) [])
           | needsCheck = "(ite " ++ cond ++ ssw e ++ " " ++ lkUp ++ ")"
@@ -289,16 +297,28 @@ cvtExp skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         sh (SBVApp (ArrRead i) [a]) = "(select array_" ++ show i ++ " " ++ ssw a ++ ")"
         sh (SBVApp (Uninterpreted nm) [])   = "uninterpreted_" ++ nm
         sh (SBVApp (Uninterpreted nm) args) = "(uninterpreted_" ++ nm ++ " " ++ unwords (map ssw args) ++ ")"
-        -- Group 2: Only supported for BV
-        sh (SBVApp (Rol i) [a])       | ensureBV = rot  ssw "rotate_left"  i a
-        sh (SBVApp (Ror i) [a])       | ensureBV = rot  ssw "rotate_right" i a
-        sh (SBVApp (Shl i) [a])       | ensureBV = shft ssw "bvshl"  "bvshl"  i a
-        sh (SBVApp (Shr i) [a])       | ensureBV = shft ssw "bvlshr" "bvashr" i a
         sh (SBVApp (Extract i j) [a]) | ensureBV = "((_ extract " ++ show i ++ " " ++ show j ++ ") " ++ ssw a ++ ")"
+        sh (SBVApp (Rol i) [a])
+           | not hasInfPrecArgs = rot  ssw "rotate_left"  i a
+           | True               = sh (SBVApp (Shl i) [a])     -- Haskell treats rotateL as shiftL for unbounded values
+        sh (SBVApp (Ror i) [a])
+           | not hasInfPrecArgs = rot  ssw "rotate_right" i a
+           | True               = sh (SBVApp (Shr i) [a])     -- Haskell treats rotateR as shiftR for unbounded values
+        sh (SBVApp (Shl i) [a])
+           | not hasInfPrecArgs = shft ssw "bvshl"  "bvshl"  i a
+           | i < 0              = sh (SBVApp (Shr (-i)) [a])  -- flip sign/direction
+           | True               = "(* " ++ ssw a ++ " " ++ show (bit i :: Integer) ++ ")"  -- Implement shiftL by multiplication by 2^i
+        sh (SBVApp (Shr i) [a])
+           | not hasInfPrecArgs = shft ssw "bvlshr" "bvashr" i a
+           | i < 0              = sh (SBVApp (Shl (-i)) [a])  -- flip sign/direction
+           | True               = "(div " ++ ssw a ++ " " ++ show (bit i :: Integer) ++ ")"  -- Implement shiftR by division by 2^i
         sh (SBVApp op args)
           | Just f <- lookup op smtBVOpTable, ensureBV
           = f (any hasSign args) (map ssw args)
-          where smtBVOpTable = [ (And,  lift2 "bvand")
+          where -- The first 4 operators below do make sense for Integer's in Haskell, but there's
+                -- no obvious counterpart for them in the SMTLib translation.
+                -- TODO: provide support for these.
+                smtBVOpTable = [ (And,  lift2 "bvand")
                                , (Or,   lift2 "bvor")
                                , (XOr,  lift2 "bvxor")
                                , (Not,  lift1 "bvnot")
@@ -316,8 +336,8 @@ cvtExp skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
           where smtOpBVTable  = [ (Plus,          lift2   "bvadd")
                                 , (Minus,         lift2   "bvsub")
                                 , (Times,         lift2   "bvmul")
-                                , (Quot,          lift2   "bvudiv")
-                                , (Rem,           lift2   "bvurem")
+                                , (Quot,          lift2S  "bvudiv" "bvsdiv")
+                                , (Rem,           lift2S  "bvurem" "bvsrem")
                                 , (Equal,         lift2   "bvcomp")
                                 , (NotEqual,      lift2N  "bvcomp")
                                 , (LessThan,      lift2B  "bvult" "bvslt")

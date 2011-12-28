@@ -159,6 +159,10 @@ genParse (signed,size) (x:r)
   | hasSign x == signed && sizeOf x == size = Just (fromIntegral (cwVal x),r)
 genParse _ _ = Nothing
 
+-- base case, that comes in handy if there are no real variables
+instance SatModel () where
+  parseCWs xs = return ((), xs)
+
 instance SatModel Bool where
   parseCWs xs = do (x,r) <- genParse (False, Size (Just 1)) xs
                    return ((x :: Integer) /= 0, r)
@@ -230,17 +234,40 @@ instance (SatModel a, SatModel b, SatModel c, SatModel d, SatModel e, SatModel f
                    ((b, c, d, e, f, g), hs) <- parseCWs bs
                    return ((a, b, c, d, e, f, g), hs)
 
--- | Given an 'SMTResult', extract an arbitrarily typed model from it, given a 'SatModel' instance
--- The first argument is "True" if this is an alleged model
-getModel :: SatModel a => SatResult -> Either String (Bool, a)
-getModel (SatResult (Unsatisfiable _)) = Left "SBV.getModel: Unsatisfiable result"
-getModel (SatResult (Unknown _ m))     = Right (True, extractModel m)
-getModel (SatResult (ProofError _ s))  = error $ unlines $ "Backend solver complains: " : s
-getModel (SatResult (TimeOut _))       = Left "Timeout"
-getModel (SatResult (Satisfiable _ m)) = Right (False, extractModel m)
+-- | Various SMT results that we can extract models out of.
+class Modelable a where
+  -- | Is there a model?
+  modelExists :: a -> Bool
+  -- | Extract a model, the result is a tuple where the first argument (if True)
+  -- indicates whether the model was "probable". (i.e., if the solver returned unknown.)
+  getModel :: SatModel b => a -> Either String (Bool, b)
 
-extractModel :: SatModel a => SMTModel -> a
-extractModel m = case parseCWs [c | (_, c) <- modelAssocs m] of
+  -- | A simpler variant of 'getModel' to get a model out without the fuss.
+  extractModel :: SatModel b => a -> Maybe b
+  extractModel a = case getModel a of
+                     Right (_, b) -> Just b
+                     _            -> Nothing
+
+instance Modelable ThmResult where
+  getModel    (ThmResult r) = getModel r
+  modelExists (ThmResult r) = modelExists r
+
+instance Modelable SatResult where
+  getModel    (SatResult r) = getModel r
+  modelExists (SatResult r) = modelExists r
+
+instance Modelable SMTResult where
+  getModel (Unsatisfiable _) = Left "SBV.getModel: Unsatisfiable result"
+  getModel (Unknown _ m)     = Right (True, parseModelOut m)
+  getModel (ProofError _ s)  = error $ unlines $ "Backend solver complains: " : s
+  getModel (TimeOut _)       = Left "Timeout"
+  getModel (Satisfiable _ m) = Right (False, parseModelOut m)
+  modelExists (Satisfiable{}) = True
+  modelExists (Unknown{})     = False -- don't risk it
+  modelExists _               = False
+
+parseModelOut :: SatModel a => SMTModel -> a
+parseModelOut m = case parseCWs [c | (_, c) <- modelAssocs m] of
                    Just (x, []) -> x
                    Just (_, ys) -> error $ "SBV.getModel: Partially constructed model; remaining elements: " ++ show ys
                    Nothing      -> error $ "SBV.getModel: Cannot construct a model from: " ++ show m
@@ -274,7 +301,7 @@ showModel cfg m = intercalate "\n" (map (shM cfg) assocs ++ concatMap shUI unint
         arrs      = modelArrays m
 
 shCW :: SMTConfig -> CW -> String
-shCW cfg v = sh (printBase cfg) v
+shCW = sh . printBase
   where sh 2  = binS
         sh 10 = show
         sh 16 = hexS

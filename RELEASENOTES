@@ -1,0 +1,274 @@
+Hackage: <http://hackage.haskell.org/package/sbv>
+GitHub:  <http://github.com/LeventErkok/sbv>
+
+======================================================================
+Version 0.9.24, 2011-12-28
+
+  Library:
+   * Add "forSome," analogous to "forAll." (The name "exists" would've
+     been better, but it's already taken.) This is not as useful as
+     one might think as forAll and forSome do not nest, as an inner
+     application of one pushes its argument to a Predicate, making
+     the outer one useless, but it's nonetheless useful by itself.
+   * Add a "Modelable" class, which simplifies model extraction.
+   * Add support for quick-check at the "Symbolic SBool" level. Previously
+     SBV only allowed functions returning SBool to be quick-checked, which
+     forced a certain style of coding. In particular with the addition
+     of quantifiers, the new coding style mostly puts the top-level
+     expressions in the Symbolic monad, which were not quick-checkable
+     before. With new support, the quickCheck, prove, sat, and allSat
+     commands are all interchangeable with obvious meanings.
+   * Add support for concrete test case generation, see the genTest function.
+   * Improve optimize routines and add support for iterative optimization.
+   * Add "constrain", simplifying conjunctive constraints, especially
+     useful for adding constraints at variable generation time via
+     forall/exists. Note that the interpretation of such constraints
+     is different for genTest and quickCheck functions, where constraints
+     will be used for appropriately filtering acceptable test values
+     in those two cases.
+   * Add "pConstrain", which probabilistically adds constraints. This
+     is useful for quickCheck and genTest functions for filtering acceptable
+     test values. (Calls to pConstrain will be rejected for sat/prove calls.)
+   * Add "isVacuous" which can be used to check that the constraints added
+     via constrain are satisfable. This is useful to prevent vacuous passes,
+     i.e., when a proof is not just passing because the constraints imposed
+     are inconsistent. (Also added accompanying isVacuousWith.)
+   * Add "free" and "free_", analogous to "forall/forall_" and "exists/exists_"
+     The difference is that free behaves universally in a proof context, while
+     it behaves existentially in a sat context. This allows us to express
+     properties more succinctly, since the intended semantics is usually this
+     way depending on the context. (i.e., in a proof, we want our variables
+     universal, in a sat call existential.) Of course, exists/forall are still
+     available when mixed quantifiers are needed, or when the user wants to
+     be explicit about the quantifiers.
+  Examples
+   * Add Data/SBV/Examples/Puzzles/Coins.hs. (Shows the usage of "constrain".)
+  Dependencies
+   * Bump up random package dependency to 1.0.1.1 (from 1.0.0.2)
+  Internal
+   * Major reorganization of files to and build infrastructure to
+     decrease build times and better layout
+   * Get rid of custom Setup.hs, just use simple build. The extra work
+     was not worth the complexity.
+
+======================================================================
+Version 0.9.23, 2011-12-05
+  
+  Library:
+   * Add support for SInteger, the type of signed unbounded integer
+     values. SBV can now prove theorems about unbounded numbers,
+     following the semantics of Haskell's Integer type. (Requires z3 to
+     be used as the backend solver.)
+   * Add functions 'optimize', 'maximize', and 'minimize' that can
+     be used to find optimal solutions to given constraints with
+     respect to a given cost function.
+   * Add 'cgUninterpret', which simplifies code generation when we want
+     to use an alternate definition in the target language (i.e., C). This
+     is important for efficient code generation, when we want to
+     take advantage of native libraries available in the target platform.
+  Other:
+   * Change getModel to return a tuple in the success case, where
+     the first component is a boolean indicating whether the model
+     is "potential." This is used to indicate that the solver
+     actually returned "unknown" for the problem and the model
+     might therefore be bogus. Note that we did not need this before
+     since we only supported bounded bit-vectors, which has a decidable
+     theory. With the addition of unbounded Integer's and quantifiers, the
+     solvers can now return unknown. This should still be rare in practice,
+     but can happen with the use of non-linear constructs. (i.e.,
+     multiplication of two variables.)
+
+======================================================================
+Version 0.9.22, 2011-11-13
+   
+  The major change in this release is the support for quantifiers. The
+  SBV library *no* longer assumes all variables are universals in a proof,
+  (and correspondingly existential in a sat) call. Instead, the user
+  marks free-variables appropriately using forall/exists functions, and the
+  solver translates them accordingly. Note that this is a non-backwards
+  compatible change in sat calls, as the semantics of formulas is essentially
+  changing. While this is unfortunate, it's more uniform and simpler to understand
+  in general.
+
+  This release also adds support for the Z3 solver, which is the main
+  SMT-solver used for solving formulas involving quantifiers. More formally,
+  we use the new AUFBV/ABV/UFBV logics when quantifiers are involved. Also, 
+  the communication with Z3 is now done via SMT-Lib2 format. Eventually
+  the SMTLib1 connection will be severed.
+
+  The other main change is the support for C code generation with
+  uninterpreted functions enabling users to interface with external
+  C functions defined elsewhere. See below for details.
+
+  Other changes:
+    Code:
+     * Change getModel, so it returns an Either value to indicate
+       something went wrong; instead of throwing an error
+     * Add support for computing CRCs directly (without needing
+       polynomial division).
+    Code generation:
+     * Add "cgGenerateDriver" function, which can be used to turn
+       on/off driver program generation. Default is to generate
+       a driver. (Issue "cgGenerateDriver False" to skip the driver.)
+       For a library, a driver will be generated if any of the
+       constituent parts has a driver. Otherwise it'll be skipped.
+     * Fix a bug in C code generation where "Not" over booleans were
+       incorrectly getting translated due to need for masking.
+     * Add support for compilation with uninterpreted functions. Users
+       can now specify the corresponding C code and SBV will simply
+       call the "native" functions instead of generating it. This
+       enables interfacing with other C programs. See the functions:
+       cgAddPrototype, cgAddDecl, and cgAddLDFlags.
+    Examples:
+     * Add CRC polynomial generation example via existentials
+     * Add USB CRC code generation example, both via polynomials and
+       using the internal CRC functionality
+
+======================================================================
+Version 0.9.21, 2011-08-05
+   
+   Code generation:
+    * Allow for inclusion of user makefiles
+    * Allow for CCFLAGS to be set by the user
+    * Other minor clean-up
+
+======================================================================
+Version 0.9.20, 2011-06-05
+   
+    * Regression on 0.9.19; add missing file to cabal
+
+======================================================================
+Version 0.9.19, 2011-06-05
+    
+   Code:
+    * Add SignCast class for conversion between signed/unsigned
+      quantities for same-sized bit-vectors
+    * Add full-binary trees that can be indexed symbolically (STree). The
+      advantage of this type is that the reads and writes take
+      logarithmic time. Suitable for implementing faster symbolic look-up.
+    * Expose HasSignAndSize class through Data.SBV.Internals
+    * Many minor improvements, file re-orgs
+   Examples:
+    * Add sentence-counting example
+    * Add an implementation of RC4
+
+======================================================================
+Version 0.9.18, 2011-04-07
+
+  Code:
+    * Re-engineer code-generation, and compilation to C.
+      In particular, allow arrays of inputs to be specified,
+      both as function arguments and output reference values.
+    * Add support for generation of generation of C-libraries,
+      allowing code generation for a set of functions that
+      work together.
+  Examples:
+    * Update code-generation examples to use the new API.
+    * Include a library-generation example for doing 128-bit
+      AES encryption
+
+======================================================================
+Version 0.9.17, 2011-03-29
+   
+  Code:
+    * Simplify and reorganize the test suite
+  Examples:
+    * Improve AES decryption example, by using
+      table-lookups in InvMixColumns.
+  
+======================================================================
+Version 0.9.16, 2011-03-28
+
+  Code:
+    * Further optimizations on Bits instance of SBV
+  Examples:
+    * Add AES algorithm as an example, showing how
+      encryption algorithms are particularly suitable
+      for use with the code-generator
+
+======================================================================
+Version 0.9.15, 2011-03-24
+   
+  Bug fixes:
+    * Fix rotateL/rotateR instances on concrete
+      words. Previous versions was bogus since
+      it relied on the Integer instance, which
+      does the wrong thing after normalization.
+    * Fix conversion of signed numbers from bits,
+      previous version did not handle two's
+      complement layout correctly
+  Testing:
+    * Add a sleuth of concrete test cases on
+      arithmetic to catch bugs. (There are many
+      of them, ~30K, but they run quickly.)
+
+======================================================================
+Version 0.9.14, 2011-03-19
+    
+  - Reimplement sharing using Stable names, inspired
+    by the Data.Reify techniques. This avoids tricks
+    with unsafe memory stashing, and hence is safe.
+    Thus, issues with respect to CAFs are now resolved.
+
+======================================================================
+Version 0.9.13, 2011-03-16
+    
+  Bug fixes:
+    * Make sure SBool short-cut evaluations are done
+      as early as possible, as these help with coding
+      recursion-depth based algorithms, when dealing
+      with symbolic termination issues.
+  Examples:
+    * Add fibonacci code-generation example, original
+      code by Lee Pike.
+    * Add a GCD code-generation/verification example
+
+======================================================================
+Version 0.9.12, 2011-03-10
+  
+  New features:
+    * Add support for compilation to C
+    * Add a mechanism for offline saving of SMT-Lib files
+
+  Bug fixes:
+    * Output naming bug, reported by Josef Svenningsson
+    * Specification bug in Legato's multipler example
+
+======================================================================
+Version 0.9.11, 2011-02-16
+  
+  * Make ghc-7.0 happy, minor re-org on the cabal file/Setup.hs
+
+======================================================================
+Version 0.9.10, 2011-02-15
+
+  * Integrate commits from Iavor: Generalize SBV's to keep
+    track the integer directly without resorting to different
+    leaf types
+  * Remove the unnecessary CLC instruction from the Legato example
+  * More tests
+
+======================================================================
+Version 0.9.9, 2011-01-23
+
+  * Support for user-defined SMT-Lib axioms to be
+    specified for uninterpreted constants/functions
+  * Move to using doctest style inline tests
+
+======================================================================
+Version 0.9.8, 2011-01-22
+
+  * Better support for uninterpreted-functions
+  * Support counter-examples with SArray's
+  * Ladner-Fischer scheme example
+  * Documentation updates
+
+======================================================================
+Version 0.9.7, 2011-01-18
+
+  * First stable public hackage release
+
+======================================================================
+Versions 0.0.0 - 0.9.6, Mid 2010 through early 2011
+
+  * Basic infrastructure, design exploration

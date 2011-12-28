@@ -144,7 +144,7 @@ module Data.SBV (
   -- ** Adding axioms
   , addAxiom
 
-  -- * Proving properties
+  -- * Properties, proofs, and satisfiability
   -- $proveIntro
 
   -- ** Predicates
@@ -155,10 +155,16 @@ module Data.SBV (
   , sat, satWith, isSatisfiable, isSatisfiableWithin
   -- ** Finding all satisfying assignments
   , allSat, allSatWith, numberOfModels
+  -- ** Adding constraints
+  -- $constrainIntro
+  , constrain, pConstrain
+  -- ** Checking constraint vacuity
+  , isVacuous, isVacuousWith
 
   -- * Optimization
   -- $optimizeIntro
   , minimize, maximize, optimize
+  , minimizeWith, maximizeWith, optimizeWith
 
   -- * Model extraction
   -- $modelExtraction
@@ -169,16 +175,19 @@ module Data.SBV (
 
   -- ** Programmable model extraction
   -- $programmableExtraction
-  , SatModel(..), getModel, displayModels
+  , SatModel(..), Modelable(..), displayModels
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), SMTSolver(..), yices, z3
+  , SMTConfig(..), OptimizeOpts(..), SMTSolver(..), yices, z3, defaultSMTCfg
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
 
   -- * Getting SMT-Lib output (for offline analysis)
   , compileToSMTLib
+
+  -- * Test case generation
+  , genTest, CW(..), Size(..)
 
   -- * Code generation from symbolic programs
   -- $cCodeGeneration
@@ -211,6 +220,7 @@ module Data.SBV (
   ) where
 
 import Data.SBV.BitVectors.Data
+import Data.SBV.BitVectors.GenTest
 import Data.SBV.BitVectors.Model
 import Data.SBV.BitVectors.Optimize
 import Data.SBV.BitVectors.PrettyNum
@@ -266,7 +276,7 @@ system where arbitrary SMT solvers can be used.
 {- $optimizeIntro
 Symbolic optimization. A call of the form:
 
-    @minimize cost n valid@
+    @minimize Quantified cost n valid@
 
 returns @Just xs@, such that:
 
@@ -282,9 +292,16 @@ The function 'maximize' is similar, except the comparator is '.>='. So the value
 
 The function 'optimize' allows the user to give a custom comparison function.
 
-Logically, the SBV optimization engine satisfies the following predicate:
+The 'OptimizeOpts' argument controls how the optimization is done. If 'Quantified' is used, then the SBV optimization engine satisfies the following predicate:
 
    @exists xs. forall ys. valid xs && (valid ys ``implies`` (cost xs ``cmp`` cost ys))@
+
+Note that this may cause efficiency problems as it involves alternating quantifiers.
+If 'OptimizeOpts' is set to 'Iterative' 'True', then SBV will programmatically
+search for an optimal solution, by repeatedly calling the solver appropriately. (The boolean argument controls whether progress reports are given. Use
+'False' for quiet operation.) Note that the quantified and iterative versions are two different optimization approaches and may not necessarily yield the same
+results. In particular, the quantified version can find solutions where there is no global optimum value, while the iterative version would simply loop forever
+in such cases. On the other hand, the iterative version might be more suitable if the quantified version of the problem is too hard to deal with by the SMT solver.
 -}
 
 {- $modelExtraction
@@ -338,3 +355,83 @@ bit-vectors. The operations that are restricted to bounded word/int sizes are:
 Usual arithmetic ('+', '-', '*', 'bvQuotRem') and logical operations ('.<', '.<=', '.>', '.>=', '.==', './=') operations are
 supported for 'SInteger' fully, both in programming and verification modes.
 -}
+
+{- $constrainIntro
+A constraint is a means for restricting the input domain of a formula. Here's a simple
+example:
+
+@
+   do x <- 'exists' \"x\"
+      y <- 'exists' \"y\"
+      'constrain' $ x .> y
+      'constrain' $ x + y .>= 12
+      'constrain' $ y .>= 3
+      ...
+@
+
+The first constraint requires @x@ to be larger than @y@. The scond one says that
+sum of @x@ and @y@ must be at least @12@, and the final one says that @y@ to be at least @3@.
+Constraints provide an easy way to assert additional properties on the input domain, right at the point of
+the introduction of variables.
+
+Note that the proper reading of a constraint
+depends on the context:
+
+    * In a 'sat' (or 'allSat') call: The constraint added is asserted
+    conjunctively. That is, the resulting satisfying model (if any) will
+    always satisfy all the constraints given.
+
+  * In a 'prove' call: In this case, the constraint acts as an implication.
+    The property is proved under the assumption that the constraint
+    holds. In other words, the constraint says that we only care about
+    the input space that satisfies the constraint.
+
+  * In a 'quickCheck' call: The constraint acts as a filter for 'quickCheck';
+    if the constraint does not hold, then the input value is considered to be irrelevant
+    and is skipped. Note that this is similar to 'prove', but is stronger: We do not
+    accept a test case to be valid just because the constraints fail on them, although
+    semantically the implication does hold. We simply skip that test case as a /bad/
+    test vector.
+
+  * In a 'genTest' call: Similar to 'quickCheck' and 'prove': If a constraint
+    does not hold, the input value is ignored and is not included in the test
+    set.
+
+A good use case (in fact the motivating use case) for 'constrain' is attaching a
+constraint to a 'forall' or 'exists' variable at the time of its creation.
+Also, the conjunctive semantics for 'sat' and the implicative
+semantics for 'prove' simplify programming by choosing the correct interpretation
+automatically. However, one should be aware of the semantic difference. For instance, in
+the presence of constraints, formulas that are /provable/ are not necessarily
+/satisfiable/. To wit, consider:
+
+ @
+    do x <- 'exists' \"x\"
+       'constrain' $ x .< x
+       return $ x .< (x :: 'SWord8')
+ @
+
+This predicate is unsatisfiable since no element of 'SWord8' is less than itself. But
+it's (vacuously) true, since it excludes the entire domain of values, thus making the proof
+trivial. Hence, this predicate is provable, but is not satisfiable. To make sure the given
+constraints are not vacuous, the functions 'isVacuous' (and 'isVacuousWith') can be used.
+
+Also note that this semantics imply that test case generation ('genTest') and quick-check
+can take arbitrarily long in the presence of constraints, if the random input values generated
+rarely satisfy the constraints. (As an extreme case, consider @'constrain' 'false'@.)
+
+A probabilistic constraint (see 'pConstrain') attaches a probability threshold for the
+constraint to be considered. For instance:
+
+  @'pConstrain' 0.8 c@
+
+will add the constraint @c@ 80% of the time. This variant is useful for 'genTest' and 'quickCheck' functions,
+where we want to filter the test cases according to some probability distribution, to make sure that the test-vectors
+are drawn from interesting subsets of the input space.
+
+Note that while 'constrain' can be used freely, 'pConstrain' is only allowed in the contexts of
+'genTest' or 'quickCheck'. Calls to 'pConstrain' in a prove/sat call will be rejected as it makes no sense.
+Also, 'constrain' and 'pConstrain' calls during code-generation will also be rejected, for similar reasons.
+-}
+
+{-# ANN module "HLint: ignore Use import/export shortcut" #-}

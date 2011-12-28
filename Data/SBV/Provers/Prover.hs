@@ -26,8 +26,9 @@ module Data.SBV.Provers.Prover (
        , prove, proveWith
        , sat, satWith
        , allSat, allSatWith
-       , SatModel(..), getModel, displayModels
-       , yices, z3
+       , isVacuous, isVacuousWith
+       , SatModel(..), Modelable(..), displayModels
+       , yices, z3, defaultSMTCfg
        , compileToSMTLib
        ) where
 
@@ -56,6 +57,10 @@ yices = SMTConfig {verbose = False, timing = False, timeOut = Nothing, printBase
 z3 :: SMTConfig
 z3 = yices { solver = Z3.z3, useSMTLib2 = True }
 
+-- | The default solver used by SBV. This is currently set to yices.
+defaultSMTCfg :: SMTConfig
+defaultSMTCfg = yices
+
 -- | A predicate is a symbolic program that returns a (symbolic) boolean value. For all intents and
 -- purposes, it can be treated as an n-ary function from symbolic-values to a boolean. The 'Symbolic'
 -- monad captures the underlying representation, and can/should be ignored by the users of the library,
@@ -69,7 +74,7 @@ type Predicate = Symbolic SBool
 -- predicates can be constructed from almost arbitrary Haskell functions that have arbitrary
 -- shapes. (See the instance declarations below.)
 class Provable a where
-  -- | Turns a value into a predicate, internally naming the inputs.
+  -- | Turns a value into a universally quantified predicate, internally naming the inputs.
   -- In this case the sbv library will use names of the form @s1, s2@, etc. to name these variables
   -- Example:
   --
@@ -88,14 +93,25 @@ class Provable a where
   -- This is the same as above, except the variables will be named @x@ and @y@ respectively,
   -- simplifying the counter-examples when they are printed.
   forAll  :: [String] -> a -> Predicate
+  -- | Turns a value into an existentially quantified predicate. (Indeed, 'exists' would have been
+  -- a better choice here for the name, but alas it's already taken.)
+  forSome_ :: a -> Predicate
+  -- | Version of 'forSome' that allows user defined names
+  forSome :: [String] -> a -> Predicate
 
 instance Provable Predicate where
-  forAll_  = id
-  forAll _ = id
+  forAll_    = id
+  forAll []  = id
+  forAll xs  = error $ "SBV.forAll: Extra unmapped name(s) in predicate construction: " ++ intercalate ", " xs
+  forSome_   = id
+  forSome [] = id
+  forSome xs = error $ "SBV.forSome: Extra unmapped name(s) in predicate construction: " ++ intercalate ", " xs
 
 instance Provable SBool where
-  forAll_  = return
-  forAll _ = return
+  forAll_   = return
+  forAll _  = return
+  forSome_  = return
+  forSome _ = return
 
 {-
 -- The following works, but it lets us write properties that
@@ -103,67 +119,92 @@ instance Provable SBool where
 -- Running that will throw an exception since Haskell's equality
 -- is not be supported by symbolic things. (Needs .==).
 instance Provable Bool where
-  forAll_  x = forAll_  (if x then true else false :: SBool)
-  forAll s x = forAll s (if x then true else false :: SBool)
+  forAll_  x  = forAll_   (if x then true else false :: SBool)
+  forAll s x  = forAll s  (if x then true else false :: SBool)
+  forSome_  x = forSome_  (if x then true else false :: SBool)
+  forSome s x = forSome s (if x then true else false :: SBool)
 -}
 
 -- Functions
 instance (SymWord a, Provable p) => Provable (SBV a -> p) where
-  forAll_       k = forall_  >>= \a -> forAll_   $ k a
-  forAll (s:ss) k = forall s >>= \a -> forAll ss $ k a
-  forAll []     k = forAll_ k
+  forAll_        k = forall_   >>= \a -> forAll_   $ k a
+  forAll (s:ss)  k = forall s  >>= \a -> forAll ss $ k a
+  forAll []      k = forAll_ k
+  forSome_       k = exists_  >>= \a -> forSome_   $ k a
+  forSome (s:ss) k = exists s >>= \a -> forSome ss $ k a
+  forSome []     k = forSome_ k
 
--- Arrays (memory)
+-- Arrays (memory), only supported universally for the time being
 instance (HasSignAndSize a, HasSignAndSize b, SymArray array, Provable p) => Provable (array a b -> p) where
   forAll_       k = newArray_  Nothing >>= \a -> forAll_   $ k a
   forAll (s:ss) k = newArray s Nothing >>= \a -> forAll ss $ k a
   forAll []     k = forAll_ k
+  forSome_      _ = error "SBV.forSome: Existential arrays are not currently supported."
+  forSome _     _ = error "SBV.forSome: Existential arrays are not currently supported."
 
 -- 2 Tuple
 instance (SymWord a, SymWord b, Provable p) => Provable ((SBV a, SBV b) -> p) where
-  forAll_       k = forall_  >>= \a -> forAll_   $ \b -> k (a, b)
-  forAll (s:ss) k = forall s >>= \a -> forAll ss $ \b -> k (a, b)
-  forAll []     k = forAll_ k
+  forAll_        k = forall_  >>= \a -> forAll_   $ \b -> k (a, b)
+  forAll (s:ss)  k = forall s >>= \a -> forAll ss $ \b -> k (a, b)
+  forAll []      k = forAll_ k
+  forSome_       k = exists_  >>= \a -> forSome_   $ \b -> k (a, b)
+  forSome (s:ss) k = exists s >>= \a -> forSome ss $ \b -> k (a, b)
+  forSome []     k = forSome_ k
 
 -- 3 Tuple
 instance (SymWord a, SymWord b, SymWord c, Provable p) => Provable ((SBV a, SBV b, SBV c) -> p) where
-  forAll_       k = forall_  >>= \a -> forAll_   $ \b c -> k (a, b, c)
-  forAll (s:ss) k = forall s >>= \a -> forAll ss $ \b c -> k (a, b, c)
-  forAll []     k = forAll_ k
+  forAll_       k  = forall_  >>= \a -> forAll_   $ \b c -> k (a, b, c)
+  forAll (s:ss) k  = forall s >>= \a -> forAll ss $ \b c -> k (a, b, c)
+  forAll []     k  = forAll_ k
+  forSome_       k = exists_  >>= \a -> forSome_   $ \b c -> k (a, b, c)
+  forSome (s:ss) k = exists s >>= \a -> forSome ss $ \b c -> k (a, b, c)
+  forSome []     k = forSome_ k
 
 -- 4 Tuple
 instance (SymWord a, SymWord b, SymWord c, SymWord d, Provable p) => Provable ((SBV a, SBV b, SBV c, SBV d) -> p) where
-  forAll_       k = forall_  >>= \a -> forAll_   $ \b c d -> k (a, b, c, d)
-  forAll (s:ss) k = forall s >>= \a -> forAll ss $ \b c d -> k (a, b, c, d)
-  forAll []     k = forAll_ k
+  forAll_        k = forall_  >>= \a -> forAll_   $ \b c d -> k (a, b, c, d)
+  forAll (s:ss)  k = forall s >>= \a -> forAll ss $ \b c d -> k (a, b, c, d)
+  forAll []      k = forAll_ k
+  forSome_       k = exists_  >>= \a -> forSome_   $ \b c d -> k (a, b, c, d)
+  forSome (s:ss) k = exists s >>= \a -> forSome ss $ \b c d -> k (a, b, c, d)
+  forSome []     k = forSome_ k
 
 -- 5 Tuple
 instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, Provable p) => Provable ((SBV a, SBV b, SBV c, SBV d, SBV e) -> p) where
-  forAll_       k = forall_  >>= \a -> forAll_   $ \b c d e -> k (a, b, c, d, e)
-  forAll (s:ss) k = forall s >>= \a -> forAll ss $ \b c d e -> k (a, b, c, d, e)
-  forAll []     k = forAll_ k
+  forAll_        k = forall_  >>= \a -> forAll_   $ \b c d e -> k (a, b, c, d, e)
+  forAll (s:ss)  k = forall s >>= \a -> forAll ss $ \b c d e -> k (a, b, c, d, e)
+  forAll []      k = forAll_ k
+  forSome_       k = exists_  >>= \a -> forSome_   $ \b c d e -> k (a, b, c, d, e)
+  forSome (s:ss) k = exists s >>= \a -> forSome ss $ \b c d e -> k (a, b, c, d, e)
+  forSome []     k = forSome_ k
 
 -- 6 Tuple
 instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, Provable p) => Provable ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f) -> p) where
-  forAll_       k = forall_  >>= \a -> forAll_   $ \b c d e f -> k (a, b, c, d, e, f)
-  forAll (s:ss) k = forall s >>= \a -> forAll ss $ \b c d e f -> k (a, b, c, d, e, f)
-  forAll []     k = forAll_ k
+  forAll_        k = forall_  >>= \a -> forAll_   $ \b c d e f -> k (a, b, c, d, e, f)
+  forAll (s:ss)  k = forall s >>= \a -> forAll ss $ \b c d e f -> k (a, b, c, d, e, f)
+  forAll []      k = forAll_ k
+  forSome_       k = exists_  >>= \a -> forSome_   $ \b c d e f -> k (a, b, c, d, e, f)
+  forSome (s:ss) k = exists s >>= \a -> forSome ss $ \b c d e f -> k (a, b, c, d, e, f)
+  forSome []     k = forSome_ k
 
 -- 7 Tuple
 instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, Provable p) => Provable ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> p) where
-  forAll_       k = forall_  >>= \a -> forAll_   $ \b c d e f g -> k (a, b, c, d, e, f, g)
-  forAll (s:ss) k = forall s >>= \a -> forAll ss $ \b c d e f g -> k (a, b, c, d, e, f, g)
-  forAll []     k = forAll_ k
+  forAll_        k = forall_  >>= \a -> forAll_   $ \b c d e f g -> k (a, b, c, d, e, f, g)
+  forAll (s:ss)  k = forall s >>= \a -> forAll ss $ \b c d e f g -> k (a, b, c, d, e, f, g)
+  forAll []      k = forAll_ k
+  forSome_       k = exists_  >>= \a -> forSome_   $ \b c d e f g -> k (a, b, c, d, e, f, g)
+  forSome (s:ss) k = exists s >>= \a -> forSome ss $ \b c d e f g -> k (a, b, c, d, e, f, g)
+  forSome []     k = forSome_ k
 
--- | Prove a predicate, equivalent to @'proveWith' 'yices'@
+-- | Prove a predicate, equivalent to @'proveWith' 'defaultSMTCfg'@
 prove :: Provable a => a -> IO ThmResult
-prove = proveWith yices
+prove = proveWith defaultSMTCfg
 
--- | Find a satisfying assignment for a predicate, equivalent to @'satWith' 'yices'@
+-- | Find a satisfying assignment for a predicate, equivalent to @'satWith' 'defaultSMTCfg'@
 sat :: Provable a => a -> IO SatResult
-sat = satWith yices
+sat = satWith defaultSMTCfg
 
--- | Return all satisfying assignments for a predicate, equivalent to @'allSatWith' 'yices'@.
+-- | Return all satisfying assignments for a predicate, equivalent to @'allSatWith' 'defaultSMTCfg'@.
 -- Satisfying assignments are constructed lazily, so they will be available as returned by the solver
 -- and on demand.
 --
@@ -172,7 +213,44 @@ sat = satWith yices
 -- array inputs will be returned. This is due to the limitation of not having a robust means of getting a
 -- function counter-example back from the SMT solver.
 allSat :: Provable a => a -> IO AllSatResult
-allSat = allSatWith yices
+allSat = allSatWith defaultSMTCfg
+
+-- | Check if the given constraints are satisfiable, equivalent to @'isVacuousWith' 'defaultSMTCfg'@. This
+-- call can be used to ensure that the specified constraints (via 'constrain') are satisfiable, i.e., that
+-- the proof involving these constraints is not passing vacuously. Here is an example. Consider the following
+-- predicate:
+--
+-- >>> let pred = do { x <- forall "x"; constrain $ x .< x; return $ x .>= (5 :: SWord8) }
+--
+-- This predicate asserts that all 8-bit values are larger than 5, subject to the constraint that the
+-- values considered satisfy @x .< x@, i.e., they are less than themselves. Since there are no values that
+-- satisfy this constraint, the proof will pass vacuously:
+--
+-- >>> prove pred
+-- Q.E.D.
+--
+-- We can use 'isVacuous' to make sure to see that the pass was vacuous:
+--
+-- >>> isVacuous pred
+-- True
+--
+-- While the above example is trivial, things can get complicated if there are multiple constraints with
+-- non-straightforward relations; so if constraints are used one should make sure to check the predicate
+-- is not vacuously true. Here's an example that is not vacuous:
+--
+--  >>> let pred' = do { x <- forall "x"; constrain $ x .> 6; return $ x .>= (5 :: SWord8) }
+--
+-- This time the proof passes as expected:
+--
+--  >>> prove pred'
+--  Q.E.D.
+--
+-- And the proof is not vacuous:
+--
+--  >>> isVacuous pred'
+--  False
+isVacuous :: Provable a => a -> IO Bool
+isVacuous = isVacuousWith defaultSMTCfg
 
 -- Decision procedures (with optional timeout)
 checkTheorem :: Provable a => Maybe Int -> a -> IO (Maybe Bool)
@@ -182,7 +260,7 @@ checkTheorem mbTo p = do r <- pr p
                            ThmResult (Satisfiable _ _) -> return $ Just False
                            ThmResult (TimeOut _)       -> return Nothing
                            _                           -> error $ "SBV.isTheorem: Received:\n" ++ show r
-   where pr = maybe prove (\i -> proveWith (yices{timeOut = Just i})) mbTo
+   where pr = maybe prove (\i -> proveWith (defaultSMTCfg{timeOut = Just i})) mbTo
 
 checkSatisfiable :: Provable a => Maybe Int -> a -> IO (Maybe Bool)
 checkSatisfiable mbTo p = do r <- s p
@@ -191,7 +269,7 @@ checkSatisfiable mbTo p = do r <- s p
                                SatResult (Unsatisfiable _) -> return $ Just False
                                SatResult (TimeOut _)       -> return Nothing
                                _                           -> error $ "SBV.isSatisfiable: Received: " ++ show r
-   where s = maybe sat (\i -> satWith yices{timeOut = Just i}) mbTo
+   where s = maybe sat (\i -> satWith defaultSMTCfg{timeOut = Just i}) mbTo
 
 -- | Checks theoremhood within the given time limit of @i@ seconds.
 -- Returns @Nothing@ if times out, or the result wrapped in a @Just@ otherwise.
@@ -229,7 +307,7 @@ compileToSMTLib smtLib2 a = do
         t <- getClockTime
         let comments = ["Created on " ++ show t]
             cvt = if smtLib2 then toSMTLib2 else toSMTLib1
-        (_, _, _, smtLibPgm) <- simulate cvt yices False comments a
+        (_, _, _, smtLibPgm) <- simulate cvt defaultSMTCfg False comments a
         return $ show smtLibPgm ++ "\n"
 
 -- | Proves the predicate using the given SMT-solver
@@ -241,6 +319,23 @@ proveWith config a = simulate cvt config False [] a >>= callSolver False "Checki
 satWith :: Provable a => SMTConfig -> a -> IO SatResult
 satWith config a = simulate cvt config True [] a >>= callSolver True "Checking Satisfiability.." SatResult config
   where cvt = if useSMTLib2 config then toSMTLib2 else toSMTLib1
+
+-- | Determine if the constraints are vacuous using the given SMT-solver
+isVacuousWith :: Provable a => SMTConfig -> a -> IO Bool
+isVacuousWith config a = do
+        Result ub tr uic is cs ts as uis ax asgn cstr _ <- runSymbolic True $ forAll_ a >>= output
+        case cstr of
+           [] -> return False -- no constraints, no need to check
+           _  -> do let is'  = [(EX, i) | (_, i) <- is] -- map all quantifiers to "exists" for the constraint check
+                        res' = Result ub tr uic is' cs ts as uis ax asgn cstr [trueSW]
+                        cvt  = if useSMTLib2 config then toSMTLib2 else toSMTLib1
+                    SatResult result <- runProofOn cvt config True [] res' >>= callSolver True "Checking Satisfiability.." SatResult config
+                    case result of
+                      Unsatisfiable{} -> return True  -- constraints are unsatisfiable!
+                      Satisfiable{}   -> return False -- constraints are satisfiable!
+                      Unknown{}       -> error "SBV: isVacuous: Solver returned unknown!"
+                      ProofError _ ls -> error $ "SBV: isVacuous: error encountered:\n" ++ unlines ls
+                      TimeOut _       -> error "SBV: isVacuous: time-out."
 
 -- | Find all satisfying assignments using the given SMT-solver
 allSatWith :: Provable a => SMTConfig -> a -> IO AllSatResult
@@ -301,13 +396,18 @@ simulate converter config isSat comments predicate = do
         let msg = when (verbose config) . putStrLn . ("** " ++)
             isTiming = timing config
         msg "Starting symbolic simulation.."
-        res <- timeIf isTiming "problem construction" $ runSymbolic $ forAll_ predicate >>= output
+        res <- timeIf isTiming "problem construction" $ runSymbolic isSat $ forAll_ predicate >>= output
         msg $ "Generated symbolic trace:\n" ++ show res
         msg "Translating to SMT-Lib.."
-        case res of
-          Result hasInfPrec _codeSegs is consts tbls arrs uis axs pgm [o@(SW (False, Size (Just 1)) _)] ->
-             timeIf isTiming "translation" $ do let uiMap     = catMaybes (map arrayUIKind arrs) ++ map unintFnUIKind uis
-                                                    skolemMap = skolemize (if isSat then is else map flipQ is)
+        runProofOn converter config isSat comments res
+
+runProofOn :: SMTLibConverter -> SMTConfig -> Bool -> [String] -> Result -> IO ([(Quantifier, NamedSymVar)], [(String, UnintKind)], [Either SW (SW, [SW])], SMTLibPgm)
+runProofOn converter config isSat comments res =
+        let isTiming = timing config
+        in case res of
+             Result hasInfPrec _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs [o@(SW (False, Size (Just 1)) _)] ->
+               timeIf isTiming "translation" $ let uiMap     = catMaybes (map arrayUIKind arrs) ++ map unintFnUIKind uis
+                                                   skolemMap = skolemize (if isSat then is else map flipQ is)
                                                         where flipQ (ALL, x) = (EX, x)
                                                               flipQ (EX, x)  = (ALL, x)
                                                               skolemize :: [(Quantifier, NamedSymVar)] -> [Either SW (SW, [SW])]
@@ -315,14 +415,14 @@ simulate converter config isSat comments predicate = do
                                                                 where go []                   (_,  sofar) = reverse sofar
                                                                       go ((ALL, (v, _)):rest) (us, sofar) = go rest (v:us, Left v : sofar)
                                                                       go ((EX,  (v, _)):rest) (us, sofar) = go rest (us,   Right (v, reverse us) : sofar)
-                                                return (is, uiMap, skolemMap, converter hasInfPrec isSat comments is skolemMap consts tbls arrs uis axs pgm o)
-          Result _hasInfPrec _codeSegs _is _consts _tbls _arrs _uis _axs _pgm os -> case length os of
-                        0  -> error $ "Impossible happened, unexpected non-outputting result\n" ++ show res
-                        1  -> error $ "Impossible happened, non-boolean output in " ++ show os
-                                    ++ "\nDetected while generating the trace:\n" ++ show res
-                        _  -> error $ "User error: Multiple output values detected: " ++ show os
-                                    ++ "\nDetected while generating the trace:\n" ++ show res
-                                    ++ "\n*** Check calls to \"output\", they are typically not needed!"
+                                               in return (is, uiMap, skolemMap, converter hasInfPrec isSat comments is skolemMap consts tbls arrs uis axs pgm cstrs o)
+             Result _hasInfPrec _qcInfo _codeSegs _is _consts _tbls _arrs _uis _axs _pgm _cstrs os -> case length os of
+                           0  -> error $ "Impossible happened, unexpected non-outputting result\n" ++ show res
+                           1  -> error $ "Impossible happened, non-boolean output in " ++ show os
+                                       ++ "\nDetected while generating the trace:\n" ++ show res
+                           _  -> error $ "User error: Multiple output values detected: " ++ show os
+                                       ++ "\nDetected while generating the trace:\n" ++ show res
+                                       ++ "\n*** Check calls to \"output\", they are typically not needed!"
 
 -- | Equality as a proof method. Allows for
 -- very concise construction of equivalence proofs, which is very typical in

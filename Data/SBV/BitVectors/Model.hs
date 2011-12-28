@@ -26,12 +26,19 @@ module Data.SBV.BitVectors.Model (
   )
   where
 
+import Control.Monad   (when)
+
 import Data.Array      (Array, Ix, listArray, elems, bounds, rangeSize)
 import Data.Bits       (Bits(..))
 import Data.Int        (Int8, Int16, Int32, Int64)
-import Data.List       (genericLength, genericIndex, genericSplitAt, unzip4, unzip5, unzip6, unzip7)
+import Data.List       (genericLength, genericIndex, genericSplitAt, unzip4, unzip5, unzip6, unzip7, intercalate)
+import Data.Maybe      (fromMaybe)
 import Data.Word       (Word8, Word16, Word32, Word64)
-import Test.QuickCheck (Arbitrary(..))
+
+import Test.QuickCheck                           (Testable(..), Arbitrary(..))
+import qualified Test.QuickCheck         as QC   (whenFail)
+import qualified Test.QuickCheck.Monadic as QC   (monadicIO, run, pre)
+import System.Random
 
 import Data.SBV.BitVectors.Data
 import Data.SBV.Utils.Boolean
@@ -91,11 +98,11 @@ mkSymOp1 = mkSymOp1SC (const Nothing)
 
 -- Symbolic-Word class instances
 
-genFinVar :: Quantifier -> (Bool, Int) -> String -> Symbolic (SBV a)
+genFinVar :: (Random a, SymWord a) => Maybe Quantifier -> (Bool, Int) -> String -> Symbolic (SBV a)
 genFinVar q (sg, sz) = mkSymSBV q (sg, Size (Just sz)) . Just
 
-genFinVar_ :: Quantifier -> (Bool, Int) -> Symbolic (SBV a)
-genFinVar_ b (sg, sz) = mkSymSBV b (sg, Size (Just sz)) Nothing
+genFinVar_ :: (Random a, SymWord a) => Maybe Quantifier -> (Bool, Int) -> Symbolic (SBV a)
+genFinVar_ q (sg, sz) = mkSymSBV q (sg, Size (Just sz)) Nothing
 
 genFinLiteral :: Integral a => (Bool, Int) -> a -> SBV b
 genFinLiteral (sg, sz)  = SBV s . Left . mkConstCW s
@@ -105,100 +112,120 @@ genFromCW :: Integral a => CW -> a
 genFromCW x = fromInteger (cwVal x)
 
 instance SymWord Bool where
-  forall     = genFinVar  ALL (False, 1)
-  forall_    = genFinVar_ ALL (False, 1)
-  exists     = genFinVar  EX  (False, 1)
-  exists_    = genFinVar_ EX  (False, 1)
+  forall     = genFinVar  (Just ALL) (False, 1)
+  forall_    = genFinVar_ (Just ALL) (False, 1)
+  exists     = genFinVar  (Just EX)  (False, 1)
+  exists_    = genFinVar_ (Just EX)  (False, 1)
+  free       = genFinVar  Nothing    (False, 1)
+  free_      = genFinVar_ Nothing    (False, 1)
   literal x  = genFinLiteral (False, 1) (if x then (1::Integer) else 0)
   fromCW     = cwToBool
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Word8 where
-  forall     = genFinVar   ALL (False, 8)
-  forall_    = genFinVar_  ALL (False, 8)
-  exists     = genFinVar   EX  (False, 8)
-  exists_    = genFinVar_  EX  (False, 8)
+  forall     = genFinVar   (Just ALL) (False, 8)
+  forall_    = genFinVar_  (Just ALL) (False, 8)
+  exists     = genFinVar   (Just EX)  (False, 8)
+  exists_    = genFinVar_  (Just EX)  (False, 8)
+  free       = genFinVar   Nothing    (False, 8)
+  free_      = genFinVar_  Nothing    (False, 8)
   literal    = genFinLiteral (False, 8)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Int8 where
-  forall     = genFinVar   ALL (True, 8)
-  forall_    = genFinVar_  ALL (True, 8)
-  exists     = genFinVar   EX  (True, 8)
-  exists_    = genFinVar_  EX  (True, 8)
+  forall     = genFinVar   (Just ALL) (True, 8)
+  forall_    = genFinVar_  (Just ALL) (True, 8)
+  exists     = genFinVar   (Just EX)  (True, 8)
+  exists_    = genFinVar_  (Just EX)  (True, 8)
+  free       = genFinVar   Nothing    (True, 8)
+  free_      = genFinVar_  Nothing    (True, 8)
   literal    = genFinLiteral (True, 8)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Word16 where
-  forall     = genFinVar   ALL (False, 16)
-  forall_    = genFinVar_  ALL (False, 16)
-  exists     = genFinVar   EX  (False, 16)
-  exists_    = genFinVar_  EX  (False, 16)
+  forall     = genFinVar   (Just ALL) (False, 16)
+  forall_    = genFinVar_  (Just ALL) (False, 16)
+  exists     = genFinVar   (Just EX)  (False, 16)
+  exists_    = genFinVar_  (Just EX)  (False, 16)
+  free       = genFinVar   Nothing    (False, 16)
+  free_      = genFinVar_  Nothing    (False, 16)
   literal    = genFinLiteral (False, 16)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Int16 where
-  forall     = genFinVar   ALL (True, 16)
-  forall_    = genFinVar_  ALL (True, 16)
-  exists     = genFinVar   EX  (True, 16)
-  exists_    = genFinVar_  EX  (True, 16)
+  forall     = genFinVar   (Just ALL) (True, 16)
+  forall_    = genFinVar_  (Just ALL) (True, 16)
+  exists     = genFinVar   (Just EX)  (True, 16)
+  exists_    = genFinVar_  (Just EX)  (True, 16)
+  free       = genFinVar   Nothing    (True, 16)
+  free_      = genFinVar_  Nothing    (True, 16)
   literal    = genFinLiteral (True, 16)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Word32 where
-  forall     = genFinVar   ALL (False, 32)
-  forall_    = genFinVar_  ALL (False, 32)
-  exists     = genFinVar   EX  (False, 32)
-  exists_    = genFinVar_  EX  (False, 32)
+  forall     = genFinVar   (Just ALL) (False, 32)
+  forall_    = genFinVar_  (Just ALL) (False, 32)
+  exists     = genFinVar   (Just EX)  (False, 32)
+  exists_    = genFinVar_  (Just EX)  (False, 32)
+  free       = genFinVar   Nothing    (False, 32)
+  free_      = genFinVar_  Nothing    (False, 32)
   literal    = genFinLiteral (False, 32)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Int32 where
-  forall     = genFinVar   ALL (True, 32)
-  forall_    = genFinVar_  ALL (True, 32)
-  exists     = genFinVar   EX  (True, 32)
-  exists_    = genFinVar_  EX  (True, 32)
+  forall     = genFinVar   (Just ALL) (True, 32)
+  forall_    = genFinVar_  (Just ALL) (True, 32)
+  exists     = genFinVar   (Just EX)  (True, 32)
+  exists_    = genFinVar_  (Just EX)  (True, 32)
+  free       = genFinVar   Nothing    (True, 32)
+  free_      = genFinVar_  Nothing    (True, 32)
   literal    = genFinLiteral (True, 32)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Word64 where
-  forall     = genFinVar   ALL (False, 64)
-  forall_    = genFinVar_  ALL (False, 64)
-  exists     = genFinVar   EX  (False, 64)
-  exists_    = genFinVar_  EX  (False, 64)
+  forall     = genFinVar   (Just ALL) (False, 64)
+  forall_    = genFinVar_  (Just ALL) (False, 64)
+  exists     = genFinVar   (Just EX)  (False, 64)
+  exists_    = genFinVar_  (Just EX)  (False, 64)
+  free       = genFinVar   Nothing    (False, 64)
+  free_      = genFinVar_  Nothing    (False, 64)
   literal    = genFinLiteral (False, 64)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Int64 where
-  forall     = genFinVar   ALL (True, 64)
-  forall_    = genFinVar_  ALL (True, 64)
-  exists     = genFinVar   EX  (True, 64)
-  exists_    = genFinVar_  EX  (True, 64)
+  forall     = genFinVar   (Just ALL) (True, 64)
+  forall_    = genFinVar_  (Just ALL) (True, 64)
+  exists     = genFinVar   (Just EX)  (True, 64)
+  exists_    = genFinVar_  (Just EX)  (True, 64)
+  free       = genFinVar   Nothing    (True, 64)
+  free_      = genFinVar_  Nothing    (True, 64)
   literal    = genFinLiteral (True, 64)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Integer where
-  forall     = mkSymSBV ALL (True, Size Nothing) . Just
-  forall_    = mkSymSBV ALL (True, Size Nothing) Nothing
-  exists     = mkSymSBV EX  (True, Size Nothing) . Just
-  exists_    = mkSymSBV EX  (True, Size Nothing) Nothing
+  forall     = mkSymSBV (Just ALL) (True, Size Nothing) . Just
+  forall_    = mkSymSBV (Just ALL) (True, Size Nothing) Nothing
+  exists     = mkSymSBV (Just EX)  (True, Size Nothing) . Just
+  exists_    = mkSymSBV (Just EX)  (True, Size Nothing) Nothing
+  free       = mkSymSBV Nothing    (True, Size Nothing) . Just
+  free_      = mkSymSBV Nothing    (True, Size Nothing) Nothing
   literal    = SBV (True, Size Nothing) . Left . mkConstCW (True, Size Nothing)
   fromCW     = genFromCW
   mbMaxBound = Nothing
@@ -448,9 +475,8 @@ instance (Bits a, SymWord a) => Bits (SBV a) where
     | y `isConcretely` (== 0)  = x
     | True                     = liftSym2 (mkSymOp  XOr) xor x y
   complement = liftSym1 (mkSymOp1 Not) complement
-  bitSize  (SBV (_, Size (Just s)) _) = s
-  bitSize  (SBV (_, Size Nothing)  _) = error "Data.Bits.bitSize(Integer)"
-  isSigned (SBV (b, _) _)  = b
+  bitSize  _ = intSizeOf (undefined :: a)
+  isSigned _ = hasSign   (undefined :: a)
   shiftL x y
     | y < 0                = shiftR x (-y)
     | y == 0               = x
@@ -462,11 +488,13 @@ instance (Bits a, SymWord a) => Bits (SBV a) where
   rotateL x y
     | y < 0                = rotateR x (-y)
     | y == 0               = x
-    | True                 = let sz = bitSize x in liftSym1 (mkSymOp1 (Rol (y `mod` sz))) (rot True sz y) x
+    | not (isInfPrec x)    = let sz = bitSize x in liftSym1 (mkSymOp1 (Rol (y `mod` sz))) (rot True sz y) x
+    | True                 = shiftL x y   -- for unbounded Integers, rotateL is the same as shiftL in Haskell
   rotateR x y
     | y < 0                = rotateL x (-y)
     | y == 0               = x
-    | True                 = let sz = bitSize x in liftSym1 (mkSymOp1 (Ror (y `mod` sz))) (rot False sz y) x
+    | not (isInfPrec x)    = let sz = bitSize x in liftSym1 (mkSymOp1 (Ror (y `mod` sz))) (rot False sz y) x
+    | True                 = shiftR x y   -- for unbounded integers, rotateR is the same as shiftR in Haskell
 
 -- Since the underlying representation is just Integers, rotations has to be careful on the bit-size
 rot :: Bool -> Int -> Int -> Integer -> Integer
@@ -899,7 +927,7 @@ instance HasSignAndSize a => Uninterpreted (SBV a) where
      | Just (_, v) <- mbCgData = (mkUFName nm, v)
      | True                    = (mkUFName nm, SBV sgnsza $ Right $ cache result)
     where sgnsza = (hasSign (undefined :: a), sizeOf (undefined :: a))
-          result st | Just (_, v) <- mbCgData, not (inCodeGenMode st) = sbvToSW st v
+          result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st v
                     | True = do newUninterpreted st nm (SBVType [sgnsza]) (fst `fmap` mbCgData)
                                 newExpr st sgnsza $ SBVApp (Uninterpreted nm) []
 
@@ -910,7 +938,7 @@ forceArg :: SW -> IO ()
 forceArg (SW (b, s) n) = b `seq` s `seq` n `seq` return ()
 
 -- Functions of one argument
-instance (SymWord b, HasSignAndSize b, HasSignAndSize a) => Uninterpreted (SBV b -> SBV a) where
+instance (SymWord b, HasSignAndSize a) => Uninterpreted (SBV b -> SBV a) where
   sbvUninterpret mbCgData nm = (mkUFName nm, f)
     where f arg0
            | Just (_, v) <- mbCgData, isConcrete arg0
@@ -919,14 +947,14 @@ instance (SymWord b, HasSignAndSize b, HasSignAndSize a) => Uninterpreted (SBV b
            = SBV sgnsza $ Right $ cache result
            where sgnsza = (hasSign (undefined :: a), sizeOf (undefined :: a))
                  sgnszb = (hasSign (undefined :: b), sizeOf (undefined :: b))
-                 result st | Just (_, v) <- mbCgData, not (inCodeGenMode st) = sbvToSW st (v arg0)
+                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0)
                            | True = do newUninterpreted st nm (SBVType [sgnszb, sgnsza]) (fst `fmap` mbCgData)
                                        sw0 <- sbvToSW st arg0
                                        mapM_ forceArg [sw0]
                                        newExpr st sgnsza $ SBVApp (Uninterpreted nm) [sw0]
 
 -- Functions of two arguments
-instance (SymWord c, SymWord b, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a) => Uninterpreted (SBV c -> SBV b -> SBV a) where
+instance (SymWord c, SymWord b, HasSignAndSize a) => Uninterpreted (SBV c -> SBV b -> SBV a) where
   sbvUninterpret mbCgData nm = (mkUFName nm, f)
     where f arg0 arg1
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1
@@ -936,7 +964,7 @@ instance (SymWord c, SymWord b, HasSignAndSize c, HasSignAndSize b, HasSignAndSi
            where sgnsza = (hasSign (undefined :: a), sizeOf (undefined :: a))
                  sgnszb = (hasSign (undefined :: b), sizeOf (undefined :: b))
                  sgnszc = (hasSign (undefined :: c), sizeOf (undefined :: c))
-                 result st | Just (_, v) <- mbCgData, not (inCodeGenMode st) = sbvToSW st (v arg0 arg1)
+                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1)
                            | True = do newUninterpreted st nm (SBVType [sgnszc, sgnszb, sgnsza]) (fst `fmap` mbCgData)
                                        sw0 <- sbvToSW st arg0
                                        sw1 <- sbvToSW st arg1
@@ -944,7 +972,7 @@ instance (SymWord c, SymWord b, HasSignAndSize c, HasSignAndSize b, HasSignAndSi
                                        newExpr st sgnsza $ SBVApp (Uninterpreted nm) [sw0, sw1]
 
 -- Functions of three arguments
-instance (SymWord d, SymWord c, SymWord b, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a) => Uninterpreted (SBV d -> SBV c -> SBV b -> SBV a) where
+instance (SymWord d, SymWord c, SymWord b, HasSignAndSize a) => Uninterpreted (SBV d -> SBV c -> SBV b -> SBV a) where
   sbvUninterpret mbCgData nm = (mkUFName nm, f)
     where f arg0 arg1 arg2
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2
@@ -955,7 +983,7 @@ instance (SymWord d, SymWord c, SymWord b, HasSignAndSize d, HasSignAndSize c, H
                  sgnszb = (hasSign (undefined :: b), sizeOf (undefined :: b))
                  sgnszc = (hasSign (undefined :: c), sizeOf (undefined :: c))
                  sgnszd = (hasSign (undefined :: d), sizeOf (undefined :: d))
-                 result st | Just (_, v) <- mbCgData, not (inCodeGenMode st) = sbvToSW st (v arg0 arg1 arg2)
+                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2)
                            | True = do newUninterpreted st nm (SBVType [sgnszd, sgnszc, sgnszb, sgnsza]) (fst `fmap` mbCgData)
                                        sw0 <- sbvToSW st arg0
                                        sw1 <- sbvToSW st arg1
@@ -964,8 +992,7 @@ instance (SymWord d, SymWord c, SymWord b, HasSignAndSize d, HasSignAndSize c, H
                                        newExpr st sgnsza $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2]
 
 -- Functions of four arguments
-instance (SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize e, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a)
-            => Uninterpreted (SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
+instance (SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize a) => Uninterpreted (SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
   sbvUninterpret mbCgData nm = (mkUFName nm, f)
     where f arg0 arg1 arg2 arg3
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2, isConcrete arg3
@@ -977,7 +1004,7 @@ instance (SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize e, HasSignA
                  sgnszc = (hasSign (undefined :: c), sizeOf (undefined :: c))
                  sgnszd = (hasSign (undefined :: d), sizeOf (undefined :: d))
                  sgnsze = (hasSign (undefined :: e), sizeOf (undefined :: e))
-                 result st | Just (_, v) <- mbCgData, not (inCodeGenMode st) = sbvToSW st (v arg0 arg1 arg2 arg3)
+                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3)
                            | True = do newUninterpreted st nm (SBVType [sgnsze, sgnszd, sgnszc, sgnszb, sgnsza]) (fst `fmap` mbCgData)
                                        sw0 <- sbvToSW st arg0
                                        sw1 <- sbvToSW st arg1
@@ -987,8 +1014,7 @@ instance (SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize e, HasSignA
                                        newExpr st sgnsza $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3]
 
 -- Functions of five arguments
-instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize f, HasSignAndSize e, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a)
-            => Uninterpreted (SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
+instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize a) => Uninterpreted (SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
   sbvUninterpret mbCgData nm = (mkUFName nm, f)
     where f arg0 arg1 arg2 arg3 arg4
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2, isConcrete arg3, isConcrete arg4
@@ -1001,7 +1027,7 @@ instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize 
                  sgnszd = (hasSign (undefined :: d), sizeOf (undefined :: d))
                  sgnsze = (hasSign (undefined :: e), sizeOf (undefined :: e))
                  sgnszf = (hasSign (undefined :: f), sizeOf (undefined :: f))
-                 result st | Just (_, v) <- mbCgData, not (inCodeGenMode st) = sbvToSW st (v arg0 arg1 arg2 arg3 arg4)
+                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3 arg4)
                            | True = do newUninterpreted st nm (SBVType [sgnszf, sgnsze, sgnszd, sgnszc, sgnszb, sgnsza]) (fst `fmap` mbCgData)
                                        sw0 <- sbvToSW st arg0
                                        sw1 <- sbvToSW st arg1
@@ -1012,8 +1038,7 @@ instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize 
                                        newExpr st sgnsza $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4]
 
 -- Functions of six arguments
-instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize g, HasSignAndSize f, HasSignAndSize e, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a)
-            => Uninterpreted (SBV g -> SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
+instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize a) => Uninterpreted (SBV g -> SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
   sbvUninterpret mbCgData nm = (mkUFName nm, f)
     where f arg0 arg1 arg2 arg3 arg4 arg5
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2, isConcrete arg3, isConcrete arg4, isConcrete arg5
@@ -1027,7 +1052,7 @@ instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasS
                  sgnsze = (hasSign (undefined :: e), sizeOf (undefined :: e))
                  sgnszf = (hasSign (undefined :: f), sizeOf (undefined :: f))
                  sgnszg = (hasSign (undefined :: g), sizeOf (undefined :: g))
-                 result st | Just (_, v) <- mbCgData, not (inCodeGenMode st) = sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5)
+                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5)
                            | True = do newUninterpreted st nm (SBVType [sgnszg, sgnszf, sgnsze, sgnszd, sgnszc, sgnszb, sgnsza]) (fst `fmap` mbCgData)
                                        sw0 <- sbvToSW st arg0
                                        sw1 <- sbvToSW st arg1
@@ -1039,7 +1064,7 @@ instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasS
                                        newExpr st sgnsza $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4, sw5]
 
 -- Functions of seven arguments
-instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize h, HasSignAndSize g, HasSignAndSize f, HasSignAndSize e, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a)
+instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize a)
             => Uninterpreted (SBV h -> SBV g -> SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
   sbvUninterpret mbCgData nm = (mkUFName nm, f)
     where f arg0 arg1 arg2 arg3 arg4 arg5 arg6
@@ -1055,7 +1080,7 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
                  sgnszf = (hasSign (undefined :: f), sizeOf (undefined :: f))
                  sgnszg = (hasSign (undefined :: g), sizeOf (undefined :: g))
                  sgnszh = (hasSign (undefined :: h), sizeOf (undefined :: h))
-                 result st | Just (_, v) <- mbCgData, not (inCodeGenMode st) = sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5 arg6)
+                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5 arg6)
                           | True = do newUninterpreted st nm (SBVType [sgnszh, sgnszg, sgnszf, sgnsze, sgnszd, sgnszc, sgnszb, sgnsza]) (fst `fmap` mbCgData)
                                       sw0 <- sbvToSW st arg0
                                       sw1 <- sbvToSW st arg1
@@ -1068,35 +1093,64 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
                                       newExpr st sgnsza $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
 
 -- Uncurried functions of two arguments
-instance (SymWord c, SymWord b, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a) => Uninterpreted ((SBV c, SBV b) -> SBV a) where
+instance (SymWord c, SymWord b, HasSignAndSize a) => Uninterpreted ((SBV c, SBV b) -> SBV a) where
   sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc2 `fmap` mbCgData) nm in (h, \(arg0, arg1) -> f arg0 arg1)
     where uc2 (cs, fn) = (cs, \a b -> fn (a, b))
 
 -- Uncurried functions of three arguments
-instance (SymWord d, SymWord c, SymWord b, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a) => Uninterpreted ((SBV d, SBV c, SBV b) -> SBV a) where
+instance (SymWord d, SymWord c, SymWord b, HasSignAndSize a) => Uninterpreted ((SBV d, SBV c, SBV b) -> SBV a) where
   sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc3 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2) -> f arg0 arg1 arg2)
     where uc3 (cs, fn) = (cs, \a b c -> fn (a, b, c))
 
 -- Uncurried functions of four arguments
-instance (SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize e, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a)
+instance (SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize a)
             => Uninterpreted ((SBV e, SBV d, SBV c, SBV b) -> SBV a) where
   sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc4 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3) -> f arg0 arg1 arg2 arg3)
     where uc4 (cs, fn) = (cs, \a b c d -> fn (a, b, c, d))
 
 -- Uncurried functions of five arguments
-instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize f, HasSignAndSize e, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a)
+instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize a)
             => Uninterpreted ((SBV f, SBV e, SBV d, SBV c, SBV b) -> SBV a) where
   sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc5 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3, arg4) -> f arg0 arg1 arg2 arg3 arg4)
     where uc5 (cs, fn) = (cs, \a b c d e -> fn (a, b, c, d, e))
 
 -- Uncurried functions of six arguments
-instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize g, HasSignAndSize f, HasSignAndSize e, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a)
+instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize a)
             => Uninterpreted ((SBV g, SBV f, SBV e, SBV d, SBV c, SBV b) -> SBV a) where
   sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc6 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3, arg4, arg5) -> f arg0 arg1 arg2 arg3 arg4 arg5)
     where uc6 (cs, fn) = (cs, \a b c d e f -> fn (a, b, c, d, e, f))
 
 -- Uncurried functions of seven arguments
-instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize h, HasSignAndSize g, HasSignAndSize f, HasSignAndSize e, HasSignAndSize d, HasSignAndSize c, HasSignAndSize b, HasSignAndSize a)
+instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasSignAndSize a)
             => Uninterpreted ((SBV h, SBV g, SBV f, SBV e, SBV d, SBV c, SBV b) -> SBV a) where
   sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc7 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3, arg4, arg5, arg6) -> f arg0 arg1 arg2 arg3 arg4 arg5 arg6)
     where uc7 (cs, fn) = (cs, \a b c d e f g -> fn (a, b, c, d, e, f, g))
+
+-- Quickcheck interface on symbolic-booleans..
+instance Testable SBool where
+  property (SBV _ (Left b)) = property (cwToBool b)
+  property s                = error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show s ++ ")"
+
+instance Testable (Symbolic SBool) where
+  property m = QC.whenFail (putStrLn msg) $ QC.monadicIO test
+    where test = do mbDie <- QC.run $ do
+                                (r, Result _ tvals _ _ cs _ _ _ _ _ cstrs _) <- runSymbolic' Concrete m
+                                let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
+                                    cond = all (cwToBool . cval) cstrs
+                                when (isSymbolic r) $ error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show r ++ ")"
+                                if cond
+                                   then if r `isConcretely` id
+                                           then return $ Just True
+                                           else do putStrLn $ complain tvals
+                                                   return Nothing
+                                   else return $ Just False
+                    case mbDie of
+                      Just True  -> return ()           -- test successfull, continue
+                      Just False -> QC.pre False        -- precondition failed, ignore
+                      Nothing    -> fail "Falsifiable"  -- property failed, die
+          msg = "*** SBV: See the custom counter example reported above."
+          complain []     = "*** SBV Counter Example: Predicate contains no universally quantified variables."
+          complain qcInfo = intercalate "\n" $ "*** SBV Counter Example:" : map (("  " ++) . info) qcInfo
+            where maxLen = maximum (0:[length s | (s, _) <- qcInfo])
+                  shN s = s ++ replicate (maxLen - length s) ' '
+                  info (n, cw) = shN n ++ " = " ++ show cw

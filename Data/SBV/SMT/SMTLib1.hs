@@ -50,9 +50,10 @@ cvt :: Bool                                        -- ^ has infinite precision v
     -> [(String, SBVType)]                         -- ^ uninterpreted functions/constants
     -> [(String, [String])]                        -- ^ user given axioms
     -> Pgm                                         -- ^ assignments
+    -> [SW]                                        -- ^ extra constraints
     -> SW                                          -- ^ output variable
     -> ([String], [String])
-cvt hasInf isSat comments qinps _skolemInps consts tbls arrs uis axs asgnsSeq out
+cvt hasInf isSat comments qinps _skolemInps consts tbls arrs uis axs asgnsSeq cstrs out
   | hasInf
   = error "SBV: The chosen solver does not support infinite precision values. (Use z3 instead.)"
   | not ((isSat && allExistential) || (not isSat && allUniversal))
@@ -89,10 +90,13 @@ cvt hasInf isSat comments qinps _skolemInps consts tbls arrs uis axs asgnsSeq ou
               ++ map declAx axs
               ++ [ " ; --- assignments ---" ]
               ++ map cvtAsgn asgns
-        post =    [ " ; --- formula ---" ]
+        post =    [ " ; --- constraints ---" ]
+               ++ map mkCstr cstrs
+               ++ [ " ; --- formula ---" ]
                ++ [mkFormula isSat out]
                ++ [")"]
         asgns = F.toList asgnsSeq
+        mkCstr s = ":assumption (= " ++ show s ++ " bv1[1])"
 
 -- TODO: Does this work for SMT-Lib when the index/element types are signed?
 -- Currently we ignore the signedness of the arguments, as there appears to be no way
@@ -206,19 +210,20 @@ cvtExp inp@(SBVApp op args)
   = error $ "SBV.SMT.SMTLib1.cvtExp: impossible happened; can't translate: " ++ show inp
   where lift2  o _ [x, y] = "(" ++ o ++ " " ++ x ++ " " ++ y ++ ")"
         lift2  o _ sbvs   = error $ "SBV.SMTLib1.cvtExp.lift2: Unexpected arguments: "   ++ show (o, sbvs)
-        lift2B oU oS sgn sbvs
+        lift2B oU oS sgn sbvs = "(ite " ++ lift2S oU oS sgn sbvs ++ " bv1[1] bv0[1])"
+        lift2S oU oS sgn sbvs
           | sgn
-          = "(ite " ++ lift2 oS sgn sbvs ++ " bv1[1] bv0[1])"
+          = lift2 oS sgn sbvs
           | True
-          = "(ite " ++ lift2 oU sgn sbvs ++ " bv1[1] bv0[1])"
+          = lift2 oU sgn sbvs
         lift2N o sgn sbvs = "(bvnot " ++ lift2 o sgn sbvs ++ ")"
         lift1  o _ [x]    = "(" ++ o ++ " " ++ x ++ ")"
         lift1  o _ sbvs   = error $ "SBV.SMT.SMTLib1.cvtExp.lift1: Unexpected arguments: "   ++ show (o, sbvs)
         smtOpTable = [ (Plus,          lift2   "bvadd")
                      , (Minus,         lift2   "bvsub")
                      , (Times,         lift2   "bvmul")
-                     , (Quot,          lift2   "bvudiv")
-                     , (Rem,           lift2   "bvurem")
+                     , (Quot,          lift2S  "bvudiv" "bvsdiv")
+                     , (Rem,           lift2S  "bvurem" "bvsrem")
                      , (Equal,         lift2   "bvcomp")
                      , (NotEqual,      lift2N  "bvcomp")
                      , (LessThan,      lift2B  "bvult" "bvslt")

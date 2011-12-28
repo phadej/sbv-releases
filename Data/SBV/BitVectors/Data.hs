@@ -22,7 +22,7 @@ module Data.SBV.BitVectors.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
  , SInt8, SInt16, SInt32, SInt64, SInteger
  , SymWord(..)
- , CW, cwVal, cwSameType, cwIsBit, cwToBool
+ , CW(..), cwSameType, cwIsBit, cwToBool, constrain, pConstrain
  , mkConstCW ,liftCW2, mapCW, mapCW2
  , SW(..), trueSW, falseSW, trueCW, falseCW
  , SBV(..), NodeId(..), mkSymSBV
@@ -30,7 +30,7 @@ module Data.SBV.BitVectors.Data
  , sbvToSW, sbvToSymSW
  , SBVExpr(..), newExpr
  , cache, uncache, uncacheAI, HasSignAndSize(..)
- , Op(..), NamedSymVar, UnintKind(..), getTableIndex, Pgm, Symbolic, runSymbolic, runSymbolic', State, inCodeGenMode, Size(..), Outputtable(..), Result(..)
+ , Op(..), NamedSymVar, UnintKind(..), getTableIndex, Pgm, Symbolic, runSymbolic, runSymbolic', State, inProofMode, SBVRunMode(..), Size(..), Outputtable(..), Result(..), getTraceInfo, getConstraints
  , SBVType(..), newUninterpreted, unintFnUIKind, addAxiom
  , Quantifier(..), needsExistentials
  , SMTLibPgm(..), SMTLibVersion(..)
@@ -45,7 +45,7 @@ import Data.Int                        (Int8, Int16, Int32, Int64)
 import Data.Word                       (Word8, Word16, Word32, Word64)
 import Data.IORef                      (IORef, newIORef, modifyIORef, readIORef, writeIORef)
 import Data.List                       (intercalate, sortBy)
-import Data.Maybe                      (isJust, fromJust)
+import Data.Maybe                      (isJust, fromJust, fromMaybe)
 
 import qualified Data.IntMap   as IMap (IntMap, empty, size, toAscList, lookup, insert, insertWith)
 import qualified Data.Map      as Map  (Map, empty, toList, size, insert, lookup)
@@ -53,14 +53,17 @@ import qualified Data.Foldable as F    (toList)
 import qualified Data.Sequence as S    (Seq, empty, (|>))
 
 import System.Mem.StableName
-import Test.QuickCheck                 (Testable(..))
+import System.Random
 
 import Data.SBV.Utils.Lib
 
 -- | 'CW' represents a concrete word of a fixed size:
 -- Endianness is mostly irrelevant (see the 'FromBits' class).
--- For signed words, the most significant digit is considered to be the sign
-data CW = CW { cwSigned :: !Bool, cwSize :: !Size, cwVal :: !Integer }
+-- For signed words, the most significant digit is considered to be the sign.
+data CW = CW { cwSigned :: !Bool    -- ^ Is the word signed?
+             , cwSize   :: !Size    -- ^ Size of the word (unbounded if Nothing)
+             , cwVal    :: !Integer -- ^ The underlying value, represented as a Haskell 'Integer'
+             }
         deriving (Eq, Ord)
 
 cwSameType :: CW -> CW -> Bool
@@ -135,27 +138,31 @@ data Op = Plus | Times | Minus
 data SBVExpr = SBVApp !Op ![SW]
              deriving (Eq, Ord)
 
+
+-- minimal complete definition: sizeOf, hasSign
 class HasSignAndSize a where
   sizeOf     :: a -> Size
-  intSizeOf  :: a -> Int
   hasSign    :: a -> Bool
+  intSizeOf  :: a -> Int
   isInfPrec  :: a -> Bool
   showType   :: a -> String
   showType a
     | isInfPrec a                         = "SInteger"
     | not (hasSign a) && intSizeOf a == 1 = "SBool"
     | True                                = (if hasSign a then "SInt" else "SWord") ++ show (intSizeOf a)
+  isInfPrec = maybe True (const False) . unSize . sizeOf
+  intSizeOf = fromMaybe (error "SBV.HasSignAndSize.bitSize((S)Integer)") . unSize . sizeOf
 
-instance HasSignAndSize Bool    where {sizeOf _ = Size (Just 1) ; intSizeOf _ =  1; isInfPrec _ = False; hasSign _ = False}
-instance HasSignAndSize Int8    where {sizeOf _ = Size (Just 8) ; intSizeOf _ =  8; isInfPrec _ = False; hasSign _ = True }
-instance HasSignAndSize Word8   where {sizeOf _ = Size (Just 8) ; intSizeOf _ =  8; isInfPrec _ = False; hasSign _ = False}
-instance HasSignAndSize Int16   where {sizeOf _ = Size (Just 16); intSizeOf _ = 16; isInfPrec _ = False; hasSign _ = True }
-instance HasSignAndSize Word16  where {sizeOf _ = Size (Just 16); intSizeOf _ = 16; isInfPrec _ = False; hasSign _ = False}
-instance HasSignAndSize Int32   where {sizeOf _ = Size (Just 32); intSizeOf _ = 32; isInfPrec _ = False; hasSign _ = True }
-instance HasSignAndSize Word32  where {sizeOf _ = Size (Just 32); intSizeOf _ = 32; isInfPrec _ = False; hasSign _ = False}
-instance HasSignAndSize Int64   where {sizeOf _ = Size (Just 64); intSizeOf _ = 64; isInfPrec _ = False; hasSign _ = True }
-instance HasSignAndSize Word64  where {sizeOf _ = Size (Just 64); intSizeOf _ = 64; isInfPrec _ = False; hasSign _ = False}
-instance HasSignAndSize Integer where {sizeOf _ = Size Nothing; intSizeOf _ = error "attempting to compute size of Integer"; isInfPrec _ = True; hasSign _ = True}
+instance HasSignAndSize Bool    where {sizeOf _ = Size (Just 1) ; hasSign _ = False}
+instance HasSignAndSize Int8    where {sizeOf _ = Size (Just 8) ; hasSign _ = True }
+instance HasSignAndSize Word8   where {sizeOf _ = Size (Just 8) ; hasSign _ = False}
+instance HasSignAndSize Int16   where {sizeOf _ = Size (Just 16); hasSign _ = True }
+instance HasSignAndSize Word16  where {sizeOf _ = Size (Just 16); hasSign _ = False}
+instance HasSignAndSize Int32   where {sizeOf _ = Size (Just 32); hasSign _ = True }
+instance HasSignAndSize Word32  where {sizeOf _ = Size (Just 32); hasSign _ = False}
+instance HasSignAndSize Int64   where {sizeOf _ = Size (Just 64); hasSign _ = True }
+instance HasSignAndSize Word64  where {sizeOf _ = Size (Just 64); hasSign _ = False}
+instance HasSignAndSize Integer where {sizeOf _ = Size Nothing;   hasSign _ = True}
 
 liftCW :: (Integer -> b) -> CW -> b
 liftCW f x = f (cwVal x)
@@ -251,6 +258,7 @@ data UnintKind = UFun Int String | UArr Int String      -- in each case, arity a
 
 -- | Result of running a symbolic computation
 data Result = Result Bool                                         -- contains unbounded integers
+                     [(String, CW)]                               -- quick-check counter-example information (if any)
                      [(String, [String])]                         -- uninterpeted code segments
                      [(Quantifier, NamedSymVar)]                  -- inputs (possibly existential)
                      [(SW, CW)]                                   -- constants
@@ -259,13 +267,20 @@ data Result = Result Bool                                         -- contains un
                      [(String, SBVType)]                          -- uninterpreted constants
                      [(String, [String])]                         -- axioms
                      Pgm                                          -- assignments
+                     [SW]                                         -- additional constraints (boolean)
                      [SW]                                         -- outputs
 
+getConstraints :: Result -> [SW]
+getConstraints (Result _ _ _ _ _ _ _ _ _ _ cstrs _) = cstrs
+
+getTraceInfo :: Result -> [(String, CW)]
+getTraceInfo (Result _ tvals _ _ _ _ _ _ _ _ _ _) = tvals
+
 instance Show Result where
-  show (Result _ _ _ cs _ _ [] [] _ [r])
+  show (Result _ _ _ _ cs _ _ [] [] _ [] [r])
     | Just c <- r `lookup` cs
     = show c
-  show (Result _ cgs is cs ts as uis axs xs os)  = intercalate "\n" $
+  show (Result _ _ cgs is cs ts as uis axs xs cstrs os)  = intercalate "\n" $
                    ["INPUTS"]
                 ++ map shn is
                 ++ ["CONSTANTS"]
@@ -282,6 +297,8 @@ instance Show Result where
                 ++ map shax axs
                 ++ ["DEFINE"]
                 ++ map (\(s, e) -> "  " ++ shs s ++ " = " ++ show e) (F.toList xs)
+                ++ ["CONSTRAINTS"]
+                ++ map (("  " ++) . show) cstrs
                 ++ ["OUTPUTS"]
                 ++ map (("  " ++) . show) os
     where shs sw = show sw ++ " :: " ++ showType sw
@@ -339,10 +356,17 @@ arrayUIKind (i, (nm, _, ctx))
         external (ArrayMutate{}) = False
         external (ArrayMerge{})  = False
 
-data State  = State { inCodeGenMode :: Bool
+-- | Different means of running a symbolic piece of code
+data SBVRunMode = Proof Bool  -- ^ Symbolic simulation mode, for proof purposes. Bool is True if it's a sat instance
+                | CodeGen     -- ^ Code generation mode
+                | Concrete    -- ^ Concrete simulation mode
+
+data State  = State { runMode       :: SBVRunMode
+                    , rCInfo        :: IORef [(String, CW)]
                     , rctr          :: IORef Int
                     , rInfPrec      :: IORef Bool
                     , rinps         :: IORef [(Quantifier, NamedSymVar)]
+                    , rConstraints  :: IORef [SW]
                     , routs         :: IORef [SW]
                     , rtblMap       :: IORef TableMap
                     , spgm          :: IORef Pgm
@@ -355,6 +379,12 @@ data State  = State { inCodeGenMode :: Bool
                     , rSWCache      :: IORef (Cache SW)
                     , rAICache      :: IORef (Cache Int)
                     }
+
+inProofMode :: State -> Bool
+inProofMode s = case runMode s of
+                  Proof{}  -> True
+                  CodeGen  -> False
+                  Concrete -> False
 
 -- | The "Symbolic" value. Either a constant (@Left@) or a symbolic
 -- value (@Right Cached@). Note that caching is essential for making
@@ -406,11 +436,9 @@ instance Eq (SBV a) where
   SBV _ (Left a) /= SBV _ (Left b) = a /= b
   a /= b = error $ "Comparing symbolic bit-vectors; Use (./=) instead. Received: " ++ show (a, b)
 
-instance HasSignAndSize (SBV a) where
-  sizeOf    (SBV (_, mbs) _) = mbs
-  intSizeOf (SBV (_, mbs) _) = maybe (error "attempting to compute size of SInteger") id $ unSize mbs
-  isInfPrec (SBV (_, mbs) _) = maybe True (const False) $ unSize mbs
-  hasSign   (SBV (b, _) _)   = b
+instance HasSignAndSize a => HasSignAndSize (SBV a) where
+  sizeOf  _ = sizeOf  (undefined :: a)
+  hasSign _ = hasSign (undefined :: a)
 
 incCtr :: State -> IO Int
 incCtr s = do ctr <- readIORef (rctr s)
@@ -487,15 +515,28 @@ sbvToSW st (SBV _ (Right f)) = uncache f st
 newtype Symbolic a = Symbolic (ReaderT State IO a)
                    deriving (Functor, Monad, MonadIO, MonadReader State)
 
-mkSymSBV :: Quantifier -> (Bool, Size) -> Maybe String -> Symbolic (SBV a)
-mkSymSBV q sgnsz mbNm = do
+mkSymSBV :: forall a. (Random a, SymWord a) => Maybe Quantifier -> (Bool, Size) -> Maybe String -> Symbolic (SBV a)
+mkSymSBV mbQ sgnsz mbNm = do
         st <- ask
-        ctr <- liftIO $ incCtr st
-        let nm = maybe ('s':show ctr) id mbNm
-            sw = SW sgnsz (NodeId ctr)
-        when (isInfPrec sw) $ liftIO $ writeIORef (rInfPrec st) True
-        liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
-        return $ SBV sgnsz $ Right $ cache (const (return sw))
+        let q = case (mbQ, runMode st) of
+                  (Just x,  _)           -> x   -- user given, just take it
+                  (Nothing, Concrete)    -> ALL -- concrete simulation, pick universal
+                  (Nothing, Proof True)  -> EX  -- sat mode, pick existential
+                  (Nothing, Proof False) -> ALL -- proof mode, pick universal
+                  (Nothing, CodeGen)     -> ALL -- code generation, pick universal
+        case runMode st of
+          Concrete | q == EX -> case mbNm of
+                                  Nothing -> error $ "Cannot quick-check in the presence of existential variables, type: " ++ showType (undefined :: SBV a)
+                                  Just nm -> error $ "Cannot quick-check in the presence of existential variable " ++ nm ++ " :: " ++ showType (undefined :: SBV a)
+          Concrete           -> do v@(SBV _ (Left cw)) <- liftIO randomIO
+                                   liftIO $ modifyIORef (rCInfo st) ((maybe "_" id mbNm, cw):)
+                                   return v
+          _          -> do ctr <- liftIO $ incCtr st
+                           let nm = maybe ('s':show ctr) id mbNm
+                               sw = SW sgnsz (NodeId ctr)
+                           when (isInfPrec sw) $ liftIO $ writeIORef (rInfPrec st) True
+                           liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
+                           return $ SBV sgnsz $ Right $ cache (const (return sw))
 
 sbvToSymSW :: SBV a -> Symbolic SW
 sbvToSymSW sbv = do
@@ -548,14 +589,16 @@ addAxiom nm ax = do
         st <- ask
         liftIO $ modifyIORef (raxioms st) ((nm, ax) :)
 
--- | Run a symbolic computation and return a 'Result'
-runSymbolic :: Symbolic a -> IO Result
-runSymbolic c = snd `fmap` runSymbolic' False c
+-- | Run a symbolic computation in Proof mode and return a 'Result'. The boolean
+-- argument indicates if this is a sat instance or not.
+runSymbolic :: Bool -> Symbolic a -> IO Result
+runSymbolic b c = snd `fmap` runSymbolic' (Proof b) c
 
 -- | Run a symbolic computation, and return a extra value paired up with the 'Result'
-runSymbolic' :: Bool -> Symbolic a -> IO (a, Result)
-runSymbolic' cgMode (Symbolic c) = do
+runSymbolic' :: SBVRunMode -> Symbolic a -> IO (a, Result)
+runSymbolic' currentRunMode (Symbolic c) = do
    ctr     <- newIORef (-2) -- start from -2; False and True will always occupy the first two elements
+   cInfo   <- newIORef []
    pgm     <- newIORef S.empty
    emap    <- newIORef Map.empty
    cmap    <- newIORef Map.empty
@@ -569,28 +612,31 @@ runSymbolic' cgMode (Symbolic c) = do
    swCache <- newIORef IMap.empty
    aiCache <- newIORef IMap.empty
    infPrec <- newIORef False
-   let st = State { inCodeGenMode = cgMode
-                  , rctr          = ctr
-                  , rInfPrec      = infPrec
-                  , rinps         = inps
-                  , routs         = outs
-                  , rtblMap       = tables
-                  , spgm          = pgm
-                  , rconstMap     = cmap
-                  , rArrayMap     = arrays
-                  , rexprMap      = emap
-                  , rUIMap        = uis
-                  , rCgMap        = cgs
-                  , raxioms       = axioms
-                  , rSWCache      = swCache
-                  , rAICache      = aiCache
+   cstrs   <- newIORef []
+   let st = State { runMode      = currentRunMode
+                  , rCInfo       = cInfo
+                  , rctr         = ctr
+                  , rInfPrec     = infPrec
+                  , rinps        = inps
+                  , routs        = outs
+                  , rtblMap      = tables
+                  , spgm         = pgm
+                  , rconstMap    = cmap
+                  , rArrayMap    = arrays
+                  , rexprMap     = emap
+                  , rUIMap       = uis
+                  , rCgMap       = cgs
+                  , raxioms      = axioms
+                  , rSWCache     = swCache
+                  , rAICache     = aiCache
+                  , rConstraints = cstrs
                   }
    _ <- newConst st (mkConstCW (False, Size (Just 1)) (0::Integer)) -- s(-2) == falseSW
    _ <- newConst st (mkConstCW (False, Size (Just 1)) (1::Integer)) -- s(-1) == trueSW
    r <- runReaderT c st
    rpgm  <- readIORef pgm
-   inpsR <- readIORef inps
-   outsR <- readIORef outs
+   inpsO <- reverse `fmap` readIORef inps
+   outsO <- reverse `fmap` readIORef outs
    let swap (a, b) = (b, a)
        cmp  (a, _) (b, _) = a `compare` b
    cnsts <- (sortBy cmp . map swap . Map.toList) `fmap` readIORef (rconstMap st)
@@ -600,7 +646,9 @@ runSymbolic' cgMode (Symbolic c) = do
    axs   <- reverse `fmap` readIORef axioms
    hasInfPrec <- readIORef infPrec
    cgMap <- Map.toList `fmap` readIORef cgs
-   return $ (r, Result hasInfPrec cgMap (reverse inpsR) cnsts tbls arrs unint axs rpgm (reverse outsR))
+   traceVals <- reverse `fmap` readIORef cInfo
+   extraCstrs   <- reverse `fmap` readIORef cstrs
+   return $ (r, Result hasInfPrec traceVals cgMap inpsO cnsts tbls arrs unint axs rpgm extraCstrs outsO)
 
 -------------------------------------------------------------------------------
 -- * Symbolic Words
@@ -611,7 +659,7 @@ runSymbolic' cgMode (Symbolic c) = do
 -- provide the necessary bits.
 --
 -- Minimal complete definiton: forall, forall_, exists, exists_, literal, fromCW
-class Ord a => SymWord a where
+class (HasSignAndSize a, Ord a) => SymWord a where
   -- | Create a user named input (universal)
   forall :: String -> Symbolic (SBV a)
   -- | Create an automatically named input
@@ -619,17 +667,23 @@ class Ord a => SymWord a where
   -- | Get a bunch of new words
   mkForallVars :: Int -> Symbolic [SBV a]
   -- | Create an existential variable
-  exists     :: String -> Symbolic (SBV a)
+  exists  :: String -> Symbolic (SBV a)
   -- | Create an automatically named existential variable
-  exists_    :: Symbolic (SBV a)
+  exists_ :: Symbolic (SBV a)
   -- | Create a bunch of existentials
   mkExistVars :: Int -> Symbolic [SBV a]
+  -- | Create a free variable, universal in a proof, existential in sat
+  free :: String -> Symbolic (SBV a)
+  -- | Create an unnamed free variable, universal in proof, existential in sat
+  free_ :: Symbolic (SBV a)
+  -- | Create a bunch of free vars
+  mkFreeVars :: Int -> Symbolic [SBV a]
   -- | Turn a literal constant to symbolic
-  literal    :: a -> SBV a
+  literal :: a -> SBV a
   -- | Extract a literal, if the value is concrete
-  unliteral  :: SBV a -> Maybe a
+  unliteral :: SBV a -> Maybe a
   -- | Extract a literal, from a CW representation
-  fromCW     :: CW -> a
+  fromCW :: CW -> a
   -- | Is the symbolic word concrete?
   isConcrete :: SBV a -> Bool
   -- | Is the symbolic word really symbolic?
@@ -640,9 +694,10 @@ class Ord a => SymWord a where
   -- to impose "Bounded" on our class as Integer is not Bounded but it is a SymWord
   mbMaxBound, mbMinBound :: Maybe a
 
-  -- minimal complete definiton: forall, forall_, exists, exists_, literal, fromCW
+  -- minimal complete definiton: forall, forall_, exists, exists_, free, free_, literal, fromCW
   mkForallVars n = mapM (const forall_) [1 .. n]
   mkExistVars n  = mapM (const exists_) [1 .. n]
+  mkFreeVars n   = mapM (const free_)   [1 .. n]
   unliteral (SBV _ (Left c))  = Just $ fromCW c
   unliteral _                 = Nothing
   isConcrete (SBV _ (Left _)) = True
@@ -652,6 +707,11 @@ class Ord a => SymWord a where
     | Just i <- unliteral s = p i
     | True                  = False
 
+instance (Random a, SymWord a) => Random (SBV a) where
+  randomR (l, h) g = case (unliteral l, unliteral h) of
+                       (Just lb, Just hb) -> let (v, g') = randomR (lb, hb) g in (literal (v :: a), g')
+                       _                  -> error $ "SBV.Random: Cannot generate random values with symbolic bounds"
+  random         g = let (v, g') = random g in (literal (v :: a) , g')
 ---------------------------------------------------------------------------------
 -- * Symbolic Arrays
 ---------------------------------------------------------------------------------
@@ -770,6 +830,33 @@ mkSFunArray :: (SBV a -> SBV b) -> SFunArray a b
 mkSFunArray = SFunArray
 
 ---------------------------------------------------------------------------------
+-- | Adding arbitrary constraints.
+---------------------------------------------------------------------------------
+constrain :: SBool -> Symbolic ()
+constrain c = do
+        st <- ask
+        liftIO $ do v <- sbvToSW st c
+                    modifyIORef (rConstraints st) (v:)
+
+---------------------------------------------------------------------------------
+-- | Adding a probabilistic constraint. The 'Double' argument is the probability
+-- threshold. A threshold of '0' would mean the constraint is ignored, while a
+-- threshold of '1' means the constraint is always added. Probabilistic constraints
+-- are useful for 'genTest' and 'quickCheck' calls where we restrict our attention
+-- to /interesting/ parts of the input domain.
+---------------------------------------------------------------------------------
+pConstrain :: Double -> SBool -> Symbolic ()
+pConstrain t c
+  | t < 0 || t > 1
+  = error $ "SBV: pConstrain: Invalid probability threshold: " ++ show t ++ ", must be in [0, 1]."
+  | True
+  = do st <- ask
+       case runMode st of
+         Concrete -> when (t > 0) $ do r <- liftIO $ randomRIO (0, 1)
+                                       when (r <= t) $ constrain c
+         _        -> error "SBV: pConstrain only allowed in 'genTest' or 'quickCheck' contexts."
+
+---------------------------------------------------------------------------------
 -- * Cached values
 ---------------------------------------------------------------------------------
 
@@ -826,8 +913,8 @@ instance NFData CW where
   rnf (CW x y z) = x `seq` y `seq` z `seq` ()
 
 instance NFData Result where
-  rnf (Result isInf cgs inps consts tbls arrs uis axs pgm outs)
-        = rnf isInf `seq` rnf cgs `seq` rnf inps `seq` rnf consts `seq` rnf tbls `seq` rnf arrs `seq` rnf uis `seq` rnf axs `seq` rnf pgm `seq` rnf outs
+  rnf (Result isInf qcInfo cgs inps consts tbls arrs uis axs pgm cstr outs)
+        = rnf isInf `seq` rnf qcInfo `seq` rnf cgs `seq` rnf inps `seq` rnf consts `seq` rnf tbls `seq` rnf arrs `seq` rnf uis `seq` rnf axs `seq` rnf pgm `seq` rnf cstr `seq` rnf outs
 
 instance NFData Size
 instance NFData ArrayContext
@@ -840,8 +927,3 @@ instance NFData a => NFData (Cached a) where
   rnf (Cached f) = f `seq` ()
 instance NFData a => NFData (SBV a) where
   rnf (SBV x y) = rnf x `seq` rnf y `seq` ()
-
--- Quickcheck interface on symbolic-booleans..
-instance Testable SBool where
-  property (SBV _ (Left b)) = property (cwToBool b)
-  property s                = error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show s ++ ")"

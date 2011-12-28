@@ -1,5 +1,5 @@
 -- Auto-generated, don't edit
-module SBVUnitTest.SBVUnitTestBuildTime (buildTime) where
+module SBVUnitTestBuildTime (buildTime) where
 
 buildTime :: String
-buildTime = "Sun Dec  4 21:09:15 PST 2011"
+buildTime = "Wed Dec 28 00:11:15 PST 2011"
