@@ -23,6 +23,7 @@ module Data.SBV.BitVectors.Model (
     Mergeable(..), EqSymbolic(..), OrdSymbolic(..), BVDivisible(..), Uninterpreted(..)
   , bitValue, setBitTo, allEqual, allDifferent, oneIf, blastBE, blastLE
   , lsb, msb, SBVUF, sbvUFName, genFinVar, genFinVar_, forall, forall_, exists, exists_
+  , constrain, pConstrain
   )
   where
 
@@ -37,7 +38,7 @@ import Data.Word       (Word8, Word16, Word32, Word64)
 
 import Test.QuickCheck                           (Testable(..), Arbitrary(..))
 import qualified Test.QuickCheck         as QC   (whenFail)
-import qualified Test.QuickCheck.Monadic as QC   (monadicIO, run, pre)
+import qualified Test.QuickCheck.Monadic as QC   (monadicIO, run)
 import System.Random
 
 import Data.SBV.BitVectors.Data
@@ -541,7 +542,7 @@ msb x
 -- a concrete argument for obvious reasons. Other variants (succ, pred, [x..]) etc are similarly
 -- limited. While symbolic variants can be defined for many of these, they will just diverge
 -- as final sizes cannot be determined statically.
-instance (Bounded a, Integral a, Num a, SymWord a) => Enum (SBV a) where
+instance (Show a, Bounded a, Integral a, Num a, SymWord a) => Enum (SBV a) where
   succ x
     | v == (maxBound :: a) = error $ "Enum.succ{" ++ showType x ++ "}: tried to take `succ' of maxBound"
     | True                 = fromIntegral $ v + 1
@@ -735,9 +736,11 @@ instance SymWord a => Mergeable (SBV a) where
                       () | swt == falseSW -> sbvToSW st b
                       () -> do swa <- sbvToSW st a
                                swb <- sbvToSW st b
-                               if swa == swb
-                                  then return swa
-                                  else newExpr st sgnsz (SBVApp Ite [swt, swa, swb])
+                               case () of
+                                 () | swa == swb                      -> return swa
+                                 () | swa == trueSW && swb == falseSW -> return swt
+                                 () | swa == falseSW && swa == trueSW -> newExpr st sgnsz (SBVApp Not [swt])
+                                 ()                                   -> newExpr st sgnsz (SBVApp Ite [swt, swa, swb])
   -- Custom version of select that translates to SMT-Lib tables at the base type of words
   select xs err ind
     | Just i <- unliteral ind
@@ -1126,6 +1129,20 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
   sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc7 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3, arg4, arg5, arg6) -> f arg0 arg1 arg2 arg3 arg4 arg5 arg6)
     where uc7 (cs, fn) = (cs, \a b c d e f g -> fn (a, b, c, d, e, f, g))
 
+---------------------------------------------------------------------------------
+-- | Adding arbitrary constraints.
+---------------------------------------------------------------------------------
+constrain :: SBool -> Symbolic ()
+constrain c = addConstraint Nothing c (bnot c)
+
+---------------------------------------------------------------------------------
+-- | Adding a probabilistic constraint. The 'Double' argument is the probability
+-- threshold. Probabilistic constraints are useful for 'genTest' and 'quickCheck'
+-- calls where we restrict our attention to /interesting/ parts of the input domain.
+---------------------------------------------------------------------------------
+pConstrain :: Double -> SBool -> Symbolic ()
+pConstrain t c = addConstraint (Just t) c (bnot c)
+
 -- Quickcheck interface on symbolic-booleans..
 instance Testable SBool where
   property (SBV _ (Left b)) = property (cwToBool b)
@@ -1133,21 +1150,17 @@ instance Testable SBool where
 
 instance Testable (Symbolic SBool) where
   property m = QC.whenFail (putStrLn msg) $ QC.monadicIO test
-    where test = do mbDie <- QC.run $ do
-                                (r, Result _ tvals _ _ cs _ _ _ _ _ cstrs _) <- runSymbolic' Concrete m
-                                let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
-                                    cond = all (cwToBool . cval) cstrs
-                                when (isSymbolic r) $ error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show r ++ ")"
-                                if cond
-                                   then if r `isConcretely` id
-                                           then return $ Just True
-                                           else do putStrLn $ complain tvals
-                                                   return Nothing
-                                   else return $ Just False
-                    case mbDie of
-                      Just True  -> return ()           -- test successfull, continue
-                      Just False -> QC.pre False        -- precondition failed, ignore
-                      Nothing    -> fail "Falsifiable"  -- property failed, die
+    where runOnce g = do (r, Result _ tvals _ _ cs _ _ _ _ _ cstrs _) <- runSymbolic' (Concrete g) m
+                         let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
+                             cond = all (cwToBool . cval) cstrs
+                         when (isSymbolic r) $ error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show r ++ ")"
+                         if cond then if r `isConcretely` id
+                                         then return False
+                                         else do putStrLn $ complain tvals
+                                                 return True
+                                 else runOnce g -- cstrs failed, go again
+          test = do die <- QC.run $ newStdGen >>= runOnce
+                    when die $ fail "Falsifiable"
           msg = "*** SBV: See the custom counter example reported above."
           complain []     = "*** SBV Counter Example: Predicate contains no universally quantified variables."
           complain qcInfo = intercalate "\n" $ "*** SBV Counter Example:" : map (("  " ++) . info) qcInfo

@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       0.9.24
+Version:       1.0
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      Symbolic bit vectors: Bit-precise verification and automatic C-code generation.
 Description:   Express properties about bit-precise Haskell programs and automatically prove
@@ -46,7 +46,8 @@ Description:   Express properties about bit-precise Haskell programs and automat
                .
                  * quick-checked
                .
-                 * used in concrete test case generation (the 'genTest' function)
+                 * used in concrete test case generation (the 'genTest' function), rendered as values in various
+                   languages, including Haskell and C.
                .
                Predicates can have both existential and universal variables. Use of
                alternating quantifiers provides considerable expressive power.
@@ -126,10 +127,7 @@ Library
                   , Data.SBV.Examples.Uninterpreted.AUF
                   , Data.SBV.Examples.Uninterpreted.Function
   Other-modules   : Data.SBV.BitVectors.Data
-                  , Data.SBV.BitVectors.GenTest
                   , Data.SBV.BitVectors.Model
-                  , Data.SBV.BitVectors.Optimize
-                  , Data.SBV.BitVectors.Polynomial
                   , Data.SBV.BitVectors.PrettyNum
                   , Data.SBV.BitVectors.SignCast
                   , Data.SBV.BitVectors.Splittable
@@ -144,6 +142,10 @@ Library
                   , Data.SBV.Provers.SExpr
                   , Data.SBV.Provers.Yices
                   , Data.SBV.Provers.Z3
+                  , Data.SBV.Tools.ExpectedValue
+                  , Data.SBV.Tools.GenTest
+                  , Data.SBV.Tools.Optimize
+                  , Data.SBV.Tools.Polynomial
                   , Data.SBV.Utils.Boolean
                   , Data.SBV.Utils.TDiff
                   , Data.SBV.Utils.Lib

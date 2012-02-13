@@ -22,7 +22,7 @@ module Data.SBV.BitVectors.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
  , SInt8, SInt16, SInt32, SInt64, SInteger
  , SymWord(..)
- , CW(..), cwSameType, cwIsBit, cwToBool, constrain, pConstrain
+ , CW(..), cwSameType, cwIsBit, cwToBool
  , mkConstCW ,liftCW2, mapCW, mapCW2
  , SW(..), trueSW, falseSW, trueCW, falseCW
  , SBV(..), NodeId(..), mkSymSBV
@@ -30,7 +30,8 @@ module Data.SBV.BitVectors.Data
  , sbvToSW, sbvToSymSW
  , SBVExpr(..), newExpr
  , cache, uncache, uncacheAI, HasSignAndSize(..)
- , Op(..), NamedSymVar, UnintKind(..), getTableIndex, Pgm, Symbolic, runSymbolic, runSymbolic', State, inProofMode, SBVRunMode(..), Size(..), Outputtable(..), Result(..), getTraceInfo, getConstraints
+ , Op(..), NamedSymVar, UnintKind(..), getTableIndex, Pgm, Symbolic, runSymbolic, runSymbolic', State, inProofMode, SBVRunMode(..), Size(..), Outputtable(..), Result(..)
+ , getTraceInfo, getConstraints, addConstraint
  , SBVType(..), newUninterpreted, unintFnUIKind, addAxiom
  , Quantifier(..), needsExistentials
  , SMTLibPgm(..), SMTLibVersion(..)
@@ -72,6 +73,7 @@ cwSameType x y = cwSigned x == cwSigned y && cwSize x == cwSize y
 cwIsBit :: CW -> Bool
 cwIsBit x = not (hasSign x) && not (isInfPrec x) && intSizeOf x == 1
 
+-- | Convert a CW to a Haskell boolean
 cwToBool :: CW -> Bool
 cwToBool x = cwVal x /= 0
 
@@ -357,11 +359,17 @@ arrayUIKind (i, (nm, _, ctx))
         external (ArrayMerge{})  = False
 
 -- | Different means of running a symbolic piece of code
-data SBVRunMode = Proof Bool  -- ^ Symbolic simulation mode, for proof purposes. Bool is True if it's a sat instance
-                | CodeGen     -- ^ Code generation mode
-                | Concrete    -- ^ Concrete simulation mode
+data SBVRunMode = Proof Bool      -- ^ Symbolic simulation mode, for proof purposes. Bool is True if it's a sat instance
+                | CodeGen         -- ^ Code generation mode
+                | Concrete StdGen -- ^ Concrete simulation mode. The StdGen is for the pConstrain acceptance in cross runs
+
+isConcreteMode :: SBVRunMode -> Bool
+isConcreteMode (Concrete _) = True
+isConcreteMode (Proof{})    = False
+isConcreteMode CodeGen      = False
 
 data State  = State { runMode       :: SBVRunMode
+                    , rStdGen       :: IORef StdGen
                     , rCInfo        :: IORef [(String, CW)]
                     , rctr          :: IORef Int
                     , rInfPrec      :: IORef Bool
@@ -382,9 +390,9 @@ data State  = State { runMode       :: SBVRunMode
 
 inProofMode :: State -> Bool
 inProofMode s = case runMode s of
-                  Proof{}  -> True
-                  CodeGen  -> False
-                  Concrete -> False
+                  Proof{}    -> True
+                  CodeGen    -> False
+                  Concrete{} -> False
 
 -- | The "Symbolic" value. Either a constant (@Left@) or a symbolic
 -- value (@Right Cached@). Note that caching is essential for making
@@ -422,7 +430,7 @@ type SInt64  = SBV Int64
 -- | Infinite precision signed symbolic value
 type SInteger = SBV Integer
 
--- Needed to satisfy the Num hierarchy
+-- Not particularly "desirable", but will do if needed
 instance Show (SBV a) where
   show (SBV _                     (Left c))  = show c
   show (SBV (_  , Size Nothing)   (Right _)) = "<symbolic> :: SInteger"
@@ -445,6 +453,12 @@ incCtr s = do ctr <- readIORef (rctr s)
               let i = ctr + 1
               i `seq` writeIORef (rctr s) i
               return ctr
+
+throwDice :: State -> IO Double
+throwDice st = do g <- readIORef (rStdGen st)
+                  let (r, g') = randomR (0, 1) g
+                  writeIORef (rStdGen st) g'
+                  return r
 
 newUninterpreted :: State -> String -> SBVType -> Maybe [String] -> IO ()
 newUninterpreted st nm t mbCode
@@ -520,17 +534,17 @@ mkSymSBV mbQ sgnsz mbNm = do
         st <- ask
         let q = case (mbQ, runMode st) of
                   (Just x,  _)           -> x   -- user given, just take it
-                  (Nothing, Concrete)    -> ALL -- concrete simulation, pick universal
+                  (Nothing, Concrete{})  -> ALL -- concrete simulation, pick universal
                   (Nothing, Proof True)  -> EX  -- sat mode, pick existential
                   (Nothing, Proof False) -> ALL -- proof mode, pick universal
                   (Nothing, CodeGen)     -> ALL -- code generation, pick universal
         case runMode st of
-          Concrete | q == EX -> case mbNm of
-                                  Nothing -> error $ "Cannot quick-check in the presence of existential variables, type: " ++ showType (undefined :: SBV a)
-                                  Just nm -> error $ "Cannot quick-check in the presence of existential variable " ++ nm ++ " :: " ++ showType (undefined :: SBV a)
-          Concrete           -> do v@(SBV _ (Left cw)) <- liftIO randomIO
-                                   liftIO $ modifyIORef (rCInfo st) ((maybe "_" id mbNm, cw):)
-                                   return v
+          Concrete _ | q == EX -> case mbNm of
+                                    Nothing -> error $ "Cannot quick-check in the presence of existential variables, type: " ++ showType (undefined :: SBV a)
+                                    Just nm -> error $ "Cannot quick-check in the presence of existential variable " ++ nm ++ " :: " ++ showType (undefined :: SBV a)
+          Concrete _           -> do v@(SBV _ (Left cw)) <- liftIO randomIO
+                                     liftIO $ modifyIORef (rCInfo st) ((maybe "_" id mbNm, cw):)
+                                     return v
           _          -> do ctr <- liftIO $ incCtr st
                            let nm = maybe ('s':show ctr) id mbNm
                                sw = SW sgnsz (NodeId ctr)
@@ -559,6 +573,12 @@ instance Outputtable (SBV a) where
           sw <- liftIO $ uncache f st
           liftIO $ modifyIORef (routs st) (sw:)
           return i
+
+instance Outputtable a => Outputtable [a] where
+  output = mapM output
+
+instance Outputtable () where
+  output = return
 
 instance (Outputtable a, Outputtable b) => Outputtable (a, b) where
   output = mlift2 (,) output output
@@ -613,7 +633,11 @@ runSymbolic' currentRunMode (Symbolic c) = do
    aiCache <- newIORef IMap.empty
    infPrec <- newIORef False
    cstrs   <- newIORef []
+   rGen    <- case currentRunMode of
+                Concrete g -> newIORef g
+                _          -> newStdGen >>= newIORef
    let st = State { runMode      = currentRunMode
+                  , rStdGen      = rGen
                   , rCInfo       = cInfo
                   , rctr         = ctr
                   , rInfPrec     = infPrec
@@ -829,32 +853,27 @@ instance (HasSignAndSize a, HasSignAndSize b) => Show (SFunArray a b) where
 mkSFunArray :: (SBV a -> SBV b) -> SFunArray a b
 mkSFunArray = SFunArray
 
----------------------------------------------------------------------------------
--- | Adding arbitrary constraints.
----------------------------------------------------------------------------------
-constrain :: SBool -> Symbolic ()
-constrain c = do
-        st <- ask
-        liftIO $ do v <- sbvToSW st c
-                    modifyIORef (rConstraints st) (v:)
 
----------------------------------------------------------------------------------
--- | Adding a probabilistic constraint. The 'Double' argument is the probability
--- threshold. A threshold of '0' would mean the constraint is ignored, while a
--- threshold of '1' means the constraint is always added. Probabilistic constraints
--- are useful for 'genTest' and 'quickCheck' calls where we restrict our attention
--- to /interesting/ parts of the input domain.
----------------------------------------------------------------------------------
-pConstrain :: Double -> SBool -> Symbolic ()
-pConstrain t c
+-- | Handling constraints
+imposeConstraint :: SBool -> Symbolic ()
+imposeConstraint c = do st <- ask
+                        case runMode st of
+                          CodeGen -> error "SBV: constraints are not allowed in code-generation"
+                          _       -> do liftIO $ do v <- sbvToSW st c
+                                                    modifyIORef (rConstraints st) (v:)
+
+addConstraint :: Maybe Double -> SBool -> SBool -> Symbolic ()
+addConstraint Nothing  c _  = imposeConstraint c
+addConstraint (Just t) c c'
   | t < 0 || t > 1
   = error $ "SBV: pConstrain: Invalid probability threshold: " ++ show t ++ ", must be in [0, 1]."
   | True
   = do st <- ask
-       case runMode st of
-         Concrete -> when (t > 0) $ do r <- liftIO $ randomRIO (0, 1)
-                                       when (r <= t) $ constrain c
-         _        -> error "SBV: pConstrain only allowed in 'genTest' or 'quickCheck' contexts."
+       when (not (isConcreteMode (runMode st))) $ error "SBV: pConstrain only allowed in 'genTest' or 'quickCheck' contexts."
+       case () of
+         () | t > 0 && t < 1 -> liftIO (throwDice st) >>= \d -> imposeConstraint (if d <= t then c else c')
+            | t > 0          -> imposeConstraint c
+            | True           -> imposeConstraint c'
 
 ---------------------------------------------------------------------------------
 -- * Cached values

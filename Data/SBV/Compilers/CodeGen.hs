@@ -17,11 +17,12 @@ module Data.SBV.Compilers.CodeGen where
 
 import Control.Monad.Trans
 import Control.Monad.State.Lazy
-import Data.Char (toLower)
-import Data.List (nub, isPrefixOf, intercalate, (\\))
-import System.Directory (createDirectory, doesDirectoryExist, doesFileExist)
-import System.FilePath ((</>))
-import Text.PrettyPrint.HughesPJ (Doc, render, vcat)
+import Data.Char                 (toLower, isSpace)
+import Data.List                 (nub, isPrefixOf, intercalate, (\\))
+import System.Directory          (createDirectory, doesDirectoryExist, doesFileExist)
+import System.FilePath           ((</>))
+import Text.PrettyPrint.HughesPJ (Doc, vcat)
+import qualified Text.PrettyPrint.HughesPJ as P (render)
 
 import Data.SBV.BitVectors.Data
 
@@ -32,15 +33,16 @@ class CgTarget a where
 
 -- | Options for code-generation.
 data CgConfig = CgConfig {
-          cgRTC        :: Bool          -- ^ If 'True', perform run-time-checks for index-out-of-bounds or shifting-by-large values etc.
-        , cgInteger    :: Maybe Int     -- ^ Bit-size to use for representing SInteger (if any)
-        , cgDriverVals :: [Integer]     -- ^ Values to use for the driver program generated, useful for generating non-random drivers.
-        , cgGenDriver  :: Bool          -- ^ If 'True', will generate a driver program
+          cgRTC         :: Bool          -- ^ If 'True', perform run-time-checks for index-out-of-bounds or shifting-by-large values etc.
+        , cgInteger     :: Maybe Int     -- ^ Bit-size to use for representing SInteger (if any)
+        , cgDriverVals  :: [Integer]     -- ^ Values to use for the driver program generated, useful for generating non-random drivers.
+        , cgGenDriver   :: Bool          -- ^ If 'True', will generate a driver program
+        , cgGenMakefile :: Bool          -- ^ If 'True', will generate a makefile
         }
 
 -- | Default options for code generation. The run-time checks are turned-off, and the driver values are completely random.
 defaultCgConfig :: CgConfig
-defaultCgConfig = CgConfig { cgRTC = False, cgInteger = Nothing, cgDriverVals = [], cgGenDriver = True }
+defaultCgConfig = CgConfig { cgRTC = False, cgInteger = Nothing, cgDriverVals = [], cgGenDriver = True, cgGenMakefile = True }
 
 -- | Abstraction of target language values
 data CgVal = CgAtomic SW
@@ -96,10 +98,14 @@ cgIntegerSize i
   | True
   = modify (\s -> s { cgFinalConfig = (cgFinalConfig s) { cgInteger = Just i }})
 
--- | Should we generate a driver program? Default: 'True'. When a library is generated, then it will have
+-- | Should we generate a driver program? Default: 'True'. When a library is generated, it will have
 -- a driver if any of the contituent functions has a driver. (See 'compileToCLib'.)
 cgGenerateDriver :: Bool -> SBVCodeGen ()
 cgGenerateDriver b = modify (\s -> s { cgFinalConfig = (cgFinalConfig s) { cgGenDriver = b } })
+
+-- | Should we generate a Makefile? Default: 'True'.
+cgGenerateMakefile :: Bool -> SBVCodeGen ()
+cgGenerateMakefile b = modify (\s -> s { cgFinalConfig = (cgFinalConfig s) { cgGenMakefile = b } })
 
 -- | Sets driver program run time values, useful for generating programs with fixed drivers for testing. Default: None, i.e., use random values.
 cgSetDriverValues :: [Integer] -> SBVCodeGen ()
@@ -180,12 +186,16 @@ isCgDriver :: CgPgmKind -> Bool
 isCgDriver CgDriver = True
 isCgDriver _        = False
 
+isCgMakefile :: CgPgmKind -> Bool
+isCgMakefile CgMakefile{} = True
+isCgMakefile _            = False
+
 instance Show CgPgmBundle where
    show (CgPgmBundle fs) = intercalate "\n" $ map showFile fs
 
 showFile :: (FilePath, (CgPgmKind, [Doc])) -> String
 showFile (f, (_, ds)) =  "== BEGIN: " ++ show f ++ " ================\n"
-                      ++ render (vcat ds)
+                      ++ render' (vcat ds)
                       ++ "== END: " ++ show f ++ " =================="
 
 codeGen :: CgTarget l => l -> CgConfig -> String -> SBVCodeGen () -> IO CgPgmBundle
@@ -219,4 +229,10 @@ renderCgPgmBundle (Just dirName) (CgPgmBundle files) = do
                 else putStrLn "Aborting."
   where renderFile (f, (_, ds)) = do let fn = dirName </> f
                                      putStrLn $ "Generating: " ++ show fn ++ ".."
-                                     writeFile fn (render (vcat ds))
+                                     writeFile fn (render' (vcat ds))
+
+-- Pretty's render might have "leading" white-space in empty lines, eliminate:
+render' :: Doc -> String
+render' = unlines . map clean . lines . P.render
+  where clean x | all isSpace x = ""
+                | True          = x

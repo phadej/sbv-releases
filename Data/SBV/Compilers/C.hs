@@ -19,9 +19,9 @@ import Data.Char                     (isSpace)
 import Data.List                     (nub)
 import Data.Maybe                    (isJust, fromMaybe, isNothing)
 import qualified Data.Foldable as F  (toList)
-import Text.PrettyPrint.HughesPJ
 import System.FilePath               (takeBaseName, replaceExtension)
 import System.Random
+import Text.PrettyPrint.HughesPJ
 
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.PrettyNum (shex)
@@ -96,7 +96,7 @@ cgen cfg nm st sbvProg
    -- we rnf the sig to make sure any exceptions in type conversion pop-out early enough
    -- this is purely cosmetic, of course..
    = rnf (render sig) `seq` result
-  where result = CgPgmBundle $ filt [ ("Makefile",  (CgMakefile flags, [genMake driver nm nmd flags]))
+  where result = CgPgmBundle $ filt [ ("Makefile",  (CgMakefile flags, [genMake (cgGenDriver cfg) nm nmd flags]))
                                     , (nm  ++ ".h", (CgHeader [sig],   [genHeader nm [sig] extProtos]))
                                     , (nmd ++ ".c", (CgDriver,         genDriver mbISize randVals nm ins outs mbRet))
                                     , (nm  ++ ".c", (CgSource,         genCProg rtc mbISize nm sig sbvProg ins outs mbRet extDecls))
@@ -104,8 +104,10 @@ cgen cfg nm st sbvProg
         rtc      = cgRTC cfg
         mbISize  = cgInteger cfg
         randVals = cgDriverVals cfg
-        driver   = cgGenDriver cfg
-        filt xs  = if driver then xs else filter (not . isCgDriver . fst . snd) xs
+        filt xs  = [c | c@(_, (k, _)) <- xs, need k]
+          where need k | isCgDriver   k = cgGenDriver cfg
+                       | isCgMakefile k = cgGenMakefile cfg
+                       | True           = True
         nmd      = nm ++ "_driver"
         sig      = pprCFunHeader mbISize nm ins outs mbRet
         ins      = cgInputs st
@@ -153,12 +155,12 @@ declSW mbISize w sw@(SW (sg, _) _) = text "const" <+> pad (showCType (sg, cSizeO
 -- | Renders as "s0", etc, or the corresponding constant
 showSW :: Maybe Int -> [(SW, CW)] -> SW -> Doc
 showSW mbISize consts sw
-  | sw == falseSW                 = text "0"
-  | sw == trueSW                  = text "1"
+  | sw == falseSW                 = text "false"
+  | sw == trueSW                  = text "true"
   | Just cw <- sw `lookup` consts = showConst mbISize cw
   | True                          = text $ show sw
 
--- | Words as it would be defined in the standard header stdint.h
+-- | Words as it would map to a C word
 pprCWord :: Bool -> (Bool, Int) -> Doc
 pprCWord cnst sgsz = (if cnst then text "const" else empty) <+> text (showCType sgsz)
 
@@ -188,7 +190,7 @@ specifier (s, sz)     = die $ "Format specifier at type " ++ (if s then "SInt" e
 --   Note that this automatically takes care of the boolean (1-bit) value problem, since it
 --   shows the result as an integer, which is OK as far as C is concerned.
 mkConst :: Integer -> (Bool, Int) -> Doc
-mkConst i   (False,  1) = integer i
+mkConst i   (False,  1) = text (if i == 0 then "false" else "true")
 mkConst i   (False,  8) = integer i
 mkConst i   (True,   8) = integer i
 mkConst i t@(False, 16) = text (shex False True t i) <> text "U"
@@ -255,9 +257,12 @@ genHeader fn sigs protos =
   $$ text ""
   $$ text "#include <inttypes.h>"
   $$ text "#include <stdint.h>"
+  $$ text "#include <stdbool.h>"
+  $$ text ""
+  $$ text "/* The boolean type */"
+  $$ text "typedef bool SBool;"
   $$ text ""
   $$ text "/* Unsigned bit-vectors */"
-  $$ text "typedef uint8_t  SBool  ;"
   $$ text "typedef uint8_t  SWord8 ;"
   $$ text "typedef uint16_t SWord16;"
   $$ text "typedef uint32_t SWord32;"
@@ -290,6 +295,7 @@ genDriver mbISize randVals fn inps outs mbRet = [pre, header, body, post]
               $$ text ""
               $$ text "#include <inttypes.h>"
               $$ text "#include <stdint.h>"
+              $$ text "#include <stdbool.h>"
               $$ text "#include <stdio.h>"
        header =  text "#include" <+> doubleQuotes (nm <> text ".h")
               $$ text ""
@@ -380,6 +386,7 @@ genCProg rtc mbISize fn proto (Result hasInfPrec _ cgs ins preConsts tbls arrs _
               $$ text ""
               $$ text "#include <inttypes.h>"
               $$ text "#include <stdint.h>"
+              $$ text "#include <stdbool.h>"
        header = text "#include" <+> doubleQuotes (nm <> text ".h")
        post   = text ""
              $$ vcat (map codeSeg cgs)
@@ -461,7 +468,7 @@ ppExpr mbISize rtc consts (SBVApp op opArgs) = p op (map (showSW mbISize consts)
         p Not [a]
           -- be careful about booleans, bitwise complement is not correct for them!
           | s == 1
-          = parens (text "~" <> a) <+> text "&" <+> text "0x01U"
+          = text "!" <> a
           | True
           = text "~" <> a
           where s = cSizeOf mbISize (head opArgs)
@@ -555,9 +562,10 @@ align ds = map (text . pad) ss
 
 -- | Merge a bunch of bundles to generate code for a library
 mergeToLib :: String -> [CgPgmBundle] -> CgPgmBundle
-mergeToLib libName bundles = CgPgmBundle $ sources ++ libHeader : [libDriver | anyDriver] ++ [libMake]
+mergeToLib libName bundles = CgPgmBundle $ sources ++ libHeader : [libDriver | anyDriver] ++ [libMake | anyMake]
   where files       = concat [fs | CgPgmBundle fs <- bundles]
         sigs        = concat [ss | (_, (CgHeader ss, _)) <- files]
+        anyMake     = not (null [() | (_, (CgMakefile{}, _)) <- files])
         drivers     = [ds | (_, (CgDriver, ds)) <- files]
         anyDriver   = not (null drivers)
         mkFlags     = nub (concat [xs | (_, (CgMakefile xs, _)) <- files])
@@ -620,6 +628,7 @@ mergeDrivers libName inc ds = pre : concatMap mkDFun ds ++ [callDrivers (map fst
             $$ text ""
             $$ text "#include <inttypes.h>"
             $$ text "#include <stdint.h>"
+            $$ text "#include <stdbool.h>"
             $$ text "#include <stdio.h>"
             $$ inc
         mkDFun (f, [_pre, _header, body, _post]) = [header, body, post]

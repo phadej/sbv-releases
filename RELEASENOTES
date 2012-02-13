@@ -1,6 +1,33 @@
 Hackage: <http://hackage.haskell.org/package/sbv>
 GitHub:  <http://github.com/LeventErkok/sbv>
 
+Latest Hackage released version: 1.0
+
+======================================================================
+Version 1.0, 2012-02-13
+
+ Library:
+  * Z3 is now the "default" SMT solver. Yices is still available, but
+    has to be specifically selected. (Use satWith, allSatWith, proveWith, etc.)
+  * Better handling of the pConstrain probability threshold for test
+    case generation and quickCheck purposes.
+  * Add 'renderTest', which accompanies 'genTest' to render test
+    vectors as Haskell/C/Forte program segments.
+  * Add 'expectedValue' which can compute the expected value of
+    a symbolic value under the given constraints. Useful for statistical
+    analysis and probability computations.
+  * When saturating provable values, use forAll_ for proofs and forSome_
+    for sat/allSat. (Previously we were allways using forAll_, which is
+    not incorrect but less intuitive.)
+  * add function:
+      extractModels :: SatModel a => AllSatResult -> [a]
+    which simplifies accessing allSat results greatly.
+ Code-generation:
+  * add "cgGenerateMakefile" which allows the user to choose if SBV
+    should generate a Makefile. (default: True)
+ Other
+  * Changes to make it compile with GHC 7.4.1.
+
 ======================================================================
 Version 0.9.24, 2011-12-28
 
