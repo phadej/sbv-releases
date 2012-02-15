@@ -112,7 +112,7 @@ module Data.SBV (
   , STree, readSTree, writeSTree, mkSTree
   -- ** Operations on symbolic words
   -- *** Word level
-  , bitValue, setBitTo, oneIf, lsb, msb
+  , sbvTestBit, sbvPopCount, setBitTo, oneIf, lsb, msb
   -- *** List level
   , allEqual, allDifferent
   -- *** Blasting/Unblasting
@@ -181,13 +181,13 @@ module Data.SBV (
   , SatModel(..), Modelable(..), displayModels, extractModels
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), OptimizeOpts(..), SMTSolver(..), yices, z3, defaultSMTCfg
+  , SMTConfig(..), OptimizeOpts(..), SMTSolver(..), yices, z3, defaultSMTCfg, sbvCheckSolverInstallation
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
 
   -- * Getting SMT-Lib output (for offline analysis)
-  , compileToSMTLib
+  , compileToSMTLib, generateSMTBenchmarks
 
   -- * Test case generation
   , genTest, getTestValues, TestVectors, TestStyle(..), renderTest, CW(..), Size(..), cwToBool
