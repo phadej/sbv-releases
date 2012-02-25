@@ -388,7 +388,11 @@ instance Boolean SBool where
   false = literal False
   bnot  b | b `isConcretely` (== False) = true
           | b `isConcretely` (== True)  = false
-          | True                        = liftSym1Bool (mkSymOp1 Not) not b
+          | True                        = liftSym1Bool (mkSymOp1SC opt Not) not b
+          where opt x
+                 | x == falseSW = Just trueSW
+                 | x == trueSW  = Just falseSW
+                 | True         = Nothing
   a &&& b | a `isConcretely` (== False) || b `isConcretely` (== False) = false
           | a `isConcretely` (== True)                                 = b
           | b `isConcretely` (== True)                                 = a
@@ -768,7 +772,7 @@ instance SymWord a => Mergeable (SBV a) where
                                case () of
                                  () | swa == swb                      -> return swa
                                  () | swa == trueSW && swb == falseSW -> return swt
-                                 () | swa == falseSW && swa == trueSW -> newExpr st sgnsz (SBVApp Not [swt])
+                                 () | swa == falseSW && swb == trueSW -> newExpr st sgnsz (SBVApp Not [swt])
                                  ()                                   -> newExpr st sgnsz (SBVApp Ite [swt, swa, swb])
   -- Custom version of select that translates to SMT-Lib tables at the base type of words
   select xs err ind

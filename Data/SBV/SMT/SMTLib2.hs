@@ -150,9 +150,10 @@ constTable (((i, (_, atSz), (_, rtSz)), _elts), is) = decl : map wrap is
         wrap  s = "(assert " ++ s ++ ")"
 
 skolemTable :: String -> (((Int, (Bool, Size), (Bool, Size)), [SW]), [String]) -> String
-skolemTable qs (((i, (_, atSz), (_, rtSz)), _elts), _) = decl
-  where t         = "table" ++ show i
-        decl      = "(declare-fun " ++ t ++ " (" ++ qs ++ " " ++ smtType atSz ++ ") " ++ smtType rtSz ++ ")"
+skolemTable qsIn (((i, (_, atSz), (_, rtSz)), _elts), _) = decl
+  where qs   = if null qsIn then "" else qsIn ++ " "
+        t    = "table" ++ show i
+        decl = "(declare-fun " ++ t ++ " (" ++ qs ++ smtType atSz ++ ") " ++ smtType rtSz ++ ")"
 
 -- Left if all constants, Right if otherwise
 genTableData :: SkolemMap -> (Bool, String) -> [SW] -> ((Int, (Bool, Size), (Bool, Size)), [SW]) -> Either [String] [String]
@@ -234,7 +235,7 @@ hex sz v = "#x" ++ pad (sz `div` 4) (showHex v "")
   where pad n s = replicate (n - length s) '0' ++ s
 
 cvtCW :: CW -> String
-cvtCW x | isInfPrec x     = if w > 0 then show w else "(- " ++ show (abs w) ++ ")"
+cvtCW x | isInfPrec x     = if w >= 0 then show w else "(- " ++ show (abs w) ++ ")"
   where w = cwVal x
 cvtCW x | not (hasSign x) = hex (intSizeOf x) (cwVal x)
 -- signed numbers (with 2's complement representation) is problematic
