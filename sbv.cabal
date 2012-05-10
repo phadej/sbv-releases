@@ -1,11 +1,11 @@
 Name:          sbv
-Version:       1.3
+Version:       1.4
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
-Synopsis:      Symbolic bit vectors: Bit-precise verification and automatic C-code generation.
-Description:   Express properties about bit-precise Haskell programs and automatically prove
-               them using SMT solvers. Automatically generate C programs from Haskell functions.
-               The SBV library adds support for symbolic bit vectors, allowing formal models of
-               bit-precise programs to be created.
+Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
+Description:   Express properties about Haskell programs and automatically prove them using SMT
+               (Satisfiability Modulo Theories) solvers. Automatically generate C programs from
+               Haskell functions. The SBV library adds support for symbolic bit vectors and other
+               symbolic types, allowing formal models of Haskell programs to be created.
                .
                >   $ ghci -XScopedTypeVariables
                >   Prelude> :m Data.SBV
@@ -24,6 +24,8 @@ Description:   Express properties about bit-precise Haskell programs and automat
                  * 'SInt8',  'SInt16',  'SInt32',  'SInt64': Symbolic Ints (signed)
                .
                  * 'SInteger': Symbolic unbounded integers (signed)
+               .
+                 * 'SReal': Symbolic algebraic reals (signed)
                .
                  * 'SArray', 'SFunArray': Flat arrays of symbolic values
                .
@@ -64,8 +66,8 @@ Description:   Express properties about bit-precise Haskell programs and automat
                bug reports, and patches are always welcome.
                .
                The following people reported bugs, provided comments/feedback, or contributed to the
-               development of SBV in various ways: Ian Blumenfeld, Ian Calvert, Iavor Diatchki,
-               Tom Hawkins, Lee Pike, Austin Seipp, Don Stewart, Josef Svenningsson, and Nis Wegmann.
+               development of SBV in various ways: Ian Blumenfeld, Ian Calvert, Iavor Diatchki, John
+               Erickson, Tom Hawkins, Lee Pike, Austin Seipp, Don Stewart, Josef Svenningsson, and Nis Wegmann.
                .
                Release notes can be seen at: <http://github.com/LeventErkok/sbv/blob/master/RELEASENOTES>.
 
@@ -78,7 +80,7 @@ Homepage:      http://github.com/LeventErkok/sbv
 Bug-reports:   http://github.com/LeventErkok/sbv/issues
 Maintainer:    Levent Erkok (erkokl@gmail.com)
 Build-Type:    Simple
-Cabal-Version: >= 1.6
+Cabal-Version: >= 1.8
 Data-Files: SBVUnitTest/GoldFiles/*.gold
 Extra-Source-Files: INSTALL, README, COPYRIGHT, RELEASENOTES
 
@@ -105,6 +107,7 @@ Library
                   , Data.SBV.Internals
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
+                  , Data.SBV.Examples.BitPrecise.MergeSort
                   , Data.SBV.Examples.BitPrecise.PrefixSum
                   , Data.SBV.Examples.CodeGeneration.AddSub
                   , Data.SBV.Examples.CodeGeneration.CRC_USB5
@@ -115,6 +118,7 @@ Library
                   , Data.SBV.Examples.Crypto.AES
                   , Data.SBV.Examples.Crypto.RC4
                   , Data.SBV.Examples.Existentials.CRCPolynomial
+                  , Data.SBV.Examples.Existentials.Diophantine
                   , Data.SBV.Examples.Polynomials.Polynomials
                   , Data.SBV.Examples.Puzzles.Coins
                   , Data.SBV.Examples.Puzzles.Counts
@@ -126,7 +130,8 @@ Library
                   , Data.SBV.Examples.Puzzles.U2Bridge
                   , Data.SBV.Examples.Uninterpreted.AUF
                   , Data.SBV.Examples.Uninterpreted.Function
-  Other-modules   : Data.SBV.BitVectors.Data
+  Other-modules   : Data.SBV.BitVectors.AlgReals
+                  , Data.SBV.BitVectors.Data
                   , Data.SBV.BitVectors.Model
                   , Data.SBV.BitVectors.PrettyNum
                   , Data.SBV.BitVectors.SignCast
@@ -157,7 +162,8 @@ Executable SBVUnitTests
                   , HUnit     >= 1.2.4.2
                   , filepath  >= 1.1.0.4
                   , process   >= 1.0.1.3
-  Hs-Source-Dirs  : SBVUnitTest, .
+                  , sbv
+  Hs-Source-Dirs  : SBVUnitTest
   main-is         : SBVUnitTest.hs
   Other-modules   : SBVUnitTestBuildTime
                   , SBVTest

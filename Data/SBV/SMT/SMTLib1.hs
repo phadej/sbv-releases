@@ -15,10 +15,11 @@ module Data.SBV.SMT.SMTLib1(cvt, addNonEqConstraints) where
 
 import qualified Data.Foldable as F (toList)
 import Data.List  (intercalate)
-import Data.Maybe (fromMaybe)
 
 import Data.SBV.BitVectors.Data
 
+-- | Add constraints to generate /new/ models. This function is used to query the SMT-solver, while
+-- disallowing a previous model.
 addNonEqConstraints :: [[(String, CW)]] -> SMTLibPgm -> Maybe String
 addNonEqConstraints nonEqConstraints (SMTLibPgm _ (aliasTable, pre, post)) = Just $ intercalate "\n" $
      pre
@@ -39,19 +40,20 @@ nonEqs (sc:r) =  [" :assumption (or " ++ nonEq sc]
 nonEq :: (String, CW) -> String
 nonEq (s, c) = "(not (= " ++ s ++ " " ++ cvtCW c ++ "))"
 
-cvt :: Bool                                        -- ^ has infinite precision values
-    -> Bool                                        -- ^ is this a sat problem?
-    -> [String]                                    -- ^ extra comments to place on top
-    -> [(Quantifier, NamedSymVar)]                 -- ^ inputs
-    -> [Either SW (SW, [SW])]                      -- ^ skolemized version of the inputs
-    -> [(SW, CW)]                                  -- ^ constants
-    -> [((Int, (Bool, Size), (Bool, Size)), [SW])] -- ^ auto-generated tables
-    -> [(Int, ArrayInfo)]                          -- ^ user specified arrays
-    -> [(String, SBVType)]                         -- ^ uninterpreted functions/constants
-    -> [(String, [String])]                        -- ^ user given axioms
-    -> Pgm                                         -- ^ assignments
-    -> [SW]                                        -- ^ extra constraints
-    -> SW                                          -- ^ output variable
+-- | Translate a problem into an SMTLib1 script
+cvt :: Bool                         -- ^ has infinite precision values
+    -> Bool                         -- ^ is this a sat problem?
+    -> [String]                     -- ^ extra comments to place on top
+    -> [(Quantifier, NamedSymVar)]  -- ^ inputs
+    -> [Either SW (SW, [SW])]       -- ^ skolemized version of the inputs
+    -> [(SW, CW)]                   -- ^ constants
+    -> [((Int, Kind, Kind), [SW])]  -- ^ auto-generated tables
+    -> [(Int, ArrayInfo)]           -- ^ user specified arrays
+    -> [(String, SBVType)]          -- ^ uninterpreted functions/constants
+    -> [(String, [String])]         -- ^ user given axioms
+    -> Pgm                          -- ^ assignments
+    -> [SW]                         -- ^ extra constraints
+    -> SW                           -- ^ output variable
     -> ([String], [String])
 cvt hasInf isSat comments qinps _skolemInps consts tbls arrs uis axs asgnsSeq cstrs out
   | hasInf
@@ -102,23 +104,25 @@ cvt hasInf isSat comments qinps _skolemInps consts tbls arrs uis axs asgnsSeq cs
 -- Currently we ignore the signedness of the arguments, as there appears to be no way
 -- to capture that in SMT-Lib; and likely it does not matter. Would be good to check
 -- explicitly though.
-mkTable :: ((Int, (Bool, Size), (Bool, Size)), [SW]) -> [String]
-mkTable ((i, (_, atSz), (_, rtSz)), elts) = (" :extrafuns ((" ++ t ++ " Array[" ++ show at ++ ":" ++ show rt ++ "]))") : zipWith mkElt elts [(0::Int)..]
+mkTable :: ((Int, Kind, Kind), [SW]) -> [String]
+mkTable ((i, ak, rk), elts) = (" :extrafuns ((" ++ t ++ " Array[" ++ show at ++ ":" ++ show rt ++ "]))") : zipWith mkElt elts [(0::Int)..]
   where t = "table" ++ show i
         mkElt x k = " :assumption (= (select " ++ t ++ " bv" ++ show k ++ "[" ++ show at ++ "]) " ++ show x ++ ")"
-        at = fromMaybe (die "Unbounded integers") (unSize atSz)
-        rt = fromMaybe (die "Unbounded integers") (unSize rtSz)
+        (at, rt) = case (ak, rk) of
+                     (KBounded _ a, KBounded _ b) -> (a, b)
+                     _                            -> die $ "mkTable: Unbounded table component: " ++ show (ak, rk)
 
 -- Unexpected input, or things we will probably never support
 die :: String -> a
 die msg = error $ "SBV->SMTLib1: Unexpected: " ++ msg
 
 declArray :: (Int, ArrayInfo) -> [String]
-declArray (i, (_, ((_, atSz), (_, rtSz)), ctx)) = adecl : ctxInfo
+declArray (i, (_, (ak, rk), ctx)) = adecl : ctxInfo
   where nm = "array_" ++ show i
         adecl = " :extrafuns ((" ++ nm ++ " Array[" ++ show at ++ ":" ++ show rt ++ "]))"
-        at = fromMaybe (die "Unbounded integers") (unSize atSz)
-        rt = fromMaybe (die "Unbounded integers") (unSize rtSz)
+        (at, rt) = case (ak, rk) of
+                     (KBounded _ a, KBounded _ b) -> (a, b)
+                     _                            -> die $ "declArray: Unbounded array component: " ++ show (ak, rk)
         ctxInfo = case ctx of
                     ArrayFree Nothing   -> []
                     ArrayFree (Just sw) -> declA sw
@@ -151,15 +155,16 @@ cvtAsgn (s, e) = " :assumption (= " ++ show s ++ " " ++ cvtExp e ++ ")"
 cvtCnst :: (SW, CW) -> String
 cvtCnst (s, c) = " :assumption (= " ++ show s ++ " " ++ cvtCW c ++ ")"
 
+-- no need to worry about Int/Real here as we don't support them with the SMTLib1 interface..
 cvtCW :: CW -> String
-cvtCW x | not (hasSign x) = "bv" ++ show (cwVal x) ++ "[" ++ show (intSizeOf x) ++ "]"
+cvtCW x@(CW _ (Right v)) | not (hasSign x) = "bv" ++ show v ++ "[" ++ show (intSizeOf x) ++ "]"
 -- signed numbers (with 2's complement representation) is problematic
 -- since there's no way to put a bvneg over a positive number to get minBound..
 -- Hence, we punt and use binary notation in that particular case
-cvtCW x | cwVal x == least = mkMinBound (intSizeOf x)
+cvtCW x@(CW _ (Right v))  | v == least = mkMinBound (intSizeOf x)
   where least = negate (2 ^ intSizeOf x)
-cvtCW x = negIf (w < 0) $ "bv" ++ show (abs w) ++ "[" ++ show (intSizeOf x) ++ "]"
-  where w = cwVal x
+cvtCW x@(CW _ (Right v)) = negIf (v < 0) $ "bv" ++ show (abs v) ++ "[" ++ show (intSizeOf x) ++ "]"
+cvtCW x = error $ "SBV.SMTLib1.cvtCW: Unexpected CW: " ++ show x -- unbounded/real, shouldn't reach here
 
 negIf :: Bool -> String -> String
 negIf True  a = "(bvneg " ++ a ++ ")"
@@ -173,11 +178,12 @@ mkMinBound i = "bv1" ++ replicate (i-1) '0' ++ "[" ++ show i ++ "]"
 rot :: String -> Int -> SW -> String
 rot o c x = "(" ++ o ++ "[" ++ show c ++ "] " ++ show x ++ ")"
 
+-- only used for bounded SWs
 shft :: String -> String -> Int -> SW -> String
-shft oW oS c x= "(" ++ o ++ " " ++ show x ++ " " ++ cvtCW c' ++ ")"
+shft oW oS c x = "(" ++ o ++ " " ++ show x ++ " " ++ cvtCW c' ++ ")"
    where s  = hasSign x
-         c' = mkConstCW (s, sizeOf x) c
-         o  = if hasSign x then oS else oW
+         c' = mkConstCW (kindOf x) c
+         o  = if s then oS else oW
 
 cvtExp :: SBVExpr -> String
 cvtExp (SBVApp Ite [a, b, c]) = "(ite (= bv1[1] " ++ show a ++ ") " ++ show b ++ " " ++ show c ++ ")"
@@ -185,17 +191,19 @@ cvtExp (SBVApp (Rol i) [a])   = rot "rotate_left"  i a
 cvtExp (SBVApp (Ror i) [a])   = rot "rotate_right" i a
 cvtExp (SBVApp (Shl i) [a])   = shft "bvshl"  "bvshl"  i a
 cvtExp (SBVApp (Shr i) [a])   = shft "bvlshr" "bvashr" i a
-cvtExp (SBVApp (LkUp (t, (_, atSz), _, l) i e) [])
+cvtExp (SBVApp (LkUp (t, ak, _, l) i e) [])
   | needsCheck = "(ite " ++ cond ++ show e ++ " " ++ lkUp ++ ")"
   | True       = lkUp
-  where at = fromMaybe (die "Unbounded integers") (unSize atSz)
+  where at = case ak of
+              KBounded _ n -> n
+              _            -> die $ "cvtExp: Unbounded lookup component" ++ show ak
         needsCheck = (2::Integer)^at > fromIntegral l
         lkUp = "(select table" ++ show t ++ " " ++ show i ++ ")"
         cond
          | hasSign i = "(or " ++ le0 ++ " " ++ gtl ++ ") "
          | True      = gtl ++ " "
         (less, leq) = if hasSign i then ("bvslt", "bvsle") else ("bvult", "bvule")
-        mkCnst = cvtCW . mkConstCW (hasSign i, sizeOf i)
+        mkCnst = cvtCW . mkConstCW (kindOf i)
         le0  = "(" ++ less ++ " " ++ show i ++ " " ++ mkCnst 0 ++ ")"
         gtl  = "(" ++ leq  ++ " " ++ mkCnst l ++ " " ++ show i ++ ")"
 cvtExp (SBVApp (Extract i j) [a]) = "(extract[" ++ show i ++ ":" ++ show j ++ "] " ++ show a ++ ")"
@@ -240,5 +248,6 @@ cvtExp inp@(SBVApp op args)
 cvtType :: SBVType -> String
 cvtType (SBVType []) = error "SBV.SMT.SMTLib1.cvtType: internal: received an empty type!"
 cvtType (SBVType xs) = unwords $ map sh xs
-  where sh (_, Size Nothing)  = die "unbounded Integer"
-        sh (_, Size (Just s)) = "BitVec[" ++ show s ++ "]"
+  where sh (KBounded _ s) = "BitVec[" ++ show s ++ "]"
+        sh KUnbounded     = die "unbounded Integer"
+        sh KReal          = die "real value"

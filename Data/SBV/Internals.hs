@@ -13,20 +13,15 @@
 ---------------------------------------------------------------------------------
 
 module Data.SBV.Internals (
-   -- * Running symbolic programs /manually/
-    Result, SBVRunMode(..), runSymbolic, runSymbolic'
-    -- * Other internal structures useful for low-level programming
-  , SBV(..), HasSignAndSize(..), CW, mkConstCW, genFinVar, genFinVar_
+  -- * Running symbolic programs /manually/
+  Result, SBVRunMode(..), runSymbolic, runSymbolic'
+  -- * Other internal structures useful for low-level programming
+  , SBV(..), HasKind(..), CW, mkConstCW, genVar, genVar_
   -- * Compilation to C
   , compileToC', compileToCLib', CgPgmBundle(..), CgPgmKind(..)
-    -- * Integrating with the test framework
   ) where
 
-import Data.SBV.BitVectors.Data   (Result, SBVRunMode(..), runSymbolic, runSymbolic', SBV(..), HasSignAndSize(..), CW, mkConstCW)
-import Data.SBV.BitVectors.Model  (genFinVar, genFinVar_)
+import Data.SBV.BitVectors.Data   (Result, SBVRunMode(..), runSymbolic, runSymbolic', SBV(..), HasKind(..), CW, mkConstCW)
+import Data.SBV.BitVectors.Model  (genVar, genVar_)
 import Data.SBV.Compilers.C       (compileToC', compileToCLib')
 import Data.SBV.Compilers.CodeGen (CgPgmBundle(..), CgPgmKind(..))
-
-{- $compileC
-Lower level access to program bundles, for further processing of program bundles.
--}
