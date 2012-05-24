@@ -5,7 +5,6 @@
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
 -- Stability   :  experimental
--- Portability :  portable
 --
 -- Instance declarations for our symbolic world
 -----------------------------------------------------------------------------
@@ -24,10 +23,10 @@
 module Data.SBV.BitVectors.Model (
     Mergeable(..), EqSymbolic(..), OrdSymbolic(..), BVDivisible(..), Uninterpreted(..), SNum
   , sbvTestBit, sbvPopCount, setBitTo, allEqual, allDifferent, oneIf, blastBE, blastLE
-  , lsb, msb, SBVUF, sbvUFName, genVar, genVar_, forall, forall_, exists, exists_
+  , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
   , constrain, pConstrain, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
-  , sInt64s, sInteger, sIntegers, sReal, sReals
+  , sInt64s, sInteger, sIntegers, sReal, sReals, toSReal, slet
   )
   where
 
@@ -49,21 +48,27 @@ import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
 import Data.SBV.Utils.Boolean
 
+noUnint  :: String -> a
+noUnint x = error $ "Unexpected operation called on uninterpreted value: " ++ show x
+
+noUnint2 :: String -> String -> a
+noUnint2 x y = error $ "Unexpected binary operation called on uninterpreted values: " ++ show (x, y)
+
 liftSym1 :: (State -> Kind -> SW -> IO SW) -> (AlgReal -> AlgReal) -> (Integer -> Integer) -> SBV b -> SBV b
-liftSym1 _   opCR opCI   (SBV k (Left a)) = SBV k $ Left  $ mapCW opCR opCI a
+liftSym1 _   opCR opCI   (SBV k (Left a)) = SBV k $ Left  $ mapCW opCR opCI noUnint a
 liftSym1 opS _    _    a@(SBV k _)        = SBV k $ Right $ cache c
    where c st = do swa <- sbvToSW st a
                    opS st k swa
 
 liftSym2 :: (State -> Kind -> SW -> SW -> IO SW) -> (AlgReal -> AlgReal -> AlgReal) -> (Integer -> Integer -> Integer) -> SBV b -> SBV b -> SBV b
-liftSym2 _   opCR opCI   (SBV k (Left a)) (SBV _ (Left b)) = SBV k $ Left  $ mapCW2 opCR opCI a b
+liftSym2 _   opCR opCI   (SBV k (Left a)) (SBV _ (Left b)) = SBV k $ Left  $ mapCW2 opCR opCI noUnint2 a b
 liftSym2 opS _    _    a@(SBV k _)        b                = SBV k $ Right $ cache c
   where c st = do sw1 <- sbvToSW st a
                   sw2 <- sbvToSW st b
                   opS st k sw1 sw2
 
 liftSym2B :: (State -> Kind -> SW -> SW -> IO SW) -> (AlgReal -> AlgReal -> Bool) -> (Integer -> Integer -> Bool) -> SBV b -> SBV b -> SBool
-liftSym2B _   opCR opCI (SBV _ (Left a)) (SBV _ (Left b)) = literal (liftCW2 opCR opCI a b)
+liftSym2B _   opCR opCI (SBV _ (Left a)) (SBV _ (Left b)) = literal (liftCW2 opCR opCI noUnint2 a b)
 liftSym2B opS _    _    a                b                = SBV (KBounded False 1) $ Right $ cache c
   where c st = do sw1 <- sbvToSW st a
                   sw2 <- sbvToSW st b
@@ -111,139 +116,89 @@ genLiteral k = SBV k . Left . mkConstCW k
 
 -- | Convert a constant to an integral value
 genFromCW :: Integral a => CW -> a
-genFromCW (CW _ (Right x)) = fromInteger x
-genFromCW c                = error $ "genFromCW: Unsupported AlgReal value: " ++ show c
+genFromCW (CW _ (CWInteger x)) = fromInteger x
+genFromCW c                    = error $ "genFromCW: Unsupported non-integral value: " ++ show c
+
+-- | Generically make a symbolic var
+genMkSymVar :: (Random a, SymWord a) => Kind -> Maybe Quantifier -> Maybe String -> Symbolic (SBV a)
+genMkSymVar k mbq Nothing  = genVar_ mbq k
+genMkSymVar k mbq (Just s) = genVar  mbq k s
 
 instance SymWord Bool where
-  forall     = genVar  (Just ALL) (KBounded False 1)
-  forall_    = genVar_ (Just ALL) (KBounded False 1)
-  exists     = genVar  (Just EX)  (KBounded False 1)
-  exists_    = genVar_ (Just EX)  (KBounded False 1)
-  free       = genVar  Nothing    (KBounded False 1)
-  free_      = genVar_ Nothing    (KBounded False 1)
-  literal x  = genLiteral (KBounded False 1) (if x then (1::Integer) else 0)
+  mkSymWord  = genMkSymVar (KBounded False 1)
+  literal x  = genLiteral  (KBounded False 1) (if x then (1::Integer) else 0)
   fromCW     = cwToBool
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Word8 where
-  forall     = genVar   (Just ALL) (KBounded False 8)
-  forall_    = genVar_  (Just ALL) (KBounded False 8)
-  exists     = genVar   (Just EX)  (KBounded False 8)
-  exists_    = genVar_  (Just EX)  (KBounded False 8)
-  free       = genVar   Nothing    (KBounded False 8)
-  free_      = genVar_  Nothing    (KBounded False 8)
-  literal    = genLiteral (KBounded False 8)
+  mkSymWord  = genMkSymVar (KBounded False 8)
+  literal    = genLiteral  (KBounded False 8)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Int8 where
-  forall     = genVar   (Just ALL) (KBounded True 8)
-  forall_    = genVar_  (Just ALL) (KBounded True 8)
-  exists     = genVar   (Just EX)  (KBounded True 8)
-  exists_    = genVar_  (Just EX)  (KBounded True 8)
-  free       = genVar   Nothing    (KBounded True 8)
-  free_      = genVar_  Nothing    (KBounded True 8)
-  literal    = genLiteral (KBounded True 8)
+  mkSymWord  = genMkSymVar (KBounded True 8)
+  literal    = genLiteral  (KBounded True 8)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Word16 where
-  forall     = genVar   (Just ALL) (KBounded False 16)
-  forall_    = genVar_  (Just ALL) (KBounded False 16)
-  exists     = genVar   (Just EX)  (KBounded False 16)
-  exists_    = genVar_  (Just EX)  (KBounded False 16)
-  free       = genVar   Nothing    (KBounded False 16)
-  free_      = genVar_  Nothing    (KBounded False 16)
-  literal    = genLiteral (KBounded False 16)
+  mkSymWord  = genMkSymVar (KBounded False 16)
+  literal    = genLiteral  (KBounded False 16)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Int16 where
-  forall     = genVar   (Just ALL) (KBounded True 16)
-  forall_    = genVar_  (Just ALL) (KBounded True 16)
-  exists     = genVar   (Just EX)  (KBounded True 16)
-  exists_    = genVar_  (Just EX)  (KBounded True 16)
-  free       = genVar   Nothing    (KBounded True 16)
-  free_      = genVar_  Nothing    (KBounded True 16)
-  literal    = genLiteral (KBounded True 16)
+  mkSymWord  = genMkSymVar (KBounded True 16)
+  literal    = genLiteral  (KBounded True 16)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Word32 where
-  forall     = genVar   (Just ALL) (KBounded False 32)
-  forall_    = genVar_  (Just ALL) (KBounded False 32)
-  exists     = genVar   (Just EX)  (KBounded False 32)
-  exists_    = genVar_  (Just EX)  (KBounded False 32)
-  free       = genVar   Nothing    (KBounded False 32)
-  free_      = genVar_  Nothing    (KBounded False 32)
-  literal    = genLiteral (KBounded False 32)
+  mkSymWord  = genMkSymVar (KBounded False 32)
+  literal    = genLiteral  (KBounded False 32)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Int32 where
-  forall     = genVar   (Just ALL) (KBounded True 32)
-  forall_    = genVar_  (Just ALL) (KBounded True 32)
-  exists     = genVar   (Just EX)  (KBounded True 32)
-  exists_    = genVar_  (Just EX)  (KBounded True 32)
-  free       = genVar   Nothing    (KBounded True 32)
-  free_      = genVar_  Nothing    (KBounded True 32)
-  literal    = genLiteral (KBounded True 32)
+  mkSymWord  = genMkSymVar (KBounded True 32)
+  literal    = genLiteral  (KBounded True 32)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Word64 where
-  forall     = genVar   (Just ALL) (KBounded False 64)
-  forall_    = genVar_  (Just ALL) (KBounded False 64)
-  exists     = genVar   (Just EX)  (KBounded False 64)
-  exists_    = genVar_  (Just EX)  (KBounded False 64)
-  free       = genVar   Nothing    (KBounded False 64)
-  free_      = genVar_  Nothing    (KBounded False 64)
-  literal    = genLiteral (KBounded False 64)
+  mkSymWord  = genMkSymVar (KBounded False 64)
+  literal    = genLiteral  (KBounded False 64)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Int64 where
-  forall     = genVar   (Just ALL) (KBounded True 64)
-  forall_    = genVar_  (Just ALL) (KBounded True 64)
-  exists     = genVar   (Just EX)  (KBounded True 64)
-  exists_    = genVar_  (Just EX)  (KBounded True 64)
-  free       = genVar   Nothing    (KBounded True 64)
-  free_      = genVar_  Nothing    (KBounded True 64)
-  literal    = genLiteral (KBounded True 64)
+  mkSymWord  = genMkSymVar (KBounded True 64)
+  literal    = genLiteral  (KBounded True 64)
   fromCW     = genFromCW
   mbMaxBound = Just maxBound
   mbMinBound = Just minBound
 
 instance SymWord Integer where
-  forall     = mkSymSBV (Just ALL) KUnbounded . Just
-  forall_    = mkSymSBV (Just ALL) KUnbounded Nothing
-  exists     = mkSymSBV (Just EX)  KUnbounded . Just
-  exists_    = mkSymSBV (Just EX)  KUnbounded Nothing
-  free       = mkSymSBV Nothing    KUnbounded . Just
-  free_      = mkSymSBV Nothing    KUnbounded Nothing
+  mkSymWord  = genMkSymVar KUnbounded
   literal    = SBV KUnbounded . Left . mkConstCW KUnbounded
   fromCW     = genFromCW
   mbMaxBound = Nothing
   mbMinBound = Nothing
 
 instance SymWord AlgReal where
-  forall     = mkSymSBV (Just ALL) KReal . Just
-  forall_    = mkSymSBV (Just ALL) KReal Nothing
-  exists     = mkSymSBV (Just EX)  KReal . Just
-  exists_    = mkSymSBV (Just EX)  KReal Nothing
-  free       = mkSymSBV Nothing    KReal . Just
-  free_      = mkSymSBV Nothing    KReal Nothing
-  literal    = SBV KReal . Left . CW KReal . Left
-  fromCW (CW _ (Left a)) = a
-  fromCW c               = error $ "SymWord.AlgReal: Unexpected non-real value: " ++ show c
+  mkSymWord  = genMkSymVar KReal
+  literal    = SBV KReal . Left . CW KReal . CWAlgReal
+  fromCW (CW _ (CWAlgReal a)) = a
+  fromCW c                    = error $ "SymWord.AlgReal: Unexpected non-real value: " ++ show c
   mbMaxBound = Nothing
   mbMinBound = Nothing
 
@@ -339,6 +294,14 @@ sReal = symbolic
 -- | Declare a list of 'SReal's
 sReals :: [String] -> Symbolic [SReal]
 sReals = symbolics
+
+-- | Promote an SInteger to an SReal
+toSReal :: SInteger -> SReal
+toSReal x
+  | Just i <- unliteral x = literal $ fromInteger i
+  | True                  = SBV KReal (Right (cache y))
+  where y st = do xsw <- sbvToSW st x
+                  newExpr st KReal (SBVApp (Extract 0 0) [xsw]) -- special encoding!
 
 -- | Symbolic Equality. Note that we can't use Haskell's 'Eq' class since Haskell insists on returning Bool
 -- Comparing symbolic values will necessarily return a symbolic value.
@@ -823,8 +786,8 @@ instance BVDivisible Integer where
 
 instance BVDivisible CW where
   bvQuotRem a b
-    | Right x <- cwVal a, Right y <- cwVal b
-    = let (r1, r2) = bvQuotRem x y in (a { cwVal = Right r1 }, b { cwVal = Right r2 })
+    | CWInteger x <- cwVal a, CWInteger y <- cwVal b
+    = let (r1, r2) = bvQuotRem x y in (a { cwVal = CWInteger r1 }, b { cwVal = CWInteger r2 })
   bvQuotRem a b = error $ "SBV.liftQRem: impossible, unexpected args received: " ++ show (a, b)
 
 instance BVDivisible SWord64 where
@@ -1140,20 +1103,6 @@ instance SymArray SFunArray where
 instance SymWord b => Mergeable (SFunArray a b) where
   symbolicMerge = mergeArrays
 
--- | An uninterpreted function handle. This is the handle to be used for
--- adding axioms about uninterpreted constants/functions. Note that
--- we will leave this abstract for safety purposes
-newtype SBVUF = SBVUF String
-
--- | Get the name associated with the uninterpreted-value; useful when
--- constructing axioms about this UI.
-sbvUFName :: SBVUF -> String
-sbvUFName (SBVUF s) = s
-
--- The name we use for translating the UF constants to SMT-Lib..
-mkUFName :: String -> SBVUF
-mkUFName nm = SBVUF $ "uninterpreted_" ++ nm
-
 -- | Uninterpreted constants and functions. An uninterpreted constant is
 -- a value that is indexed by its name. The only property the prover assumes
 -- about these values are that they are equivalent to themselves; i.e., (for
@@ -1162,16 +1111,13 @@ mkUFName nm = SBVUF $ "uninterpreted_" ++ nm
 -- operations that are /irrelevant/ for the purposes of the proof; i.e., when
 -- the proofs can be performed without any knowledge about the function itself.
 --
--- Minimal complete definition: 'uninterpretWithHandle'. However, most instances in
+-- Minimal complete definition: 'sbvUninterpret'. However, most instances in
 -- practice are already provided by SBV, so end-users should not need to define their
 -- own instances.
 class Uninterpreted a where
   -- | Uninterpret a value, receiving an object that can be used instead. Use this version
   -- when you do not need to add an axiom about this value.
   uninterpret :: String -> a
-  -- | Uninterpret a value, but also get a handle to the resulting object. This handle
-  -- can be used to add axioms for this object. (See 'addAxiom'.)
-  uninterpretWithHandle :: String -> (SBVUF, a)
   -- | Uninterpret a value, only for the purposes of code-generation. For execution
   -- and verification the value is used as is. For code-generation, the alternate
   -- definition is used. This is useful when we want to take advantage of native
@@ -1179,18 +1125,17 @@ class Uninterpreted a where
   cgUninterpret :: String -> [String] -> a -> a
   -- | Most generalized form of uninterpretation, this function should not be needed
   -- by end-user-code, but is rather useful for the library development.
-  sbvUninterpret :: Maybe ([String], a) -> String -> (SBVUF, a)
+  sbvUninterpret :: Maybe ([String], a) -> String -> a
 
   -- minimal complete definition: 'sbvUninterpret'
-  uninterpret             = snd . uninterpretWithHandle
-  uninterpretWithHandle   = sbvUninterpret Nothing
-  cgUninterpret nm code v = snd $ sbvUninterpret (Just (code, v)) nm
+  uninterpret             = sbvUninterpret Nothing
+  cgUninterpret nm code v = sbvUninterpret (Just (code, v)) nm
 
 -- Plain constants
 instance HasKind a => Uninterpreted (SBV a) where
   sbvUninterpret mbCgData nm
-     | Just (_, v) <- mbCgData = (mkUFName nm, v)
-     | True                    = (mkUFName nm, SBV ka $ Right $ cache result)
+     | Just (_, v) <- mbCgData = v
+     | True                    = SBV ka $ Right $ cache result
     where ka = kindOf (undefined :: a)
           result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st v
                     | True = do newUninterpreted st nm (SBVType [ka]) (fst `fmap` mbCgData)
@@ -1204,7 +1149,7 @@ forceArg (SW k n) = k `seq`  n `seq` return ()
 
 -- Functions of one argument
 instance (SymWord b, HasKind a) => Uninterpreted (SBV b -> SBV a) where
-  sbvUninterpret mbCgData nm = (mkUFName nm, f)
+  sbvUninterpret mbCgData nm = f
     where f arg0
            | Just (_, v) <- mbCgData, isConcrete arg0
            = v arg0
@@ -1220,7 +1165,7 @@ instance (SymWord b, HasKind a) => Uninterpreted (SBV b -> SBV a) where
 
 -- Functions of two arguments
 instance (SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV c -> SBV b -> SBV a) where
-  sbvUninterpret mbCgData nm = (mkUFName nm, f)
+  sbvUninterpret mbCgData nm = f
     where f arg0 arg1
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1
            = v arg0 arg1
@@ -1238,7 +1183,7 @@ instance (SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV c -> SBV b -> S
 
 -- Functions of three arguments
 instance (SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV d -> SBV c -> SBV b -> SBV a) where
-  sbvUninterpret mbCgData nm = (mkUFName nm, f)
+  sbvUninterpret mbCgData nm = f
     where f arg0 arg1 arg2
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2
            = v arg0 arg1 arg2
@@ -1258,7 +1203,7 @@ instance (SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV d ->
 
 -- Functions of four arguments
 instance (SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
-  sbvUninterpret mbCgData nm = (mkUFName nm, f)
+  sbvUninterpret mbCgData nm = f
     where f arg0 arg1 arg2 arg3
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2, isConcrete arg3
            = v arg0 arg1 arg2 arg3
@@ -1280,7 +1225,7 @@ instance (SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => Uninterprete
 
 -- Functions of five arguments
 instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
-  sbvUninterpret mbCgData nm = (mkUFName nm, f)
+  sbvUninterpret mbCgData nm = f
     where f arg0 arg1 arg2 arg3 arg4
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2, isConcrete arg3, isConcrete arg4
            = v arg0 arg1 arg2 arg3 arg4
@@ -1304,7 +1249,7 @@ instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => U
 
 -- Functions of six arguments
 instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV g -> SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
-  sbvUninterpret mbCgData nm = (mkUFName nm, f)
+  sbvUninterpret mbCgData nm = f
     where f arg0 arg1 arg2 arg3 arg4 arg5
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2, isConcrete arg3, isConcrete arg4, isConcrete arg5
            = v arg0 arg1 arg2 arg3 arg4 arg5
@@ -1331,7 +1276,7 @@ instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasK
 -- Functions of seven arguments
 instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a)
             => Uninterpreted (SBV h -> SBV g -> SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
-  sbvUninterpret mbCgData nm = (mkUFName nm, f)
+  sbvUninterpret mbCgData nm = f
     where f arg0 arg1 arg2 arg3 arg4 arg5 arg6
            | Just (_, v) <- mbCgData, isConcrete arg0, isConcrete arg1, isConcrete arg2, isConcrete arg3, isConcrete arg4, isConcrete arg5, isConcrete arg6
            = v arg0 arg1 arg2 arg3 arg4 arg5 arg6
@@ -1359,36 +1304,36 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
 
 -- Uncurried functions of two arguments
 instance (SymWord c, SymWord b, HasKind a) => Uninterpreted ((SBV c, SBV b) -> SBV a) where
-  sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc2 `fmap` mbCgData) nm in (h, \(arg0, arg1) -> f arg0 arg1)
+  sbvUninterpret mbCgData nm = let f = sbvUninterpret (uc2 `fmap` mbCgData) nm in \(arg0, arg1) -> f arg0 arg1
     where uc2 (cs, fn) = (cs, \a b -> fn (a, b))
 
 -- Uncurried functions of three arguments
 instance (SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted ((SBV d, SBV c, SBV b) -> SBV a) where
-  sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc3 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2) -> f arg0 arg1 arg2)
+  sbvUninterpret mbCgData nm = let f = sbvUninterpret (uc3 `fmap` mbCgData) nm in \(arg0, arg1, arg2) -> f arg0 arg1 arg2
     where uc3 (cs, fn) = (cs, \a b c -> fn (a, b, c))
 
 -- Uncurried functions of four arguments
 instance (SymWord e, SymWord d, SymWord c, SymWord b, HasKind a)
             => Uninterpreted ((SBV e, SBV d, SBV c, SBV b) -> SBV a) where
-  sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc4 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3) -> f arg0 arg1 arg2 arg3)
+  sbvUninterpret mbCgData nm = let f = sbvUninterpret (uc4 `fmap` mbCgData) nm in \(arg0, arg1, arg2, arg3) -> f arg0 arg1 arg2 arg3
     where uc4 (cs, fn) = (cs, \a b c d -> fn (a, b, c, d))
 
 -- Uncurried functions of five arguments
 instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a)
             => Uninterpreted ((SBV f, SBV e, SBV d, SBV c, SBV b) -> SBV a) where
-  sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc5 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3, arg4) -> f arg0 arg1 arg2 arg3 arg4)
+  sbvUninterpret mbCgData nm = let f = sbvUninterpret (uc5 `fmap` mbCgData) nm in \(arg0, arg1, arg2, arg3, arg4) -> f arg0 arg1 arg2 arg3 arg4
     where uc5 (cs, fn) = (cs, \a b c d e -> fn (a, b, c, d, e))
 
 -- Uncurried functions of six arguments
 instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a)
             => Uninterpreted ((SBV g, SBV f, SBV e, SBV d, SBV c, SBV b) -> SBV a) where
-  sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc6 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3, arg4, arg5) -> f arg0 arg1 arg2 arg3 arg4 arg5)
+  sbvUninterpret mbCgData nm = let f = sbvUninterpret (uc6 `fmap` mbCgData) nm in \(arg0, arg1, arg2, arg3, arg4, arg5) -> f arg0 arg1 arg2 arg3 arg4 arg5
     where uc6 (cs, fn) = (cs, \a b c d e f -> fn (a, b, c, d, e, f))
 
 -- Uncurried functions of seven arguments
 instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a)
             => Uninterpreted ((SBV h, SBV g, SBV f, SBV e, SBV d, SBV c, SBV b) -> SBV a) where
-  sbvUninterpret mbCgData nm = let (h, f) = sbvUninterpret (uc7 `fmap` mbCgData) nm in (h, \(arg0, arg1, arg2, arg3, arg4, arg5, arg6) -> f arg0 arg1 arg2 arg3 arg4 arg5 arg6)
+  sbvUninterpret mbCgData nm = let f = sbvUninterpret (uc7 `fmap` mbCgData) nm in \(arg0, arg1, arg2, arg3, arg4, arg5, arg6) -> f arg0 arg1 arg2 arg3 arg4 arg5 arg6
     where uc7 (cs, fn) = (cs, \a b c d e f g -> fn (a, b, c, d, e, f, g))
 
 -- | Adding arbitrary constraints.
@@ -1408,7 +1353,7 @@ instance Testable SBool where
 
 instance Testable (Symbolic SBool) where
   property m = QC.whenFail (putStrLn msg) $ QC.monadicIO test
-    where runOnce g = do (r, Result _ tvals _ _ cs _ _ _ _ _ cstrs _) <- runSymbolic' (Concrete g) m
+    where runOnce g = do (r, Result _ _ tvals _ _ cs _ _ _ _ _ cstrs _) <- runSymbolic' (Concrete g) m
                          let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
                              cond = all (cwToBool . cval) cstrs
                          when (isSymbolic r) $ error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show r ++ ")"
@@ -1425,3 +1370,16 @@ instance Testable (Symbolic SBool) where
             where maxLen = maximum (0:[length s | (s, _) <- qcInfo])
                   shN s = s ++ replicate (maxLen - length s) ' '
                   info (n, cw) = shN n ++ " = " ++ show cw
+
+-- | Explicit sharing combinator. The SBV library has internal caching/hash-consing mechanisms
+-- built in, based on Andy Gill's type-safe obervable sharing technique (see: <http://ittc.ku.edu/~andygill/paper.php?label=DSLExtract09>).
+-- However, there might be times where being explicit on the sharing can help, especially in experimental code. The 'slet' combinator
+-- ensures that its first argument is computed once and passed on to its continuation, explicitly indicating the intent of sharing. Most
+-- use cases of the SBV library should simply use Haskell's @let@ construct for this purpose.
+slet :: (HasKind a, HasKind b) => SBV a -> (SBV a -> SBV b) -> SBV b
+slet x f = SBV k $ Right $ cache r
+    where k    = kindOf (undefined `asTypeOf` f x)
+          r st = do xsw <- sbvToSW st x
+                    let xsbv = SBV (kindOf x) (Right (cache (const (return xsw))))
+                        res  = f xsbv
+                    sbvToSW st res

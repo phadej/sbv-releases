@@ -5,7 +5,6 @@
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
 -- Stability   :  experimental
--- Portability :  portable
 --
 -- Algrebraic reals in Haskell.
 -----------------------------------------------------------------------------
@@ -14,7 +13,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Data.SBV.BitVectors.AlgReals (AlgReal, mkPolyReal, algRealToSMTLib2, algRealToHaskell, mergeAlgReals) where
+module Data.SBV.BitVectors.AlgReals (AlgReal(..), mkPolyReal, algRealToSMTLib2, algRealToHaskell, mergeAlgReals) where
 
 import Data.List     (sortBy, isPrefixOf, partition)
 import Data.Ratio    ((%), numerator, denominator)

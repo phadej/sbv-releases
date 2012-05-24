@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       2.0
+Version:       2.1
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -33,8 +33,9 @@ Description:   Express properties about Haskell programs and automatically prove
                .
                  * Symbolic polynomials over GF(2^n), and polynomial arithmetic
                .
-                 * Uninterpreted constants and functions over symbolic values, with user
-                   defined SMT-Lib axioms
+                 * Uninterpreted constants and functions over symbolic values, with user defined axioms.
+               .
+                 * Uninterpreted sorts, and proofs over such sorts, potentially with axioms.
                .
                Functions built out of these types can be:
                .
@@ -44,12 +45,13 @@ Description:   Express properties about Haskell programs and automatically prove
                .
                  * used in synthesis (the 'sat' function with existential variables)
                .
-                 * optimized with respect to cost functions (the 'optimize', 'maximize', and 'minimize' functions)
+                 * optimized with respect to cost functions (the 'optimize', 'maximize',
+                 and 'minimize' functions)
                .
                  * quick-checked
                .
-                 * used in concrete test case generation (the 'genTest' function), rendered as values in various
-                   languages, including Haskell and C.
+                 * used in concrete test case generation (the 'genTest' function), rendered as
+                   values in various languages, including Haskell and C.
                .
                Predicates can have both existential and universal variables. Use of
                alternating quantifiers provides considerable expressive power.
@@ -67,7 +69,8 @@ Description:   Express properties about Haskell programs and automatically prove
                .
                The following people reported bugs, provided comments/feedback, or contributed to the
                development of SBV in various ways: Ian Blumenfeld, Ian Calvert, Iavor Diatchki, John
-               Erickson, Tom Hawkins, Lee Pike, Austin Seipp, Don Stewart, Josef Svenningsson, and Nis Wegmann.
+               Erickson, Tom Hawkins, Lee Pike, Austin Seipp, Don Stewart, Josef Svenningsson, and
+               Nis Wegmann.
                .
                Release notes can be seen at: <http://github.com/LeventErkok/sbv/blob/master/RELEASENOTES>.
 
@@ -90,6 +93,25 @@ source-repository head
 
 Library
   ghc-options     : -Wall
+  other-extensions: BangPatterns
+                    CPP
+                    -- DefaultSignatures flag is not present in cabal 1.14.0; so ignore for the time being
+                    -- DefaultSignatures
+                    DeriveDataTypeable
+                    FlexibleContexts
+                    FlexibleInstances
+                    FunctionalDependencies
+                    GeneralizedNewtypeDeriving
+                    MultiParamTypeClasses
+                    OverlappingInstances
+                    ParallelListComp
+                    PatternGuards
+                    Rank2Types
+                    RankNTypes
+                    ScopedTypeVariables
+                    TupleSections
+                    TypeOperators
+                    TypeSynonymInstances
   Build-Depends   : array               >= 0.3.0.1
                   , base                >= 3 && < 5
                   , containers          >= 0.3.0.0
@@ -103,6 +125,7 @@ Library
                   , QuickCheck          >= 2.4.0.1
                   , random              >= 1.0.1.1
                   , strict-concurrency  >= 0.2.4.1
+                  , syb                 >= 0.3.6
   Exposed-modules : Data.SBV
                   , Data.SBV.Internals
                   , Data.SBV.Examples.BitPrecise.BitTricks
@@ -129,7 +152,9 @@ Library
                   , Data.SBV.Examples.Puzzles.Sudoku
                   , Data.SBV.Examples.Puzzles.U2Bridge
                   , Data.SBV.Examples.Uninterpreted.AUF
+                  , Data.SBV.Examples.Uninterpreted.Deduce
                   , Data.SBV.Examples.Uninterpreted.Function
+                  , Data.SBV.Examples.Uninterpreted.Sort
   Other-modules   : Data.SBV.BitVectors.AlgReals
                   , Data.SBV.BitVectors.Data
                   , Data.SBV.BitVectors.Model
@@ -157,6 +182,10 @@ Library
 
 Executable SBVUnitTests
   ghc-options     : -Wall
+  other-extensions: Rank2Types
+                    RankNTypes
+                    ScopedTypeVariables
+                    TupleSections
   Build-depends   : base      >= 3 && < 5
                   , directory >= 1.0.1.1
                   , HUnit     >= 1.2.4.2

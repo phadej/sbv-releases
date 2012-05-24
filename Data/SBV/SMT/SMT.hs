@@ -5,7 +5,6 @@
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
 -- Stability   :  experimental
--- Portability :  portable
 --
 -- Abstraction of SMT solvers
 -----------------------------------------------------------------------------
@@ -172,8 +171,8 @@ class SatModel a where
 
 -- | Parse a signed/sized value from a sequence of CWs
 genParse :: Integral a => Kind -> [CW] -> Maybe (a, [CW])
-genParse k (x@(CW _ (Right i)):r) | kindOf x == k = Just (fromIntegral i, r)
-genParse _ _                                      = Nothing
+genParse k (x@(CW _ (CWInteger i)):r) | kindOf x == k = Just (fromIntegral i, r)
+genParse _ _                                          = Nothing
 
 -- | Base case, that comes in handy if there are no real variables
 instance SatModel () where
@@ -211,8 +210,8 @@ instance SatModel Integer where
   parseCWs = genParse KUnbounded
 
 instance SatModel AlgReal where
-  parseCWs (CW KReal (Left i) : r) = Just (i, r)
-  parseCWs _                       = Nothing
+  parseCWs (CW KReal (CWAlgReal i) : r) = Just (i, r)
+  parseCWs _                            = Nothing
 
 -- when reading a list; go as long as we can (maximal-munch)
 -- note that this never fails..
@@ -398,7 +397,7 @@ standardSolver config script cleanErrs failure success = do
     msg $ nmSolver ++ " output:\n" ++ either id (intercalate "\n") contents
     case contents of
       Left e   -> return $ failure (lines e)
-      Right xs -> return $ success xs
+      Right xs -> return $ success (mergeSExpr xs)
 
 -- | A variant of 'readProcessWithExitCode'; except it knows about continuation strings
 -- and can speak SMT-Lib2 (just a little).
@@ -437,3 +436,23 @@ runSolver verb execPath opts script
                        mapM_ putStrLn mls
         mapM_ send mls
       cleanUp r
+
+-- | In case the SMT-Lib solver returns a response over multiple lines, compress them so we have
+-- each S-Expression spanning only a single line. We'll ignore things line parentheses inside quotes
+-- etc., as it should not be an issue
+mergeSExpr :: [String] -> [String]
+mergeSExpr []       = []
+mergeSExpr (x:xs)
+ | d == 0 = x : mergeSExpr xs
+ | True   = let (f, r) = grab d xs in unwords (x:f) : mergeSExpr r
+ where d = parenDiff x
+       parenDiff :: String -> Int
+       parenDiff = go 0
+         where go i ""       = i
+               go i ('(':cs) = let i'= i+1 in i' `seq` go i' cs
+               go i (')':cs) = let i'= i-1 in i' `seq` go i' cs
+               go i (_  :cs) = go i cs
+       grab i ls
+         | i <= 0    = ([], ls)
+       grab _ []     = ([], [])
+       grab i (l:ls) = let (a, b) = grab (i+parenDiff l) ls in (l:a, b)

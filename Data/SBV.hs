@@ -5,7 +5,6 @@
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
 -- Stability   :  experimental
--- Portability :  portable
 --
 -- (The sbv library is hosted at <http://github.com/LeventErkok/sbv>.
 -- Comments, bug reports, and patches are always welcome.)
@@ -35,18 +34,20 @@
 --
 -- In particular, the sbv library introduces the types:
 --
---   * 'SBool': Symbolic Booleans (bits)
+--   * 'SBool': Symbolic Booleans (bits).
 --
---   * 'SWord8', 'SWord16', 'SWord32', 'SWord64': Symbolic Words (unsigned)
+--   * 'SWord8', 'SWord16', 'SWord32', 'SWord64': Symbolic Words (unsigned).
 --
---   * 'SInt8',  'SInt16',  'SInt32',  'SInt64': Symbolic Ints (signed)
+--   * 'SInt8',  'SInt16',  'SInt32',  'SInt64': Symbolic Ints (signed).
 --
---   * 'SArray', 'SFunArray': Flat arrays of symbolic values
+--   * 'SArray', 'SFunArray': Flat arrays of symbolic values.
 --
---   * Symbolic polynomials over GF(2^n), polynomial arithmetic, and CRCs
+--   * Symbolic polynomials over GF(2^n), polynomial arithmetic, and CRCs.
 --
 --   * Uninterpreted constants and functions over symbolic values, with user
---     defined SMT-Lib axioms
+--     defined SMT-Lib axioms.
+--
+--   * Uninterpreted sorts, and proofs over such sorts, potentially with axioms.
 --
 -- The user can construct ordinary Haskell programs using these types, which behave
 -- very similar to their concrete counterparts. In particular these types belong to the
@@ -103,7 +104,7 @@ module Data.SBV (
   , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger
   -- ** Creating a list of symbolic variables
   -- $createSyms
-  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReal, sReals
+  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReal, sReals, toSReal
   -- *** Abstract SBV type
   , SBV
   -- *** Arrays of symbolic values
@@ -139,12 +140,10 @@ module Data.SBV (
   , bAnd, bOr, bAny, bAll
   -- ** Pretty-printing and reading numbers in Hex & Binary
   , PrettyNum(..), readBin
-  -- * Uninterpreted constants and functions
-  , Uninterpreted(..)
-  -- ** Accessing the handle
-  , SBVUF, sbvUFName
-  -- ** Adding axioms
-  , addAxiom
+
+  -- * Uninterpreted sorts, constants, and functions
+  -- $uninterpreted
+  , Uninterpreted(..), addAxiom
 
   -- * Properties, proofs, and satisfiability
   -- $proveIntro
@@ -194,7 +193,7 @@ module Data.SBV (
   , compileToSMTLib, generateSMTBenchmarks
 
   -- * Test case generation
-  , genTest, getTestValues, TestVectors, TestStyle(..), renderTest, CW(..), Kind(..), cwToBool
+  , genTest, getTestValues, TestVectors, TestStyle(..), renderTest, CW(..), HasKind(..), Kind(..), cwToBool
 
   -- * Code generation from symbolic programs
   -- $cCodeGeneration
@@ -213,7 +212,11 @@ module Data.SBV (
   , cgReturn, cgReturnArr
 
   -- ** Code generation with uninterpreted functions
-  , cgAddPrototype, cgAddDecl, cgAddLDFlags, cgIntegerSize
+  , cgAddPrototype, cgAddDecl, cgAddLDFlags
+
+  -- ** Code generation with 'SInteger' and 'SReal' types
+  -- $unboundedCGen
+  , cgIntegerSize, cgSRealType, CgSRealType(..)
 
   -- ** Compilation to C
   , compileToC, compileToCLib
@@ -251,13 +254,13 @@ import Data.Word
 {- $progIntro
 The SBV library is really two things:
 
-  * A framework for writing bit-precise programs in Haskell
+  * A framework for writing symbolic programs in Haskell, i.e., programs operating on
+    symbolic values along with the usual concrete counterparts.
 
-  * A framework for proving properties of such programs using SMT solvers
+  * A framework for proving properties of such programs using SMT solvers.
 
-In this first section we will look at the constructs that will let us construct such
-programs in Haskell. The goal is to have a "seamless" experience, i.e., program in
-the usual Haskell style without distractions of symbolic coding. While Haskell helps
+The programming goal of SBV is to provide a /seamless/ experience, i.e., let people program
+in the usual Haskell style without distractions of symbolic coding. While Haskell helps
 in some aspects (the 'Num' and 'Bits' classes simplify coding), it makes life harder
 in others. For instance, @if-then-else@ only takes 'Bool' as a test in Haskell, and
 comparisons ('>' etc.) only return 'Bool's. Clearly we would like these values to be
@@ -341,6 +344,17 @@ certainly possible, currently only C is supported.) The generated code will perf
 same instructions in all calls, so they have predictable timing properties as well. The generated code
 has no loops or jumps, and is typically quite fast. While the generated code can be large due to complete unrolling,
 these characteristics make them suitable for use in hard real-time systems, as well as in traditional computing.
+-}
+
+{- $unboundedCGen
+The types 'SInteger' and 'SReal' are unbounded quantities that have no direct counterparts in the C language. Therefore,
+it is not possible to generate standard C code for SBV programs using these types, unless custom libraries are available. To
+overcome this, SBV allows the user to explicitly set what the corresponding types should be for these two cases, using
+the functions below. Note that while these mappings will produce valid C code, the resulting code will be subject to
+overflow/underflows for 'SInteger', and rounding for 'SReal', so there is an implicit loss of precision.
+
+If the user does /not/ specify these mappings, then SBV will
+refuse to compile programs that involve these types.
 -}
 
 {- $moduleExportIntro
@@ -479,6 +493,31 @@ Note that while 'constrain' can be used freely, 'pConstrain' is only allowed in 
 'genTest' or 'quickCheck'. Calls to 'pConstrain' in a prove/sat call will be rejected as SBV does not
 deal with probabilistic constraints when it comes to satisfiability and proofs.
 Also, both 'constrain' and 'pConstrain' calls during code-generation will also be rejected, for similar reasons.
+-}
+
+{- $uninterpreted
+Users can introduce new uninterpreted sorts simply by defining a data-type in Haskell and registering it as such. The
+following example demonstrates:
+
+  @
+     data B = B deriving (Eq, Ord, Data, Typeable)
+     instance SymWord  B
+     instance HasKind  B
+  @
+
+(Note that you'll also need to use the language pragma @DeriveDataTypeable@, and import @Data.Generics@ for the above to work.) 
+
+Once GHC implements derivable user classes (<http://hackage.haskell.org/trac/ghc/ticket/5462>), we will be able to simplify this to:
+
+  @
+     data B = B deriving (Eq, Ord, Data, Typeable, SymWord, HasKind)
+  @
+
+This is all it takes to introduce 'B' as an uninterpreted sort in SBV, which makes the type @SBV B@ automagically become available as the type
+of symbolic values that ranges over 'B' values.
+
+Uninterpreted functions over both uninterpreted and regular sorts can be declared using the facilities introduced by
+the 'Uninterpreted' class.
 -}
 
 {-# ANN module "HLint: ignore Use import/export shortcut" #-}

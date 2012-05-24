@@ -5,7 +5,6 @@
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
 -- Stability   :  experimental
--- Portability :  portable
 --
 -- Conversion of symbolic programs to SMTLib format, Using v1 of the standard
 -----------------------------------------------------------------------------
@@ -41,9 +40,10 @@ nonEq :: (String, CW) -> String
 nonEq (s, c) = "(not (= " ++ s ++ " " ++ cvtCW c ++ "))"
 
 -- | Translate a problem into an SMTLib1 script
-cvt :: Bool                         -- ^ has infinite precision values
+cvt :: (Bool, Bool)                 -- ^ has infinite precision integers/reals
     -> Bool                         -- ^ is this a sat problem?
     -> [String]                     -- ^ extra comments to place on top
+    -> [String]                     -- ^ uninterpreted sorts
     -> [(Quantifier, NamedSymVar)]  -- ^ inputs
     -> [Either SW (SW, [SW])]       -- ^ skolemized version of the inputs
     -> [(SW, CW)]                   -- ^ constants
@@ -55,11 +55,15 @@ cvt :: Bool                         -- ^ has infinite precision values
     -> [SW]                         -- ^ extra constraints
     -> SW                           -- ^ output variable
     -> ([String], [String])
-cvt hasInf isSat comments qinps _skolemInps consts tbls arrs uis axs asgnsSeq cstrs out
-  | hasInf
-  = error "SBV: The chosen solver does not support infinite precision values. (Use z3 instead.)"
+cvt (hasIntegers, hasReals) isSat comments sorts qinps _skolemInps consts tbls arrs uis axs asgnsSeq cstrs out
+  | hasIntegers
+  = error "SBV: Unbounded integers are not supported in the SMTLib1/yices interface. (Use z3 instead.)"
+  | hasReals
+  = error "SBV: The real value domain is not supported in the SMTLib1/yices interface. (Use z3 instead.)"
   | not ((isSat && allExistential) || (not isSat && allUniversal))
   = error "SBV: The chosen solver does not support quantified variables. (Use z3 instead.)"
+  | not (null sorts)
+  = error "SBV: The chosen solver does not support unintepreted sorts. (Use z3 instead.)"
   | True
   = (pre, post)
   where quantifiers    = map fst qinps
@@ -157,13 +161,13 @@ cvtCnst (s, c) = " :assumption (= " ++ show s ++ " " ++ cvtCW c ++ ")"
 
 -- no need to worry about Int/Real here as we don't support them with the SMTLib1 interface..
 cvtCW :: CW -> String
-cvtCW x@(CW _ (Right v)) | not (hasSign x) = "bv" ++ show v ++ "[" ++ show (intSizeOf x) ++ "]"
+cvtCW x@(CW _ (CWInteger v)) | not (hasSign x) = "bv" ++ show v ++ "[" ++ show (intSizeOf x) ++ "]"
 -- signed numbers (with 2's complement representation) is problematic
 -- since there's no way to put a bvneg over a positive number to get minBound..
 -- Hence, we punt and use binary notation in that particular case
-cvtCW x@(CW _ (Right v))  | v == least = mkMinBound (intSizeOf x)
+cvtCW x@(CW _ (CWInteger v))  | v == least = mkMinBound (intSizeOf x)
   where least = negate (2 ^ intSizeOf x)
-cvtCW x@(CW _ (Right v)) = negIf (v < 0) $ "bv" ++ show (abs v) ++ "[" ++ show (intSizeOf x) ++ "]"
+cvtCW x@(CW _ (CWInteger v)) = negIf (v < 0) $ "bv" ++ show (abs v) ++ "[" ++ show (intSizeOf x) ++ "]"
 cvtCW x = error $ "SBV.SMTLib1.cvtCW: Unexpected CW: " ++ show x -- unbounded/real, shouldn't reach here
 
 negIf :: Bool -> String -> String
@@ -248,6 +252,7 @@ cvtExp inp@(SBVApp op args)
 cvtType :: SBVType -> String
 cvtType (SBVType []) = error "SBV.SMT.SMTLib1.cvtType: internal: received an empty type!"
 cvtType (SBVType xs) = unwords $ map sh xs
-  where sh (KBounded _ s) = "BitVec[" ++ show s ++ "]"
-        sh KUnbounded     = die "unbounded Integer"
-        sh KReal          = die "real value"
+  where sh (KBounded _ s)     = "BitVec[" ++ show s ++ "]"
+        sh KUnbounded         = die "unbounded Integer"
+        sh KReal              = die "real value"
+        sh (KUninterpreted s) = die $ "uninterpreted sort: " ++ s
