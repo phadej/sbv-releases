@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       2.3
+Version:       2.4
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -15,7 +15,9 @@ Description:   Express properties about Haskell programs and automatically prove
                >   Falsifiable. Counter-example:
                >     x = 128 :: SWord8
                .
-               The library introduces the following types and concepts:
+               The SBV library uses Microsoft's Z3 SMT solver (<http://research.microsoft.com/en-us/um/redmond/projects/z3/>) as the default underlying solver. It is also possible to use SRI's Yices SMT solver with SBV as well (<http://yices.csl.sri.com/download-yices2.shtml>), although the Z3 binding is much more richer.
+               .
+               SBV introduces the following types and concepts:
                .
                  * 'SBool': Symbolic Booleans (bits)
                .
@@ -115,22 +117,8 @@ Library
                     TypeOperators
                     TypeSynonymInstances
   Build-Depends   : base >= 4 && < 5
-                  -- Be careful with versions of packages that come with "latest" GHC,
-                  -- need to update this as new GHC releases incorporate new packages
-                  , array               == 0.4.0.0
-                  , containers          == 0.4.2.1
-                  , deepseq             == 1.3.0.0
-                  , directory           == 1.1.0.2
-                  , filepath            == 1.3.0.0
-                  , old-time            == 1.1.0.0
-                  , pretty              == 1.1.1.0
-                  , process             == 1.1.0.1
-                  -- following are pure hackage packages, thus we can be more relaxed
-                  , mtl                 >= 2.1.2
-                  , QuickCheck          >= 2.5
-                  , random              >= 1.0.1.1
-                  , strict-concurrency  >= 0.2.4.1
-                  , syb                 >= 0.3.7
+                  , array, containers, deepseq, directory, filepath, old-time
+                  , pretty, process, mtl, QuickCheck, random, strict-concurrency, syb
   Exposed-modules : Data.SBV
                   , Data.SBV.Internals
                   , Data.SBV.Examples.BitPrecise.BitTricks
@@ -192,20 +180,13 @@ Executable SBVUnitTests
                     RankNTypes
                     ScopedTypeVariables
                     TupleSections
-  Build-depends   : base >= 4 && < 5
-                  -- Be careful with versions of packages that come with "latest" GHC,
-                  -- need to update this as new GHC releases incorporate new packages
-                  , directory == 1.1.0.2
-                  , filepath  == 1.3.0.0
-                  , process   == 1.1.0.1
-                  -- apparently HUnit 1.2.5.0 has some cabal issues..
-                  , HUnit     == 1.2.4.3
-                  -- self dependence on sbv
-                  , sbv
+  Build-depends   : base  >= 4 && < 5
+                  , HUnit, directory, filepath, process, sbv
   Hs-Source-Dirs  : SBVUnitTest
   main-is         : SBVUnitTest.hs
   Other-modules   : SBVUnitTestBuildTime
                   , SBVTest
+                  , SBVTestCollection
                   , Examples.Arrays.Memory
                   , Examples.Basics.BasicTests
                   , Examples.Basics.Higher
@@ -221,7 +202,8 @@ Executable SBVUnitTests
                   , Examples.Puzzles.Temperature
                   , Examples.Uninterpreted.Uninterpreted
                   , TestSuite.Arrays.Memory
-                  , TestSuite.Basics.Arithmetic
+                  , TestSuite.Basics.ArithNoSolver
+                  , TestSuite.Basics.ArithSolver
                   , TestSuite.Basics.BasicTests
                   , TestSuite.Basics.Higher
                   , TestSuite.Basics.Index
@@ -260,3 +242,14 @@ Executable SBVUnitTests
                   , TestSuite.Uninterpreted.AUF
                   , TestSuite.Uninterpreted.Function
                   , TestSuite.Uninterpreted.Uninterpreted
+
+Test-Suite SBVBasicTests
+  type            : exitcode-stdio-1.0
+  default-language: Haskell2010
+  ghc-options     : -Wall
+  Build-depends   : base >= 4 && < 5
+                  , HUnit, directory, filepath, sbv
+  Hs-Source-Dirs  : SBVUnitTest
+  main-is         : SBVBasicTests.hs
+  Other-modules   : SBVBasicTests
+                  , SBVTestCollection

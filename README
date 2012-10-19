@@ -24,9 +24,14 @@ The predicates are just regular Haskell functions over symbolic signed and unsig
 bit-vectors. Functions for checking satisfiability (`sat` and `allSat`) are also provided.
 In addition, functions using the SBV library can be compiled to C automatically.
 
+Build Status
+============
+SBV uses Travis-CI's automated build infrastructure, making a build for each commit. Current build status:
+[![Build Status](https://secure.travis-ci.org/LeventErkok/sbv.png?branch=master)](http://travis-ci.org/LeventErkok/sbv)
+
 Resources
 =========
-The sbv library is hosted at [http://github.com/LeventErkok/sbv](http://github.com/LeventErkok/sbv).
+The SBV library is hosted at [http://github.com/LeventErkok/sbv](http://github.com/LeventErkok/sbv).
 
 The hackage site
 [http://hackage.haskell.org/package/sbv](http://hackage.haskell.org/package/sbv) is the best place
@@ -36,7 +41,7 @@ Comments, bug reports, and patches are always welcome.
 
 Overview
 ========
-The Haskell sbv library provides support for dealing with Symbolic Bit Vectors
+The Haskell SBV library provides support for dealing with Symbolic Bit Vectors
 in Haskell. It introduces the types:
 
   - `SBool`: Symbolic Booleans (bits).
@@ -60,9 +65,9 @@ Furthermore, functions built out of these types can also be:
   - proven correct via an external SMT solver (the `prove` function)
   - checked for satisfiability (the `sat`, and `allSat` functions)
   - used in synthesis (the `sat` function with existentials)
-  - optimized with respect to cost functions (the 'optimize', 'maximize', and 'minimize' functions)
+  - optimized with respect to cost functions (the `optimize`, `maximize`, and `minimize` functions)
   - quick-checked
-  - used in concrete test case generation (the 'genTest' function), rendered as values in various
+  - used in concrete test case generation (the `genTest` function), rendered as values in various
     languages, including Haskell and C.
 
 If a predicate is not valid, `prove` will return a counterexample: An 
@@ -75,16 +80,16 @@ values directly to C, rendering them as straight-line C programs.
 
 Use of SMT solvers
 ==================
-The sbv library uses third-party SMT solvers via the standard SMT-Lib interface: 
-[http://goedel.cs.uiowa.edu/smtlib/](http://goedel.cs.uiowa.edu/smtlib/)
+The SBV library uses third-party SMT solvers via the standard SMT-Lib interface
+[http://goedel.cs.uiowa.edu/smtlib/](http://goedel.cs.uiowa.edu/smtlib/).
 
-The SBV library is designed to work with any SMT-Lib compliant SMT-solver, although integration with
-individual solvers require some library work.
-Currently, we fully support 
-the [Z3](http://research.microsoft.com/en-us/um/redmond/projects/z3/) SMT solver from Microsoft,
-and 
-the [Yices](http://yices.csl.sri.com) SMT solver from SRI.
-Both solvers are available for Windows, Linux, and Mac OSX.
+Currently, we fully support the
+[Z3](http://research.microsoft.com/en-us/um/redmond/projects/z3/) SMT solver from Microsoft,
+and the [Yices](http://yices.csl.sri.com) SMT solver from SRI. Both solvers are available
+for Windows, Linux, and Mac OSX.
+
+Other SMT solvers can be used with SBV as well, with a relatively easy hook-up mechanism. Please
+do get in touch if you plan to use SBV with any other solver.
 
 Prerequisites
 =============
@@ -98,7 +103,7 @@ Make sure the executables for the solvers are in your path. Alternatively, you c
 of the yices executable in the environment variable `SBV_YICES` and the options to yices in `SBV_YICES_OPTIONS`.
 (The default for the latter is `"-m -f"`). Similarly the environment variables `SBV_Z3` and `SBV_Z3_OPTIONS` can
 be used for choosing executable location and custom options for Z3.  (The default for the latter is
-`"/in /smt2"` on Windows and `"-in -smt2"` on Mac and Linux. You should use Z3 version 3.2 or later.)
+`"/in /smt2"` on Windows and `"-in -smt2"` on Mac and Linux. You should use Z3 version 4.1 or later.)
 
 Examples
 =========
@@ -110,7 +115,7 @@ the Puzzles directory.
 
 Installation
 ============
-The sbv library is cabalized. Assuming you have cabal/ghc installed, it should merely
+The SBV library is cabalized. Assuming you have cabal/ghc installed, it should merely
 be a matter of running 
      
          cabal install sbv
@@ -118,11 +123,11 @@ be a matter of running
 Please see [INSTALL](http://github.com/LeventErkok/sbv/tree/master/INSTALL) for installation details.
 
 Once the installation is done, you can run the executable `SBVUnitTests` which will
-execute the regression test suite for sbv on your machine to ensure all is well.
+execute the regression test suite for SBV on your machine to ensure all is well.
 
 Copyright, License
 ==================
-The sbv library is distributed with the BSD3 license. See [COPYRIGHT](http://github.com/LeventErkok/sbv/tree/master/COPYRIGHT) for
+The SBV library is distributed with the BSD3 license. See [COPYRIGHT](http://github.com/LeventErkok/sbv/tree/master/COPYRIGHT) for
 details. The [LICENSE](http://github.com/LeventErkok/sbv/tree/master/LICENSE) file contains
 the [BSD3](http://en.wikipedia.org/wiki/BSD_licenses) verbiage.
 

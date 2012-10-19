@@ -13,12 +13,13 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Data.SBV.BitVectors.AlgReals (AlgReal(..), mkPolyReal, algRealToSMTLib2, algRealToHaskell, mergeAlgReals) where
+module Data.SBV.BitVectors.AlgReals (AlgReal(..), mkPolyReal, algRealToSMTLib2, algRealToHaskell, mergeAlgReals, isExactRational, algRealStructuralEqual, algRealStructuralCompare) where
 
-import Data.List     (sortBy, isPrefixOf, partition)
-import Data.Ratio    ((%), numerator, denominator)
-import Data.Function (on)
+import Data.List       (sortBy, isPrefixOf, partition)
+import Data.Ratio      ((%), numerator, denominator)
+import Data.Function   (on)
 import System.Random
+import Test.QuickCheck (Arbitrary(..))
 
 -- | Algebraic reals. Note that the representation is left abstract. We represent
 -- rational results explicitly, while the roots-of-polynomials are represented
@@ -27,10 +28,16 @@ data AlgReal = AlgRational Bool Rational          -- bool says it's exact (i.e.,
              | AlgPolyRoot (Integer,  Polynomial) -- which root
                            (Maybe String)         -- approximate decimal representation with given precision, if available
 
+-- | Check wheter a given argument is an exact rational
+isExactRational :: AlgReal -> Bool
+isExactRational (AlgRational True _) = True
+isExactRational _                    = False
+
 -- | A univariate polynomial, represented simply as a
 -- coefficient list. For instance, "5x^3 + 2x - 5" is
 -- represented as [(5, 3), (2, 1), (-5, 0)]
 newtype Polynomial = Polynomial [(Integer, Integer)]
+                   deriving (Eq, Ord)
 
 -- | Construct a poly-root real with a given approximate value (either as a decimal, or polynomial-root)
 mkPolyReal :: Either (Bool, String) (Integer, [(Integer, Integer)]) -> AlgReal
@@ -95,6 +102,18 @@ instance Eq AlgReal where
 instance Ord AlgReal where
   AlgRational True a `compare` AlgRational True b = a `compare` b
   a                  `compare` b                  = error $ "AlgReal.compare: unsupported arguments: " ++ show (a, b)
+
+-- Structural equality and ord for AlgReal; used when constants are Map keys
+algRealStructuralEqual   :: AlgReal -> AlgReal -> Bool
+AlgRational a b `algRealStructuralEqual` AlgRational c d = (a, b) == (c, d)
+AlgPolyRoot a b `algRealStructuralEqual` AlgPolyRoot c d = (a, b) == (c, d)
+_               `algRealStructuralEqual` _               = False
+
+algRealStructuralCompare :: AlgReal -> AlgReal -> Ordering
+AlgRational a b `algRealStructuralCompare` AlgRational c d = (a, b) `compare` (c, d)
+AlgRational _ _ `algRealStructuralCompare` AlgPolyRoot _ _ = LT
+AlgPolyRoot _ _ `algRealStructuralCompare` AlgRational _ _ = GT
+AlgPolyRoot a b `algRealStructuralCompare` AlgPolyRoot c d = (a, b) `compare` (c, d)
 
 instance Num AlgReal where
   (+)         = lift2 "+"      (+)
@@ -198,3 +217,7 @@ mergeAlgReals _ f@(AlgRational e1 r1) s@(AlgRational e2 r2)
   | e1                   = f
   | e2                   = s
 mergeAlgReals m _ _ = error m
+
+-- Quickcheck instance
+instance Arbitrary AlgReal where
+  arbitrary = AlgRational True `fmap` arbitrary

@@ -14,6 +14,7 @@
 {-# LANGUAGE TypeSynonymInstances   #-}
 {-# LANGUAGE BangPatterns           #-}
 {-# LANGUAGE PatternGuards          #-}
+{-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE MultiParamTypeClasses  #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
@@ -21,7 +22,7 @@
 {-# LANGUAGE Rank2Types             #-}
 
 module Data.SBV.BitVectors.Model (
-    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), BVDivisible(..), Uninterpreted(..), SNum
+    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), SNum
   , sbvTestBit, sbvPopCount, setBitTo, allEqual, allDifferent, oneIf, blastBE, blastLE
   , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
   , constrain, pConstrain, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
@@ -60,16 +61,16 @@ liftSym1 opS _    _    a@(SBV k _)        = SBV k $ Right $ cache c
    where c st = do swa <- sbvToSW st a
                    opS st k swa
 
-liftSym2 :: (State -> Kind -> SW -> SW -> IO SW) -> (AlgReal -> AlgReal -> AlgReal) -> (Integer -> Integer -> Integer) -> SBV b -> SBV b -> SBV b
-liftSym2 _   opCR opCI   (SBV k (Left a)) (SBV _ (Left b)) = SBV k $ Left  $ mapCW2 opCR opCI noUnint2 a b
-liftSym2 opS _    _    a@(SBV k _)        b                = SBV k $ Right $ cache c
+liftSym2 :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgReal -> AlgReal -> AlgReal) -> (Integer -> Integer -> Integer) -> SBV b -> SBV b -> SBV b
+liftSym2 _   okCW opCR opCI   (SBV k (Left a)) (SBV _ (Left b)) | okCW a b = SBV k $ Left  $ mapCW2 opCR opCI noUnint2 a b
+liftSym2 opS _    _    _    a@(SBV k _)        b                           = SBV k $ Right $ cache c
   where c st = do sw1 <- sbvToSW st a
                   sw2 <- sbvToSW st b
                   opS st k sw1 sw2
 
-liftSym2B :: (State -> Kind -> SW -> SW -> IO SW) -> (AlgReal -> AlgReal -> Bool) -> (Integer -> Integer -> Bool) -> SBV b -> SBV b -> SBool
-liftSym2B _   opCR opCI (SBV _ (Left a)) (SBV _ (Left b)) = literal (liftCW2 opCR opCI noUnint2 a b)
-liftSym2B opS _    _    a                b                = SBV (KBounded False 1) $ Right $ cache c
+liftSym2B :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgReal -> AlgReal -> Bool) -> (Integer -> Integer -> Bool) -> SBV b -> SBV b -> SBool
+liftSym2B _   okCW opCR opCI (SBV _ (Left a)) (SBV _ (Left b)) | okCW a b = literal (liftCW2 opCR opCI noUnint2 a b)
+liftSym2B opS _    _    _    a                b                           = SBV (KBounded False 1) $ Right $ cache c
   where c st = do sw1 <- sbvToSW st a
                   sw2 <- sbvToSW st b
                   opS st (KBounded False 1) sw1 sw2
@@ -199,6 +200,11 @@ instance SymWord AlgReal where
   literal    = SBV KReal . Left . CW KReal . CWAlgReal
   fromCW (CW _ (CWAlgReal a)) = a
   fromCW c                    = error $ "SymWord.AlgReal: Unexpected non-real value: " ++ show c
+  -- AlgReal needs its own definition of isConcretely
+  -- to make sure we avoid using unimplementable Haskell functions
+  isConcretely (SBV KReal (Left (CW KReal (CWAlgReal v)))) p
+     | isExactRational v = p v
+  isConcretely _ _       = False
   mbMaxBound = Nothing
   mbMinBound = Nothing
 
@@ -343,8 +349,8 @@ for natural reasons..
 -}
 
 instance EqSymbolic (SBV a) where
-  (.==) = liftSym2B (mkSymOpSC (eqOpt trueSW)  Equal)    (==) (==)
-  (./=) = liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) (/=) (/=)
+  (.==) = liftSym2B (mkSymOpSC (eqOpt trueSW)  Equal)    rationalCheck (==) (==)
+  (./=) = liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) rationalCheck (/=) (/=)
 
 eqOpt :: SW -> SW -> SW -> Maybe SW
 eqOpt w x y = if x == y then Just w else Nothing
@@ -353,19 +359,19 @@ instance SymWord a => OrdSymbolic (SBV a) where
   x .< y
     | Just mb <- mbMaxBound, x `isConcretely` (== mb) = false
     | Just mb <- mbMinBound, y `isConcretely` (== mb) = false
-    | True                                            = liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan)    (<)  (<)  x y
+    | True                                            = liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan)    rationalCheck (<)  (<)  x y
   x .<= y
     | Just mb <- mbMinBound, x `isConcretely` (== mb) = true
     | Just mb <- mbMaxBound, y `isConcretely` (== mb) = true
-    | True                                            = liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq)       (<=) (<=) x y
+    | True                                            = liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq)       rationalCheck (<=) (<=) x y
   x .> y
     | Just mb <- mbMinBound, x `isConcretely` (== mb) = false
     | Just mb <- mbMaxBound, y `isConcretely` (== mb) = false
-    | True                                            = liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) (>)  (>)  x y
+    | True                                            = liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) rationalCheck (>)  (>)  x y
   x .>= y
     | Just mb <- mbMaxBound, x `isConcretely` (== mb) = true
     | Just mb <- mbMinBound, y `isConcretely` (== mb) = true
-    | True                                            = liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq)    (>=) (>=) x y
+    | True                                            = liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq)    rationalCheck (>=) (>=) x y
 
 -- Bool
 instance EqSymbolic Bool where
@@ -536,16 +542,16 @@ instance (Ord a, Num a, SymWord a) => Num (SBV a) where
   x + y
     | x `isConcretely` (== 0) = y
     | y `isConcretely` (== 0) = x
-    | True                    = liftSym2 (mkSymOp Plus)  (+) (+) x y
+    | True                    = liftSym2 (mkSymOp Plus)  rationalCheck (+) (+) x y
   x * y
     | x `isConcretely` (== 0) = 0
     | y `isConcretely` (== 0) = 0
     | x `isConcretely` (== 1) = y
     | y `isConcretely` (== 1) = x
-    | True                    = liftSym2 (mkSymOp Times) (*) (*) x y
+    | True                    = liftSym2 (mkSymOp Times) rationalCheck (*) (*) x y
   x - y
     | y `isConcretely` (== 0) = x
-    | True                    = liftSym2 (mkSymOp Minus) (-) (-) x y
+    | True                    = liftSym2 (mkSymOp Minus) rationalCheck (-) (-) x y
   abs a
    | hasSign a = ite (a .< 0) (-a) a
    | True      = a
@@ -555,9 +561,20 @@ instance (Ord a, Num a, SymWord a) => Num (SBV a) where
 
 instance Fractional SReal where
   fromRational = literal . fromRational
-  x / y        = liftSym2 (mkSymOp Quot) (/) die x y
+  x / y        = liftSym2 (mkSymOp Quot) rationalCheck (/) die x y
    where -- should never happen
          die = error $ "impossible: non-real value found in Fractional.SReal " ++ show (x, y)
+
+-- Most operations on concrete rationals require a compatibility check
+rationalCheck :: CW -> CW -> Bool
+rationalCheck a b = case (cwVal a, cwVal b) of
+                     (CWAlgReal x, CWAlgReal y) -> isExactRational x && isExactRational y
+                     _                          -> True
+
+-- same as above, for SBV's
+rationalSBVCheck :: SBV a -> SBV a -> Bool
+rationalSBVCheck (SBV KReal (Left a)) (SBV KReal (Left b)) = rationalCheck a b
+rationalSBVCheck _                    _                    = True
 
 -- Some operations will never be used on Reals, but we need fillers:
 noReal :: String -> AlgReal -> AlgReal -> AlgReal
@@ -574,17 +591,17 @@ instance (Bits a, SymWord a) => Bits (SBV a) where
     | x `isConcretely` (== -1) = y
     | y `isConcretely` (== 0)  = 0
     | y `isConcretely` (== -1) = x
-    | True                     = liftSym2 (mkSymOp  And) (noReal ".&.") (.&.) x y
+    | True                     = liftSym2 (mkSymOp  And) (const (const True)) (noReal ".&.") (.&.) x y
   x .|. y
     | x `isConcretely` (== 0)  = y
     | x `isConcretely` (== -1) = -1
     | y `isConcretely` (== 0)  = x
     | y `isConcretely` (== -1) = -1
-    | True                     = liftSym2 (mkSymOp  Or)  (noReal ".|.") (.|.) x y
+    | True                     = liftSym2 (mkSymOp  Or)  (const (const True)) (noReal ".|.") (.|.) x y
   x `xor` y
     | x `isConcretely` (== 0)  = y
     | y `isConcretely` (== 0)  = x
-    | True                     = liftSym2 (mkSymOp  XOr) (noReal "xor") xor x y
+    | True                     = liftSym2 (mkSymOp  XOr) (const (const True)) (noReal "xor") xor x y
   complement = liftSym1 (mkSymOp1 Not) (noRealUnary "Not") complement
   bitSize  _ = intSizeOf (undefined :: a)
   isSigned _ = hasSign   (undefined :: a)
@@ -731,99 +748,159 @@ enumCvt w x = case unliteral x of
                 Nothing -> error $ "Enum." ++ w ++ "{" ++ showType x ++ "}: Called on symbolic value " ++ show x
                 Just v  -> fromIntegral v
 
--- | The 'BVDivisible' class captures the essence of division of words.
+-- | The 'SDivisible' class captures the essence of division.
 -- Unfortunately we cannot use Haskell's 'Integral' class since the 'Real'
 -- and 'Enum' superclasses are not implementable for symbolic bit-vectors.
--- However, 'quotRem' makes perfect sense, and the 'BVDivisible' class captures
+-- However, 'quotRem' and 'divMod' makes perfect sense, and the 'SDivisible' class captures
 -- this operation. One issue is how division by 0 behaves. The verification
 -- technology requires total functions, and there are several design choices
 -- here. We follow Isabelle/HOL approach of assigning the value 0 for division
 -- by 0. Therefore, we impose the following law:
 --
---     @ x `bvQuotRem` 0 = (0, x) @
+--     @ x `sQuotRem` 0 = (0, x) @
+--     @ x `sDivMod`  0 = (0, x) @
 --
 -- Note that our instances implement this law even when @x@ is @0@ itself.
 --
--- Minimal complete definition: 'bvQuotRem'
-class BVDivisible a where
-  bvQuotRem :: a -> a -> (a, a)
+-- NB. 'quot' truncates toward zero, while 'div' truncates toward negative infinity.
+--
+-- Minimal complete definition: 'sQuotRem', 'sDivMod'
+class SDivisible a where
+  sQuotRem :: a -> a -> (a, a)
+  sDivMod  :: a -> a -> (a, a)
+  sQuot    :: a -> a -> a
+  sRem     :: a -> a -> a
+  sDiv     :: a -> a -> a
+  sMod     :: a -> a -> a
 
-instance BVDivisible Word64 where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+  x `sQuot` y = fst $ x `sQuotRem` y
+  x `sRem`  y = snd $ x `sQuotRem` y
+  x `sDiv`  y = fst $ x `sDivMod`  y
+  x `sMod`  y = snd $ x `sDivMod`  y
 
-instance BVDivisible Int64 where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+instance SDivisible Word64 where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
 
-instance BVDivisible Word32 where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+instance SDivisible Int64 where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
 
-instance BVDivisible Int32 where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+instance SDivisible Word32 where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
 
-instance BVDivisible Word16 where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+instance SDivisible Int32 where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
 
-instance BVDivisible Int16 where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+instance SDivisible Word16 where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
 
-instance BVDivisible Word8 where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+instance SDivisible Int16 where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
 
-instance BVDivisible Int8 where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+instance SDivisible Word8 where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
 
-instance BVDivisible Integer where
-  bvQuotRem x 0 = (0, x)
-  bvQuotRem x y = x `quotRem` y
+instance SDivisible Int8 where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
 
-instance BVDivisible CW where
-  bvQuotRem a b
+instance SDivisible Integer where
+  sQuotRem x 0 = (0, x)
+  sQuotRem x y = x `quotRem` y
+  sDivMod  x 0 = (0, x)
+  sDivMod  x y = x `divMod` y
+
+instance SDivisible CW where
+  sQuotRem a b
     | CWInteger x <- cwVal a, CWInteger y <- cwVal b
-    = let (r1, r2) = bvQuotRem x y in (a { cwVal = CWInteger r1 }, b { cwVal = CWInteger r2 })
-  bvQuotRem a b = error $ "SBV.liftQRem: impossible, unexpected args received: " ++ show (a, b)
+    = let (r1, r2) = sQuotRem x y in (a { cwVal = CWInteger r1 }, b { cwVal = CWInteger r2 })
+  sQuotRem a b = error $ "SBV.sQuotRem: impossible, unexpected args received: " ++ show (a, b)
+  sDivMod a b
+    | CWInteger x <- cwVal a, CWInteger y <- cwVal b
+    = let (r1, r2) = sDivMod x y in (a { cwVal = CWInteger r1 }, b { cwVal = CWInteger r2 })
+  sDivMod a b = error $ "SBV.sDivMod: impossible, unexpected args received: " ++ show (a, b)
 
-instance BVDivisible SWord64 where
-  bvQuotRem = liftQRem
+instance SDivisible SWord64 where
+  sQuotRem = liftQRem
+  sDivMod  = liftDMod
 
-instance BVDivisible SInt64 where
-  bvQuotRem = liftQRem
+instance SDivisible SInt64 where
+  sQuotRem = liftQRem
+  sDivMod  = liftDMod
 
-instance BVDivisible SWord32 where
-  bvQuotRem = liftQRem
+instance SDivisible SWord32 where
+  sQuotRem = liftQRem
+  sDivMod  = liftDMod
 
-instance BVDivisible SInt32 where
-  bvQuotRem = liftQRem
+instance SDivisible SInt32 where
+  sQuotRem = liftQRem
+  sDivMod  = liftDMod
 
-instance BVDivisible SWord16 where
-  bvQuotRem = liftQRem
+instance SDivisible SWord16 where
+  sQuotRem = liftQRem
+  sDivMod  = liftDMod
 
-instance BVDivisible SInt16 where
-  bvQuotRem = liftQRem
+instance SDivisible SInt16 where
+  sQuotRem = liftQRem
+  sDivMod  = liftDMod
 
-instance BVDivisible SWord8 where
-  bvQuotRem = liftQRem
+instance SDivisible SWord8 where
+  sQuotRem = liftQRem
+  sDivMod  = liftDMod
 
-instance BVDivisible SInt8 where
-  bvQuotRem = liftQRem
+instance SDivisible SInt8 where
+  sQuotRem = liftQRem
+  sDivMod  = liftDMod
 
-instance BVDivisible SInteger where
-  bvQuotRem = liftQRem
-
-liftQRem :: (SymWord a, Num a, BVDivisible a) => SBV a -> SBV a -> (SBV a, SBV a)
+liftQRem :: (SymWord a, Num a, SDivisible a) => SBV a -> SBV a -> (SBV a, SBV a)
 liftQRem x y = ite (y .== 0) (0, x) (qr x y)
-  where qr (SBV sgnsz (Left a)) (SBV _ (Left b)) = let (q, r) = bvQuotRem a b in (SBV sgnsz (Left q), SBV sgnsz (Left r))
+  where qr (SBV sgnsz (Left a)) (SBV _ (Left b)) = let (q, r) = sQuotRem a b in (SBV sgnsz (Left q), SBV sgnsz (Left r))
         qr a@(SBV sgnsz _)      b                = (SBV sgnsz (Right (cache (mk Quot))), SBV sgnsz (Right (cache (mk Rem))))
                 where mk o st = do sw1 <- sbvToSW st a
                                    sw2 <- sbvToSW st b
                                    mkSymOp o st sgnsz sw1 sw2
+
+-- Conversion from quotRem (truncate to 0) to divMod (truncate towards negative infinity)
+liftDMod :: (SymWord a, Num a, SDivisible a, SDivisible (SBV a)) => SBV a -> SBV a -> (SBV a, SBV a)
+liftDMod x y = ite (y .== 0) (0, x) $ ite (signum r .== negate (signum y)) (q-1, r+y) qr
+   where qr@(q, r) = x `sQuotRem` y
+
+-- SInteger instance for quotRem/divMod are tricky!
+-- SMT-Lib only has Euclidean operations, but Haskell
+-- uses "truncate to 0" for quotRem, and "truncate to negative infinity" for divMod.
+-- So, we cannot just use the above liftings directly.
+instance SDivisible SInteger where
+  sDivMod = liftDMod
+  sQuotRem x y
+    | not (isSymbolic x || isSymbolic y)
+    = liftQRem x y
+    | True
+    = ite (y .== 0) (0, x) (qE+i, rE-i*y)
+    where (qE, rE) = liftQRem x y   -- for integers, this is euclidean due to SMTLib semantics
+          i = ite (x .>= 0 ||| rE .== 0) 0
+            $ ite (y .>  0)              1 (-1)
 
 -- Quickcheck interface
 
@@ -890,7 +967,7 @@ instance SymWord a => Mergeable (SBV a) where
   -- Of course, we do not have a way of enforcing that in the user code, but
   -- at least our library code respects that invariant.
   symbolicMerge t a@(SBV{}) b@(SBV{})
-     | Just av <- unliteral a, Just bv <- unliteral b, av == bv
+     | Just av <- unliteral a, Just bv <- unliteral b, rationalSBVCheck a b, av == bv
      = a
      | True
      = SBV k $ Right $ cache c
