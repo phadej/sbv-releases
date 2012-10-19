@@ -1,7 +1,14 @@
 Hackage: <http://hackage.haskell.org/package/sbv>
 GitHub:  <http://github.com/LeventErkok/sbv>
 
-Latest Hackage released version: 2.4
+Latest Hackage released version: 2.5
+
+======================================================================
+Version 2.5, 2012-10-19
+
+  - Remove dependency on the hackage package strict-concurrency, as
+    hackage can no longer compile it due to some dependency mismatch.
+  - Add forgotten Real class instance for the type 'AlgReal'
 
 ======================================================================
 Version 2.4, 2012-10-19
