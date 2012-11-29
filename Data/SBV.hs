@@ -113,7 +113,7 @@ module Data.SBV (
   , STree, readSTree, writeSTree, mkSTree
   -- ** Operations on symbolic words
   -- *** Word level
-  , sbvTestBit, sbvPopCount, setBitTo, oneIf, lsb, msb
+  , sbvTestBit, sbvPopCount, sbvShiftLeft, sbvShiftRight, sbvSignedShiftArithRight, setBitTo, oneIf, lsb, msb
   -- *** List level
   , allEqual, allDifferent
   -- *** Blasting/Unblasting
@@ -130,8 +130,8 @@ module Data.SBV (
   , EqSymbolic(..)
   -- ** Symbolic ordering
   , OrdSymbolic(..)
-  -- ** Symbolic numbers
-  , SNum
+  -- ** Symbolic integral numbers
+  , SIntegral
   -- ** Division
   , SDivisible(..)
   -- ** The Boolean class

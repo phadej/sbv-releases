@@ -21,8 +21,9 @@
 {-# LANGUAGE Rank2Types             #-}
 
 module Data.SBV.BitVectors.Model (
-    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), SNum
-  , sbvTestBit, sbvPopCount, setBitTo, allEqual, allDifferent, oneIf, blastBE, blastLE
+    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), SIntegral
+  , sbvTestBit, sbvPopCount, setBitTo, sbvShiftLeft, sbvShiftRight, sbvSignedShiftArithRight
+  , allEqual, allDifferent, oneIf, blastBE, blastLE
   , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
   , constrain, pConstrain, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
@@ -455,30 +456,30 @@ instance (OrdSymbolic a, OrdSymbolic b, OrdSymbolic c, OrdSymbolic d, OrdSymboli
   (a0, b0, c0, d0, e0, f0, g0) .< (a1, b1, c1, d1, e1, f1, g1) =    (a0, b0, c0, d0, e0, f0) .<  (a1, b1, c1, d1, e1, f1)
                                                                ||| ((a0, b0, c0, d0, e0, f0) .== (a1, b1, c1, d1, e1, f1) &&& g0 .< g1)
 
--- | Symbolic Numbers. This is a simple class that simply incorporates all 'OrdSymbolic' and
--- 'Num' values together, simplifying writing polymorphic type-signatures that work for all
+-- | Symbolic Numbers. This is a simple class that simply incorporates all number like
+-- base types together, simplifying writing polymorphic type-signatures that work for all
 -- symbolic numbers, such as 'SWord8', 'SInt8' etc. For instance, we can write a generic
 -- list-minimum function as follows:
 --
 -- @
---    mm :: SNum a => [a] -> a
+--    mm :: SIntegral a => [SBV a] -> SBV a
 --    mm = foldr1 (\a b -> ite (a .<= b) a b)
 -- @
 --
--- It is similar to the standard 'Num' class, except ranging over symbolic instances.
-class (OrdSymbolic a, Num a) => SNum a
+-- It is similar to the standard 'Integral' class, except ranging over symbolic instances.
+class (SymWord a, Num a, Bits a) => SIntegral a
 
--- 'SNum' Instances, including all possible variants except 'SBool', since booleans
+-- 'SIntegral' Instances, including all possible variants except 'Bool', since booleans
 -- are not numbers.
-instance SNum SWord8
-instance SNum SWord16
-instance SNum SWord32
-instance SNum SWord64
-instance SNum SInt8
-instance SNum SInt16
-instance SNum SInt32
-instance SNum SInt64
-instance SNum SInteger
+instance SIntegral Word8
+instance SIntegral Word16
+instance SIntegral Word32
+instance SIntegral Word64
+instance SIntegral Int8
+instance SIntegral Int16
+instance SIntegral Int32
+instance SIntegral Int64
+instance SIntegral Integer
 
 -- Boolean combinators
 instance Boolean SBool where
@@ -671,6 +672,39 @@ sbvPopCount x
 -- the condition to set/clear happens to be symbolic.
 setBitTo :: (Num a, Bits a, SymWord a) => SBV a -> Int -> SBool -> SBV a
 setBitTo x i b = ite b (setBit x i) (clearBit x i)
+
+-- | Generalization of 'shiftL', when the shift-amount is symbolic. Since Haskell's
+-- 'shiftL' only takes an 'Int' as the shift amount, it cannot be used when we have
+-- a symbolic amount to shift with. The shift amount must be an unsigned quantity.
+sbvShiftLeft :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
+sbvShiftLeft x i
+  | isSigned i = error "sbvShiftLeft: shift amount should be unsigned"
+  | True       = select [x `shiftL` k | k <- [0 .. bitSize x - 1]] 0 i
+
+-- | Generalization of 'shiftR', when the shift-amount is symbolic. Since Haskell's
+-- 'shiftR' only takes an 'Int' as the shift amount, it cannot be used when we have
+-- a symbolic amount to shift with. The shift amount must be an unsigned quantity.
+--
+-- NB. If the shiftee is signed, then this is an arithmetic shift; otherwise it's logical,
+-- following the usual Haskell convention. See 'sbvSignedShiftArithRight' for a variant
+-- that explicitly uses the msb as the sign bit, even for unsigned underlying types.
+sbvShiftRight :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
+sbvShiftRight x i
+  | isSigned i = error "sbvShiftRight: shift amount should be unsigned"
+  | True       = select [x `shiftR` k | k <- [0 .. bitSize x - 1]] 0 i
+
+-- | Arithmetic shift-right with a symbolic unsigned shift amount. This is equivalent
+-- to 'sbvShiftRight' when the argument is signed. However, if the argument is unsigned,
+-- then it explicitly treats its msb as a sign-bit, and uses it as the bit that
+-- gets shifted in. Useful when using the underlying unsigned bit representation to implement
+-- custom signed operations. Note that there is no direct Haskell analogue of this function.
+sbvSignedShiftArithRight:: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
+sbvSignedShiftArithRight x i
+  | isSigned i = error "sbvSignedShiftArithRight: shift amount should be unsigned"
+  | isSigned x = sbvShiftRight x i
+  | True       = ite (msb x)
+                     (complement (sbvShiftRight (complement x) i))
+                     (sbvShiftRight x i)
 
 -- | Little-endian blasting of a word into its bits. Also see the 'FromBits' class.
 blastLE :: (Num a, Bits a, SymWord a) => SBV a -> [SBool]
@@ -932,7 +966,7 @@ class Mergeable a where
    -- | Total indexing operation. @select xs default index@ is intuitively
    -- the same as @xs !! index@, except it evaluates to @default@ if @index@
    -- overflows
-   select        :: (Bits b, SymWord b, Integral b) => [a] -> a -> SBV b -> a
+   select :: (SymWord b, Num b) => [a] -> a -> SBV b -> a
    -- default definitions
    ite s a b
     | Just t <- unliteral s = if t then a else b
@@ -945,11 +979,8 @@ class Mergeable a where
    -- list is really humongous, which is not very common in general. (Also,
    -- for the case when the list is bit-vectors, we use SMT tables anyhow.)
    select xs err ind
-    | isReal ind              = error "SBV.select: unsupported real valued select/index expression"
-    | Just i <- unliteral ind = if i < 0 || i >= genericLength xs
-                                then err
-                                else xs `genericIndex` i
-    | True                    = walk xs ind err
+    | isReal ind = error "SBV.select: unsupported real valued select/index expression"
+    | True       = walk xs ind err
     where walk []     _ acc = acc
           walk (e:es) i acc = walk es (i-1) (ite (i .== 0) e acc)
 
@@ -1037,12 +1068,12 @@ instance SymWord a => Mergeable (SBV a) where
                                  ()                                   -> newExpr st k (SBVApp Ite [swt, swa, swb])
   -- Custom version of select that translates to SMT-Lib tables at the base type of words
   select xs err ind
-    | Just i <- unliteral ind
-    = let i' :: Integer
-          i' = fromIntegral i
-      in if i' < 0 || i' >= genericLength xs then err else genericIndex xs i'
-  select [] err _   = err
-  select xs err ind = SBV kElt $ Right $ cache r
+    | SBV _ (Left c) <- ind = case cwVal c of
+                                CWInteger i -> if i < 0 || i >= genericLength xs
+                                               then err
+                                               else xs `genericIndex` i
+                                _           -> error "SBV.select: unsupported real valued select/index expression"
+  select xs err ind  = SBV kElt $ Right $ cache r
      where kInd = kindOf ind
            kElt = kindOf err
            r st  = do sws <- mapM (sbvToSW st) xs
