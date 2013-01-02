@@ -17,9 +17,7 @@
 module Data.SBV.Provers.Prover (
          SMTSolver(..), SMTConfig(..), Predicate, Provable(..)
        , ThmResult(..), SatResult(..), AllSatResult(..), SMTResult(..)
-       , isSatisfiable, isTheorem
-       , isSatisfiableWithin, isTheoremWithin
-       , numberOfModels
+       , isSatisfiable, isSatisfiableWith, isTheorem, isTheoremWith
        , Equality(..)
        , prove, proveWith
        , sat, satWith
@@ -27,7 +25,7 @@ module Data.SBV.Provers.Prover (
        , isVacuous, isVacuousWith
        , solve
        , SatModel(..), Modelable(..), displayModels, extractModels
-       , yices, z3, defaultSMTCfg
+       , yices, z3, cvc4, defaultSMTCfg
        , compileToSMTLib, generateSMTBenchmarks
        , sbvCheckSolverInstallation
        ) where
@@ -45,6 +43,7 @@ import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.Model
 import Data.SBV.SMT.SMT
 import Data.SBV.SMT.SMTLib
+import qualified Data.SBV.Provers.CVC4  as CVC4
 import qualified Data.SBV.Provers.Yices as Yices
 import qualified Data.SBV.Provers.Z3    as Z3
 import Data.SBV.Utils.TDiff
@@ -63,6 +62,9 @@ mkConfig s isSMTLib2 tweaks = SMTConfig { verbose = False
                                         , satCmd        = "(check-sat)"
                                         }
 
+-- | Default configuration for the CVC4 SMT Solver.
+cvc4 :: SMTConfig
+cvc4 = mkConfig CVC4.cvc4 True []
 -- | Default configuration for the Yices SMT Solver.
 yices :: SMTConfig
 yices = mkConfig Yices.yices False []
@@ -277,61 +279,55 @@ isVacuous :: Provable a => a -> IO Bool
 isVacuous = isVacuousWith defaultSMTCfg
 
 -- Decision procedures (with optional timeout)
-checkTheorem :: Provable a => Maybe Int -> a -> IO (Maybe Bool)
-checkTheorem mbTo p = do r <- pr p
-                         case r of
-                           ThmResult (Unsatisfiable _) -> return $ Just True
-                           ThmResult (Satisfiable _ _) -> return $ Just False
-                           ThmResult (TimeOut _)       -> return Nothing
-                           _                           -> error $ "SBV.isTheorem: Received:\n" ++ show r
-   where pr = maybe prove (\i -> proveWith (defaultSMTCfg{timeOut = Just i})) mbTo
 
-checkSatisfiable :: Provable a => Maybe Int -> a -> IO (Maybe Bool)
-checkSatisfiable mbTo p = do r <- s p
-                             case r of
-                               SatResult (Satisfiable _ _) -> return $ Just True
-                               SatResult (Unsatisfiable _) -> return $ Just False
-                               SatResult (TimeOut _)       -> return Nothing
-                               _                           -> error $ "SBV.isSatisfiable: Received: " ++ show r
-   where s = maybe sat (\i -> satWith defaultSMTCfg{timeOut = Just i}) mbTo
-
--- | Checks theoremhood within the given time limit of @i@ seconds.
+-- | Check whether a given property is a theorem, with an optional time out and the given solver.
 -- Returns @Nothing@ if times out, or the result wrapped in a @Just@ otherwise.
-isTheoremWithin :: Provable a => Int -> a -> IO (Maybe Bool)
-isTheoremWithin i = checkTheorem (Just i)
+isTheoremWith :: Provable a => SMTConfig -> Maybe Int -> a -> IO (Maybe Bool)
+isTheoremWith cfg mbTo p = do r <- proveWith cfg{timeOut = mbTo} p
+                              case r of
+                                ThmResult (Unsatisfiable _) -> return $ Just True
+                                ThmResult (Satisfiable _ _) -> return $ Just False
+                                ThmResult (TimeOut _)       -> return Nothing
+                                _                           -> error $ "SBV.isTheorem: Received:\n" ++ show r
 
--- | Checks satisfiability within the given time limit of @i@ seconds.
+-- | Check whether a given property is satisfiable, with an optional time out and the given solver.
 -- Returns @Nothing@ if times out, or the result wrapped in a @Just@ otherwise.
-isSatisfiableWithin :: Provable a => Int -> a -> IO (Maybe Bool)
-isSatisfiableWithin i = checkSatisfiable (Just i)
+isSatisfiableWith :: Provable a => SMTConfig -> Maybe Int -> a -> IO (Maybe Bool)
+isSatisfiableWith cfg mbTo p = do r <- satWith cfg{timeOut = mbTo} p
+                                  case r of
+                                    SatResult (Satisfiable _ _) -> return $ Just True
+                                    SatResult (Unsatisfiable _) -> return $ Just False
+                                    SatResult (TimeOut _)       -> return Nothing
+                                    _                           -> error $ "SBV.isSatisfiable: Received: " ++ show r
 
--- | Checks theoremhood
-isTheorem :: Provable a => a -> IO Bool
-isTheorem p = fromJust `fmap` checkTheorem Nothing p
+-- | Checks theoremhood within the given optional time limit of @i@ seconds.
+-- Returns @Nothing@ if times out, or the result wrapped in a @Just@ otherwise.
+isTheorem :: Provable a => Maybe Int -> a -> IO (Maybe Bool)
+isTheorem = isTheoremWith defaultSMTCfg
 
--- | Checks satisfiability
-isSatisfiable :: Provable a => a -> IO Bool
-isSatisfiable p = fromJust `fmap` checkSatisfiable Nothing p
-
--- | Returns the number of models that satisfy the predicate, as it would
--- be returned by 'allSat'. Note that the number of models is always a
--- finite number, and hence this will always return a result. Of course,
--- computing it might take quite long, as it literally generates and counts
--- the number of satisfying models.
-numberOfModels :: Provable a => a -> IO Int
-numberOfModels p = do AllSatResult (_, rs) <- allSat p
-                      return $ length rs
+-- | Checks satisfiability within the given optional time limit of @i@ seconds.
+-- Returns @Nothing@ if times out, or the result wrapped in a @Just@ otherwise.
+isSatisfiable :: Provable a => Maybe Int -> a -> IO (Maybe Bool)
+isSatisfiable = isSatisfiableWith defaultSMTCfg
 
 -- | Compiles to SMT-Lib and returns the resulting program as a string. Useful for saving
 -- the result to a file for off-line analysis, for instance if you have an SMT solver that's not natively
--- supported out-of-the box by the SBV library. If 'smtLib2' parameter is False, then we will generate
--- SMTLib1 output, otherwise we will generate SMTLib2 output
-compileToSMTLib :: Provable a => Bool -> a -> IO String
-compileToSMTLib smtLib2 a = do
+-- supported out-of-the box by the SBV library. It takes two booleans:
+--
+--    * smtLib2: If 'True', will generate SMT-Lib2 output, otherwise SMT-Lib1 output
+--
+--    * isSat  : If 'True', will translate it as a SAT query, i.e., in the positive. If 'False', will
+--               translate as a PROVE query, i.e., it will negate the result. (In this case, the check-sat
+--               call to the SMT solver will produce UNSAT if the input is a theorem, as usual.)
+compileToSMTLib :: Provable a => Bool   -- ^ If True, output SMT-Lib2, otherwise SMT-Lib1
+                              -> Bool   -- ^ If True, translate directly, otherwise negate the goal. (Use True for SAT queries, False for PROVE queries.)
+                              -> a
+                              -> IO String
+compileToSMTLib smtLib2 isSat a = do
         t <- getClockTime
         let comments = ["Created on " ++ show t]
             cvt = if smtLib2 then toSMTLib2 else toSMTLib1
-        (_, _, _, _, smtLibPgm) <- simulate cvt defaultSMTCfg False comments a
+        (_, _, _, _, smtLibPgm) <- simulate cvt defaultSMTCfg isSat comments a
         let out = show smtLibPgm
         if smtLib2 -- append check-sat in case of smtLib2
            then return $ out ++ "\n(check-sat)\n"
@@ -339,12 +335,14 @@ compileToSMTLib smtLib2 a = do
 
 -- | Create both SMT-Lib1 and SMT-Lib2 benchmarks. The first argument is the basename of the file,
 -- SMT-Lib1 version will be written with suffix ".smt1" and SMT-Lib2 version will be written with
--- suffix ".smt2"
-generateSMTBenchmarks :: Provable a => FilePath -> a -> IO ()
-generateSMTBenchmarks f a = gen False smt1 >> gen True smt2
+-- suffix ".smt2". The 'Bool' argument controls whether this is a SAT instance, i.e., translate the query
+-- directly, or a PROVE instance, i.e., translate the negated query. (See the second boolean argument to
+-- 'compileToSMTLib' for details.)
+generateSMTBenchmarks :: Provable a => Bool -> FilePath -> a -> IO ()
+generateSMTBenchmarks isSat f a = gen False smt1 >> gen True smt2
   where smt1     = addExtension f "smt1"
         smt2     = addExtension f "smt2"
-        gen b fn = do s <- compileToSMTLib b a
+        gen b fn = do s <- compileToSMTLib b isSat a
                       writeFile fn s
                       putStrLn $ "Generated SMT benchmark " ++ show fn ++ "."
 
@@ -451,6 +449,7 @@ simulate converter config isSat comments predicate = do
 runProofOn :: SMTLibConverter -> SMTConfig -> Bool -> [String] -> Result -> IO SMTProblem
 runProofOn converter config isSat comments res =
         let isTiming = timing config
+            defLogic = defaultLogic (solver config)
         in case res of
              Result boundInfo usorts _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs [o@(SW (KBounded False 1) _)] ->
                timeIf isTiming "translation" $ let uiMap     = mapMaybe arrayUIKind arrs ++ map unintFnUIKind uis
@@ -462,7 +461,7 @@ runProofOn converter config isSat comments res =
                                                                 where go []                   (_,  sofar) = reverse sofar
                                                                       go ((ALL, (v, _)):rest) (us, sofar) = go rest (v:us, Left v : sofar)
                                                                       go ((EX,  (v, _)):rest) (us, sofar) = go rest (us,   Right (v, reverse us) : sofar)
-                                               in return (is, uiMap, skolemMap, usorts, converter boundInfo isSat comments usorts is skolemMap consts tbls arrs uis axs pgm cstrs o)
+                                               in return (is, uiMap, skolemMap, usorts, converter boundInfo defLogic isSat comments usorts is skolemMap consts tbls arrs uis axs pgm cstrs o)
              Result _boundInfo _us _qcInfo _codeSegs _is _consts _tbls _arrs _uis _axs _pgm _cstrs os -> case length os of
                            0  -> error $ "Impossible happened, unexpected non-outputting result\n" ++ show res
                            1  -> error $ "Impossible happened, non-boolean output in " ++ show os

@@ -1,7 +1,37 @@
 Hackage: <http://hackage.haskell.org/package/sbv>
-GitHub:  <http://github.com/LeventErkok/sbv>
+GitHub:  <http://leventerkok.github.com/sbv/>
 
-Latest Hackage released version: 2.8
+Latest Hackage released version: 2.9
+
+======================================================================
+Version 2.9, 2013-01-02
+
+  - Add support for the CVC4 SMT solver from New York University and
+    the University of Iowa. (http://cvc4.cs.nyu.edu/).
+    NB. Z3 remains the default solver for SBV. To use CVC4, use the
+    *With variants of the interface (i.e., proveWith, satWith, ..)
+    by passing cvc4 as the solver argument. (Similarly, use 'yices'
+    as the argument for the *With functions for invoking yices.)
+  - Latest release of Yices calls the SMT-Lib based solver executable
+    yices-smt. Updated the default value of the executable to have this
+    name for ease of use.
+  - Add an extra boolean flag to compileToSMTLib and generateSMTBenchmarks
+    functions to control if the translation should keep the query as is
+    (for SAT cases), or negate it (for PROVE cases). Previously, this value
+    was hard-coded to do the PROVE case only.
+  - Add bridge modules, to simplify use of different solvers. You can now say:
+
+       import Data.SBV.Bridge.CVC4
+       import Data.SBV.Bridge.Yices
+       import Data.SBV.Bridge.Z3
+   
+    to pick the appropriate default solver. if you simply 'import Data.SBV', then
+    you will get the default SMT solver, which is currently Z3. The value
+    'defaultSMTSolver' refers to z3 (currently), and 'sbvCurrentSolver' refers
+    to the chosen solver as determined by the imported module. (The latter is
+    useful for modifying options to the SMT solver in an solver-agnostic way.)
+  - Various improvements to Z3 model parsing routines.
+  - New web page for SBV: http://leventerkok.github.com/sbv/ is now online.
 
 ======================================================================
 Version 2.8, 2012-11-29

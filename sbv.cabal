@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       2.8
+Version:       2.9
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -15,7 +15,20 @@ Description:   Express properties about Haskell programs and automatically prove
                >   Falsifiable. Counter-example:
                >     x = 128 :: SWord8
                .
-               The SBV library uses Microsoft's Z3 SMT solver (<http://research.microsoft.com/en-us/um/redmond/projects/z3/>) as the default underlying solver. It is also possible to use SRI's Yices SMT solver with SBV as well (<http://yices.csl.sri.com/download-yices2.shtml>), although the Z3 binding is much more richer.
+               You can pick the SMT solver you want to use by importing the appropriate module. The SBV library currently
+               works with the the following SMT solvers:
+               .
+                  [@import "Data.SBV"@]
+                  Picks the default solver, which is currently set to be Z3. (Might change in the future!)
+               .
+                  [@import "Data.SBV.Bridge.Z3"@]
+                  Picks Z3 from Microsoft (<http://z3.codeplex.com/>).
+               .
+                  [@import "Data.SBV.Bridge.Yices"@]
+                  Picks Yices from SRI (<http://yices.csl.sri.com/>) 
+               .
+                  [@import "Data.SBV.Bridge.CVC4"@]
+                  Picks CVC4 from New York University and the University of Iowa (<http://cvc4.cs.nyu.edu>) 
                .
                SBV introduces the following types and concepts:
                .
@@ -76,12 +89,12 @@ Description:   Express properties about Haskell programs and automatically prove
                .
                Release notes can be seen at: <http://github.com/LeventErkok/sbv/blob/master/RELEASENOTES>.
 
-Copyright:     Levent Erkok, 2010-2012
+Copyright:     Levent Erkok, 2010-2013
 License:       BSD3
 License-file:  LICENSE
 Stability:     Experimental
 Author:        Levent Erkok
-Homepage:      http://github.com/LeventErkok/sbv
+Homepage:      http://leventerkok.github.com/sbv/
 Bug-reports:   http://github.com/LeventErkok/sbv/issues
 Maintainer:    Levent Erkok (erkokl@gmail.com)
 Build-Type:    Simple
@@ -119,6 +132,9 @@ Library
                   , array, containers, deepseq, directory, filepath, old-time
                   , pretty, process, mtl, QuickCheck, random, syb
   Exposed-modules : Data.SBV
+                  , Data.SBV.Bridge.CVC4
+                  , Data.SBV.Bridge.Yices
+                  , Data.SBV.Bridge.Z3
                   , Data.SBV.Internals
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
@@ -162,6 +178,7 @@ Library
                   , Data.SBV.SMT.SMTLib2
                   , Data.SBV.Provers.Prover
                   , Data.SBV.Provers.SExpr
+                  , Data.SBV.Provers.CVC4
                   , Data.SBV.Provers.Yices
                   , Data.SBV.Provers.Z3
                   , Data.SBV.Tools.ExpectedValue
