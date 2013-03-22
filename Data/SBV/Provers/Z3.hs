@@ -49,13 +49,22 @@ z3 = SMTSolver {
                                                    [] -> ""
                                                    ts -> unlines $ "; --- user given solver tweaks ---" : ts ++ ["; --- end of user given tweaks ---"]
                                         dlim = printRealPrec cfg'
-                                        ppDecLim = "(set-option :pp-decimal-precision " ++ show dlim ++ ")\n"
+                                        ppDecLim = "(set-option :pp.decimal_precision " ++ show dlim ++ ")\n"
                                         script = SMTScript {scriptBody = tweaks ++ ppDecLim ++ pgm, scriptModel = Just (cont skolemMap)}
                                     if dlim < 1
                                        then error $ "SBV.Z3: printRealPrec value should be at least 1, invalid value received: " ++ show dlim
                                        else standardSolver cfg' script cleanErrs (ProofError cfg') (interpretSolverOutput cfg' (extractMap isSat qinps modelMap))
          , xformExitCode  = id
-         , defaultLogic   = Nothing
+         , capabilities   = SolverCapabilities {
+                                  capSolverName              = "Z3"
+                                , mbDefaultLogic             = Nothing
+                                , supportsMacros             = True
+                                , supportsProduceModels      = True
+                                , supportsQuantifiers        = True
+                                , supportsUninterpretedSorts = True
+                                , supportsUnboundedInts      = True
+                                , supportsReals              = True
+                                }
          }
  where -- Get rid of the following when z3_4.0 is out
        cleanErrs = intercalate "\n" . filter (not . junk) . lines
@@ -76,7 +85,7 @@ z3 = SMTSolver {
               extract (Left s)        = ["(echo \"((" ++ show s ++ " " ++ zero (kindOf s) ++ "))\")"]
               extract (Right (s, [])) = let g = "(get-value (" ++ show s ++ "))" in getVal (kindOf s) g
               extract (Right (s, ss)) = let g = "(get-value ((" ++ show s ++ concat [' ' : zero (kindOf a) | a <- ss] ++ ")))" in getVal (kindOf s) g
-              getVal KReal g = ["(set-option :pp-decimal false)", g, "(set-option :pp-decimal true)", g]
+              getVal KReal g = ["(set-option :pp.decimal false)", g, "(set-option :pp.decimal true)", g]
               getVal _     g = [g]
        addTimeOut Nothing  o   = o
        addTimeOut (Just i) o
@@ -93,9 +102,9 @@ extractMap isSat qinps _modelMap solverLines =
         sortByNodeId = sortBy (compare `on` fst)
         inps -- for "sat", display the prefix existentials. For completeness, we will drop
              -- only the trailing foralls. Exception: Don't drop anything if it's all a sequence of foralls
-             | isSat = if all (== ALL) (map fst qinps)
-                       then map snd qinps
-                       else map snd $ reverse $ dropWhile ((== ALL) . fst) $ reverse qinps
+             | isSat = map snd $ if all (== ALL) (map fst qinps)
+                                 then qinps
+                                 else reverse $ dropWhile ((== ALL) . fst) $ reverse qinps
              -- for "proof", just display the prefix universals
              | True  = map snd $ takeWhile ((== ALL) . fst) qinps
         squashReals :: [(Int, (String, CW))] -> [(Int, (String, CW))]

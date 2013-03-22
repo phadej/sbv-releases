@@ -33,7 +33,7 @@ import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.PrettyNum
 import Data.SBV.Utils.TDiff
 
--- | Solver configuration. See also 'z3', 'yices', and 'cvc4', which are instantiations of this type for those solvers, with
+-- | Solver configuration. See also 'z3', 'yices', 'cvc4', and 'boolector, which are instantiations of this type for those solvers, with
 -- reasonable defaults. In particular, custom configuration can be created by varying those values. (Such as @z3{verbose=True}@.)
 --
 -- Most fields are self explanatory. The notion of precision for printing algebraic reals stems from the fact that such values does
@@ -68,8 +68,8 @@ data SMTSolver = SMTSolver {
        , executable     :: String               -- ^ The path to its executable
        , options        :: [String]             -- ^ Options to provide to the solver
        , engine         :: SMTEngine            -- ^ The solver engine, responsible for interpreting solver output
-       , defaultLogic   :: Maybe String         -- ^ Default logic to set, if any
        , xformExitCode  :: ExitCode -> ExitCode -- ^ Should we re-interpret exit codes. Most solvers behave rationally, i.e., id will do. Some (like CVC4) don't.
+       , capabilities   :: SolverCapabilities   -- ^ Various capabilities of the solver
        }
 
 -- | A model, as returned by a solver
@@ -409,12 +409,14 @@ standardSolver config script cleanErrs failure success = do
 runSolver :: SMTConfig -> FilePath -> [String] -> SMTScript -> IO (ExitCode, String, String)
 runSolver cfg execPath opts script
  | isNothing $ scriptModel script
- = readProcessWithExitCode execPath opts (scriptBody script)
+ = let checkCmd | useSMTLib2 cfg = '\n' : satCmd cfg
+                | True           = ""
+   in readProcessWithExitCode execPath opts (scriptBody script ++ checkCmd)
  | True
  = do (send, ask, cleanUp) <- do
                 (inh, outh, errh, pid) <- runInteractiveProcess execPath opts Nothing Nothing
                 let send l    = hPutStr inh (l ++ "\n") >> hFlush inh
-                    recv      = hGetLine outh
+                    recv      = hGetLine outh `C.catch` (\(_ :: C.SomeException) -> return "")
                     ask l     = send l >> recv
                     cleanUp r = do outMVar <- newEmptyMVar
                                    out <- hGetContents outh
@@ -429,9 +431,9 @@ runSolver cfg execPath opts script
                                    ex <- waitForProcess pid
                                    -- if the status is unknown, prepare for the possibility of not having a model
                                    -- TBD: This is rather crude and potentially Z3 specific
-                                   if "unknown" `isPrefixOf` r && "error" `isInfixOf` (out ++ err)
-                                      then return (ExitSuccess, r               , "")
-                                      else return (ex,          r ++ "\n" ++ out, err)
+                                   return $ if "unknown" `isPrefixOf` r && "error" `isInfixOf` (out ++ err)
+                                            then (ExitSuccess, r               , "")
+                                            else (ex,          r ++ "\n" ++ out, err)
                 return (send, ask, cleanUp)
       mapM_ send (lines (scriptBody script))
       r <- ask $ satCmd cfg

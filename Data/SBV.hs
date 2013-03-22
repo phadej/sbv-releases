@@ -84,6 +84,8 @@
 --
 --   * CVC4 from New York University and University of Iowa: <http://cvc4.cs.nyu.edu/>
 --
+--   * Boolector from Johannes Kepler University: <http://fmv.jku.at/boolector/>
+--
 -- Support for other compliant solvers can be added relatively easily, please
 -- get in touch if there is a solver you'd like to see included.
 ---------------------------------------------------------------------------------
@@ -118,11 +120,13 @@ module Data.SBV (
   , SymArray(..), SArray, SFunArray, mkSFunArray
   -- *** Full binary trees
   , STree, readSTree, writeSTree, mkSTree
-  -- ** Operations on symbolic words
+  -- ** Operations on symbolic values
   -- *** Word level
   , sbvTestBit, sbvPopCount, sbvShiftLeft, sbvShiftRight, sbvSignedShiftArithRight, setBitTo, oneIf, lsb, msb
-  -- *** List level
-  , allEqual, allDifferent
+  -- *** Predicates
+  , allEqual, allDifferent, inRange, sElem
+  -- *** Addition and Multiplication with high-bits
+  , fullAdder, fullMultiplier
   -- *** Blasting/Unblasting
   , blastBE, blastLE, FromBits(..)
   -- *** Splitting, joining, and extending
@@ -191,7 +195,7 @@ module Data.SBV (
   , SatModel(..), Modelable(..), displayModels, extractModels
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), OptimizeOpts(..), SMTSolver(..), yices, z3, cvc4, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation
+  , SMTConfig(..), OptimizeOpts(..), SMTSolver(..), boolector, cvc4, yices, z3, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)

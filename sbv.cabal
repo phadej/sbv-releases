@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       2.9
+Version:       2.10
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -29,6 +29,9 @@ Description:   Express properties about Haskell programs and automatically prove
                .
                   [@import "Data.SBV.Bridge.CVC4"@]
                   Picks CVC4 from New York University and the University of Iowa (<http://cvc4.cs.nyu.edu>) 
+               .
+                  [@import "Data.SBV.Bridge.Boolector"@]
+                  Picks Boolector from Johannes Kepler University at (<http://fmv.jku.at/boolector/>).
                .
                SBV introduces the following types and concepts:
                .
@@ -100,7 +103,7 @@ Maintainer:    Levent Erkok (erkokl@gmail.com)
 Build-Type:    Simple
 Cabal-Version: >= 1.14
 Data-Files: SBVUnitTest/GoldFiles/*.gold
-Extra-Source-Files: INSTALL, README, COPYRIGHT, RELEASENOTES
+Extra-Source-Files: INSTALL, README.md, COPYRIGHT, CHANGES.md
 
 source-repository head
     type:       git
@@ -132,6 +135,7 @@ Library
                   , array, containers, deepseq, directory, filepath, old-time
                   , pretty, process, mtl, QuickCheck, random, syb
   Exposed-modules : Data.SBV
+                  , Data.SBV.Bridge.Boolector
                   , Data.SBV.Bridge.CVC4
                   , Data.SBV.Bridge.Yices
                   , Data.SBV.Bridge.Z3
@@ -162,6 +166,7 @@ Library
                   , Data.SBV.Examples.Uninterpreted.AUF
                   , Data.SBV.Examples.Uninterpreted.Deduce
                   , Data.SBV.Examples.Uninterpreted.Function
+                  , Data.SBV.Examples.Uninterpreted.Shannon
                   , Data.SBV.Examples.Uninterpreted.Sort
   Other-modules   : Data.SBV.BitVectors.AlgReals
                   , Data.SBV.BitVectors.Data
@@ -178,6 +183,7 @@ Library
                   , Data.SBV.SMT.SMTLib2
                   , Data.SBV.Provers.Prover
                   , Data.SBV.Provers.SExpr
+                  , Data.SBV.Provers.Boolector
                   , Data.SBV.Provers.CVC4
                   , Data.SBV.Provers.Yices
                   , Data.SBV.Provers.Z3
@@ -197,7 +203,7 @@ Executable SBVUnitTests
                     ScopedTypeVariables
                     TupleSections
   Build-depends   : base  >= 4 && < 5
-                  , HUnit, directory, filepath, process, sbv
+                  , HUnit, directory, filepath, process, syb, sbv
   Hs-Source-Dirs  : SBVUnitTest
   main-is         : SBVUnitTest.hs
   Other-modules   : SBVUnitTestBuildTime
@@ -258,13 +264,14 @@ Executable SBVUnitTests
                   , TestSuite.Uninterpreted.AUF
                   , TestSuite.Uninterpreted.Function
                   , TestSuite.Uninterpreted.Uninterpreted
+                  , TestSuite.Uninterpreted.Axioms
 
 Test-Suite SBVBasicTests
   type            : exitcode-stdio-1.0
   default-language: Haskell2010
   ghc-options     : -Wall
   Build-depends   : base >= 4 && < 5
-                  , HUnit, directory, filepath, sbv
+                  , HUnit, directory, filepath, syb, sbv
   Hs-Source-Dirs  : SBVUnitTest
   main-is         : SBVBasicTests.hs
   Other-modules   : SBVBasicTests
