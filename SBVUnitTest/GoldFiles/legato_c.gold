@@ -33,9 +33,16 @@ veryclean: clean
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 
 /* The boolean type */
 typedef bool SBool;
+
+/* The float type */
+typedef float SFloat;
+
+/* The double type */
+typedef double SDouble;
 
 /* Unsigned bit-vectors */
 typedef uint8_t  SWord8 ;
@@ -62,6 +69,7 @@ void legatoMult(const SWord8 x, const SWord8 y, SWord8 *hi,
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 #include <stdio.h>
 #include "legatoMult.h"
 
@@ -85,6 +93,7 @@ int main(void)
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 #include "legatoMult.h"
 
 void legatoMult(const SWord8 x, const SWord8 y, SWord8 *hi,

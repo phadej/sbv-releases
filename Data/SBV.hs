@@ -40,6 +40,14 @@
 --
 --   * 'SInt8',  'SInt16',  'SInt32',  'SInt64': Symbolic Ints (signed).
 --
+--   * 'SInteger': Unbounded signed integers.
+--
+--   * 'SReal': Algebraic-real numbers
+--
+--   * 'SFloat': IEEE-754 single-precision floating point values
+--
+--   * 'SDouble': IEEE-754 double-precision floating point values
+--
 --   * 'SArray', 'SFunArray': Flat arrays of symbolic values.
 --
 --   * Symbolic polynomials over GF(2^n), polynomial arithmetic, and CRCs.
@@ -86,6 +94,8 @@
 --
 --   * Boolector from Johannes Kepler University: <http://fmv.jku.at/boolector/>
 --
+--   * MathSAT from Fondazione Bruno Kessler and DISI-University of Trento: <http://mathsat.fbk.eu/>
+--
 -- Support for other compliant solvers can be added relatively easily, please
 -- get in touch if there is a solver you'd like to see included.
 ---------------------------------------------------------------------------------
@@ -105,15 +115,18 @@ module Data.SBV (
   -- *** Signed unbounded integers
   -- $unboundedLimitations
   , SInteger
+  -- *** IEEE-floating point numbers
+  -- $floatingPoints
+  , SFloat, SDouble, RoundingMode(..), nan, infinity, sNaN, sInfinity, fusedMA, isFPPoint
   -- *** Signed algebraic reals
   -- $algReals
-  , SReal, AlgReal
+  , SReal, AlgReal, toSReal
   -- ** Creating a symbolic variable
   -- $createSym
-  , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger
+  , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble
   -- ** Creating a list of symbolic variables
   -- $createSyms
-  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReal, sReals, toSReal
+  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReals, sFloats, sDoubles
   -- *** Abstract SBV type
   , SBV
   -- *** Arrays of symbolic values
@@ -193,9 +206,10 @@ module Data.SBV (
   -- ** Programmable model extraction
   -- $programmableExtraction
   , SatModel(..), Modelable(..), displayModels, extractModels
+  , getModelDictionaries, getModelValues, getModelUninterpretedValues
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), OptimizeOpts(..), SMTSolver(..), boolector, cvc4, yices, z3, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation
+  , SMTConfig(..), SMTLibLogic(..), Logic(..), OptimizeOpts(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
@@ -267,6 +281,13 @@ import Data.Word
 -- "Data.SBV.Bridge.Z3" directly.
 sbvCurrentSolver :: SMTConfig
 sbvCurrentSolver = z3
+
+-- | We call a FP number FPPoint if it is neither NaN, nor +/- infinity.
+-- Note that we cannot use == to test for this, as NaN does not compare equal to itself.
+isFPPoint :: (Floating a, SymWord a) => SBV a -> SBool
+isFPPoint x =     x .== x           -- gets rid of NaN's
+              &&& x .< sInfinity    -- gets rid of +inf
+              &&& x .> -sInfinity   -- gets rid of -inf
 
 -- Haddock section documentation
 {- $progIntro
@@ -420,6 +441,12 @@ SBV can deal with real numbers just fine, since the theory of reals is decidable
 <http://goedel.cs.uiowa.edu/smtlib/theories/Reals.smt2>.) In addition, by leveraging backend
 solver capabilities, SBV can also represent and solve non-linear equations involving real-variables.
 (For instance, the Z3 SMT solver, supports polynomial constraints on reals starting with v4.0.)
+-}
+
+{- $floatingPoints
+Floating point numbers are defined by the IEEE-754 standard; and correspond to Haskell's
+'Float' and 'Double' types. For SMT support with floating-point numbers, see the paper
+by Rummer and Wahl: <http://www.philipp.ruemmer.org/publications/smt-fpa.pdf>.
 -}
 
 {- $constrainIntro

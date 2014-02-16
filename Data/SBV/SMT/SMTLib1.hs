@@ -12,15 +12,16 @@
 
 module Data.SBV.SMT.SMTLib1(cvt, addNonEqConstraints) where
 
-import qualified Data.Foldable as F (toList)
+import qualified Data.Foldable as F   (toList)
+import qualified Data.Set      as Set
 import Data.List  (intercalate)
 
 import Data.SBV.BitVectors.Data
 
 -- | Add constraints to generate /new/ models. This function is used to query the SMT-solver, while
 -- disallowing a previous model.
-addNonEqConstraints :: [[(String, CW)]] -> SMTLibPgm -> Maybe String
-addNonEqConstraints nonEqConstraints (SMTLibPgm _ (aliasTable, pre, post)) = Just $ intercalate "\n" $
+addNonEqConstraints :: RoundingMode -> [[(String, CW)]] -> SMTLibPgm -> Maybe String
+addNonEqConstraints _rm nonEqConstraints (SMTLibPgm _ (aliasTable, pre, post)) = Just $ intercalate "\n" $
      pre
   ++ [ " ; --- refuted-models ---" ]
   ++ concatMap nonEqs (map (map intName) nonEqConstraints)
@@ -40,11 +41,12 @@ nonEq :: (String, CW) -> String
 nonEq (s, c) = "(not (= " ++ s ++ " " ++ cvtCW c ++ "))"
 
 -- | Translate a problem into an SMTLib1 script
-cvt :: SolverCapabilities           -- ^ capabilities of the current solver
-    -> (Bool, Bool)                 -- ^ has infinite precision integers/reals
+cvt :: RoundingMode                 -- ^ User selected rounding mode to be used for floating point arithmetic
+    -> Maybe Logic                  -- ^ SMT-Lib logic, if requested by the user
+    -> SolverCapabilities           -- ^ capabilities of the current solver
+    -> Set.Set Kind                 -- ^ kinds used
     -> Bool                         -- ^ is this a sat problem?
     -> [String]                     -- ^ extra comments to place on top
-    -> [String]                     -- ^ uninterpreted sorts
     -> [(Quantifier, NamedSymVar)]  -- ^ inputs
     -> [Either SW (SW, [SW])]       -- ^ skolemized version of the inputs
     -> [(SW, CW)]                   -- ^ constants
@@ -56,8 +58,9 @@ cvt :: SolverCapabilities           -- ^ capabilities of the current solver
     -> [SW]                         -- ^ extra constraints
     -> SW                           -- ^ output variable
     -> ([String], [String])
-cvt _solverCaps _boundInfo isSat comments _sorts qinps _skolemInps consts tbls arrs uis axs asgnsSeq cstrs out = (pre, post)
+cvt _roundingMode smtLogic _solverCaps _kindInfo isSat comments qinps _skolemInps consts tbls arrs uis axs asgnsSeq cstrs out = (pre, post)
   where logic
+         | Just l <- smtLogic                 = show l
          | null tbls && null arrs && null uis = "QF_BV"
          | True                               = "QF_AUFBV"
         inps = map (fst . snd) qinps
@@ -264,4 +267,6 @@ kindType (KBounded False 1) = "Bool"
 kindType (KBounded _ s)     = "BitVec[" ++ show s ++ "]"
 kindType KUnbounded         = die "unbounded Integer"
 kindType KReal              = die "real value"
+kindType KFloat             = die "float value"
+kindType KDouble            = die "double value"
 kindType (KUninterpreted s) = die $ "uninterpreted sort: " ++ s

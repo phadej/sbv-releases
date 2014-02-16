@@ -25,19 +25,20 @@ module Data.SBV.Provers.Prover (
        , isVacuous, isVacuousWith
        , solve
        , SatModel(..), Modelable(..), displayModels, extractModels
-       , boolector, cvc4, yices, z3, defaultSMTCfg
+       , getModelDictionaries, getModelValues, getModelUninterpretedValues
+       , boolector, cvc4, yices, z3, mathSAT, defaultSMTCfg
        , compileToSMTLib, generateSMTBenchmarks
        , sbvCheckSolverInstallation
        ) where
 
-import qualified Control.Exception as E
-
-import Control.Concurrent (forkIO, newChan, writeChan, getChanContents)
-import Control.Monad      (when, unless, void)
+import Control.Monad      (when, unless)
 import Data.List          (intercalate)
-import Data.Maybe         (fromJust, isJust, mapMaybe)
-import System.FilePath    (addExtension)
+import Data.Maybe         (mapMaybe)
+import System.FilePath    (addExtension, splitExtension)
 import System.Time        (getClockTime)
+import System.IO.Unsafe   (unsafeInterleaveIO)
+
+import qualified Data.Set as Set (Set, toList)
 
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.Model
@@ -47,6 +48,7 @@ import qualified Data.SBV.Provers.Boolector  as Boolector
 import qualified Data.SBV.Provers.CVC4       as CVC4
 import qualified Data.SBV.Provers.Yices      as Yices
 import qualified Data.SBV.Provers.Z3         as Z3
+import qualified Data.SBV.Provers.MathSAT    as MathSAT
 import Data.SBV.Utils.TDiff
 import Data.SBV.Utils.Boolean
 
@@ -61,6 +63,8 @@ mkConfig s isSMTLib2 tweaks = SMTConfig { verbose       = False
                                         , solverTweaks  = tweaks
                                         , useSMTLib2    = isSMTLib2
                                         , satCmd        = "(check-sat)"
+                                        , roundingMode  = RoundNearestTiesToEven
+                                        , useLogic      = Nothing
                                         }
 
 -- | Default configuration for the Boolector SMT solver
@@ -78,6 +82,10 @@ yices = mkConfig Yices.yices False []
 -- | Default configuration for the Z3 SMT solver
 z3 :: SMTConfig
 z3 = mkConfig Z3.z3 True ["(set-option :smt.mbqi true) ; use model based quantifier instantiation"]
+
+-- | Default configuration for the MathSAT SMT solver
+mathSAT :: SMTConfig
+mathSAT = mkConfig MathSAT.mathSAT True []
 
 -- | The default solver used by SBV. This is currently set to z3.
 defaultSMTCfg :: SMTConfig
@@ -365,11 +373,11 @@ satWith config a = simulate cvt config True [] a >>= callSolver True "Checking S
 -- | Determine if the constraints are vacuous using the given SMT-solver
 isVacuousWith :: Provable a => SMTConfig -> a -> IO Bool
 isVacuousWith config a = do
-        Result ub us tr uic is cs ts as uis ax asgn cstr _ <- runSymbolic True $ forAll_ a >>= output
+        Result ki tr uic is cs ts as uis ax asgn cstr _ <- runSymbolic True $ forAll_ a >>= output
         case cstr of
            [] -> return False -- no constraints, no need to check
            _  -> do let is'  = [(EX, i) | (_, i) <- is] -- map all quantifiers to "exists" for the constraint check
-                        res' = Result ub us tr uic is' cs ts as uis ax asgn cstr [trueSW]
+                        res' = Result ki tr uic is' cs ts as uis ax asgn cstr [trueSW]
                         cvt  = if useSMTLib2 config then toSMTLib2 else toSMTLib1
                     SatResult result <- runProofOn cvt config True [] res' >>= callSolver True "Checking Satisfiability.." SatResult config
                     case result of
@@ -384,51 +392,47 @@ allSatWith :: Provable a => SMTConfig -> a -> IO AllSatResult
 allSatWith config p = do
         let converter = if useSMTLib2 config then toSMTLib2 else toSMTLib1
         msg "Checking Satisfiability, all solutions.."
-        sbvPgm@(qinps, _, _, usorts, _) <- simulate converter config True [] p
-        unless (null usorts) $ error $  "SBV.allSat: All-sat calls are not supported in the presence of uninterpreted sorts: " ++ unwords usorts
-                                     ++ "\n    Only 'sat' and 'prove' calls are available when uninterpreted sorts are used."
-        resChan <- newChan
-        let add  = writeChan resChan . Just
-            stop = writeChan resChan Nothing
-            final r = add r >> stop
-            die m  = final (ProofError config [m])
-            -- only fork if non-verbose.. otherwise stdout gets garbled
-            fork io = if verbose config then io else void (forkIO io)
-        fork $ E.catch (go sbvPgm add stop final (1::Int) [])
-                       (\e -> die (show (e::E.SomeException)))
-        results <- getChanContents resChan
+        sbvPgm@(qinps, _, _, ki, _) <- simulate converter config True [] p
+        let usorts = [s | KUninterpreted s <- Set.toList ki]
+        unless (null usorts) $ msg $  "SBV.allSat: Uninterpreted sorts present: " ++ unwords usorts
+                                   ++ "\n               SBV will use equivalence classes to generate all-satisfying instances."
+        results <- unsafeInterleaveIO $ go sbvPgm (1::Int) []
         -- See if there are any existentials below any universals
         -- If such is the case, then the solutions are unique upto prefix existentials
         let w = ALL `elem` map fst qinps
-        return $ AllSatResult (w,  map fromJust (takeWhile isJust results))
+        return $ AllSatResult (w,  results)
   where msg = when (verbose config) . putStrLn . ("** " ++)
-        go sbvPgm add stop final = loop
+        go sbvPgm = loop
           where loop !n nonEqConsts = do
                   curResult <- invoke nonEqConsts n sbvPgm
                   case curResult of
-                    Nothing     -> stop
-                    Just (SatResult r) -> case r of
-                                            Satisfiable _ (SMTModel [] _ _) -> final r
-                                            Unknown _ (SMTModel [] _ _)     -> final r
-                                            ProofError _ _                  -> final r
-                                            TimeOut _                       -> stop
-                                            Unsatisfiable _                 -> stop
-                                            Satisfiable _ model             -> add r >> loop (n+1) (modelAssocs model : nonEqConsts)
-                                            Unknown     _ model             -> add r >> loop (n+1) (modelAssocs model : nonEqConsts)
+                    Nothing            -> return []
+                    Just (SatResult r) -> let cont model = do rest <- unsafeInterleaveIO $ loop (n+1) (modelAssocs model : nonEqConsts)
+                                                              return (r : rest)
+                                          in case r of
+                                               Satisfiable _ (SMTModel [] _ _) -> return [r]
+                                               Unknown _ (SMTModel [] _ _)     -> return [r]
+                                               ProofError _ _                  -> return [r]
+                                               TimeOut _                       -> return []
+                                               Unsatisfiable _                 -> return []
+                                               Satisfiable _ model             -> cont model
+                                               Unknown     _ model             -> cont model
         invoke nonEqConsts n (qinps, modelMap, skolemMap, _, smtLibPgm) = do
                msg $ "Looking for solution " ++ show n
-               case addNonEqConstraints qinps nonEqConsts smtLibPgm of
+               case addNonEqConstraints (roundingMode config) qinps nonEqConsts smtLibPgm of
                  Nothing ->  -- no new constraints added, stop
                             return Nothing
                  Just finalPgm -> do msg $ "Generated SMTLib program:\n" ++ finalPgm
-                                     smtAnswer <- engine (solver config) config True qinps modelMap skolemMap finalPgm
+                                     smtAnswer <- engine (solver config) (updateName (n-1) config) True qinps modelMap skolemMap finalPgm
                                      msg "Done.."
                                      return $ Just $ SatResult smtAnswer
+        updateName i cfg = cfg{smtFile = upd `fmap` smtFile cfg}
+               where upd nm = let (b, e) = splitExtension nm in b ++ "_allSat_" ++ show i ++ e
 
 type SMTProblem = ( [(Quantifier, NamedSymVar)]         -- inputs
                   , [(String, UnintKind)]               -- model-map
                   , [Either SW (SW, [SW])]              -- skolem-map
-                  , [String]                            -- uninterpreted sorts
+                  , Set.Set Kind                        -- kinds used
                   , SMTLibPgm                           -- SMTLib representation
                   )
 
@@ -457,18 +461,19 @@ runProofOn converter config isSat comments res =
         let isTiming   = timing config
             solverCaps = capabilities (solver config)
         in case res of
-             Result boundInfo usorts _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs [o@(SW (KBounded False 1) _)] ->
-               timeIf isTiming "translation" $ let uiMap     = mapMaybe arrayUIKind arrs ++ map unintFnUIKind uis
-                                                   skolemMap = skolemize (if isSat then is else map flipQ is)
-                                                        where flipQ (ALL, x) = (EX, x)
-                                                              flipQ (EX, x)  = (ALL, x)
-                                                              skolemize :: [(Quantifier, NamedSymVar)] -> [Either SW (SW, [SW])]
-                                                              skolemize qinps = go qinps ([], [])
-                                                                where go []                   (_,  sofar) = reverse sofar
-                                                                      go ((ALL, (v, _)):rest) (us, sofar) = go rest (v:us, Left v : sofar)
-                                                                      go ((EX,  (v, _)):rest) (us, sofar) = go rest (us,   Right (v, reverse us) : sofar)
-                                               in return (is, uiMap, skolemMap, usorts, converter solverCaps boundInfo isSat comments usorts is skolemMap consts tbls arrs uis axs pgm cstrs o)
-             Result _boundInfo _us _qcInfo _codeSegs _is _consts _tbls _arrs _uis _axs _pgm _cstrs os -> case length os of
+             Result ki _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs [o@(SW (KBounded False 1) _)] ->
+               timeIf isTiming "translation"
+                $ let uiMap     = mapMaybe arrayUIKind arrs ++ map unintFnUIKind uis
+                      skolemMap = skolemize (if isSat then is else map flipQ is)
+                           where flipQ (ALL, x) = (EX, x)
+                                 flipQ (EX, x)  = (ALL, x)
+                                 skolemize :: [(Quantifier, NamedSymVar)] -> [Either SW (SW, [SW])]
+                                 skolemize qinps = go qinps ([], [])
+                                   where go []                   (_,  sofar) = reverse sofar
+                                         go ((ALL, (v, _)):rest) (us, sofar) = go rest (v:us, Left v : sofar)
+                                         go ((EX,  (v, _)):rest) (us, sofar) = go rest (us,   Right (v, reverse us) : sofar)
+                  in return (is, uiMap, skolemMap, ki, converter (roundingMode config) (useLogic config) solverCaps ki isSat comments is skolemMap consts tbls arrs uis axs pgm cstrs o)
+             Result _kindInfo _qcInfo _codeSegs _is _consts _tbls _arrs _uis _axs _pgm _cstrs os -> case length os of
                            0  -> error $ "Impossible happened, unexpected non-outputting result\n" ++ show res
                            1  -> error $ "Impossible happened, non-boolean output in " ++ show os
                                        ++ "\nDetected while generating the trace:\n" ++ show res

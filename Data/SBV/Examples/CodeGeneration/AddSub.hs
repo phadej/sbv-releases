@@ -55,9 +55,16 @@ addSub x y = (x+y, x-y)
 -- #include <inttypes.h>
 -- #include <stdint.h>
 -- #include <stdbool.h>
+-- #include <math.h>
 -- <BLANKLINE>
 -- /* The boolean type */
 -- typedef bool SBool;
+-- <BLANKLINE>
+-- /* The float type */
+-- typedef float SFloat;
+-- <BLANKLINE>
+-- /* The double type */
+-- typedef double SDouble;
 -- <BLANKLINE>
 -- /* Unsigned bit-vectors */
 -- typedef uint8_t  SWord8 ;
@@ -84,6 +91,7 @@ addSub x y = (x+y, x-y)
 -- #include <inttypes.h>
 -- #include <stdint.h>
 -- #include <stdbool.h>
+-- #include <math.h>
 -- #include <stdio.h>
 -- #include "addSub.h"
 -- <BLANKLINE>
@@ -107,6 +115,7 @@ addSub x y = (x+y, x-y)
 -- #include <inttypes.h>
 -- #include <stdint.h>
 -- #include <stdbool.h>
+-- #include <math.h>
 -- #include "addSub.h"
 -- <BLANKLINE>
 -- void addSub(const SWord8 x, const SWord8 y, SWord8 *sum,

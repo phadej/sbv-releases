@@ -28,6 +28,8 @@ import System.Process     (readProcessWithExitCode, runInteractiveProcess, waitF
 import System.Exit        (ExitCode(..))
 import System.IO          (hClose, hFlush, hPutStr, hGetContents, hGetLine)
 
+import qualified Data.Map as M
+
 import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.PrettyNum
@@ -47,16 +49,18 @@ import Data.SBV.Utils.TDiff
 -- is precise (i.e., if it fits in a finite number of digits), regardless of the precision limit. The limit only applies if the representation
 -- of the real value is not finite, i.e., if it is not rational.
 data SMTConfig = SMTConfig {
-         verbose       :: Bool           -- ^ Debug mode
-       , timing        :: Bool           -- ^ Print timing information on how long different phases took (construction, solving, etc.)
-       , timeOut       :: Maybe Int      -- ^ How much time to give to the solver. (In seconds)
-       , printBase     :: Int            -- ^ Print integral literals in this base (2, 8, and 10, and 16 are supported.)
-       , printRealPrec :: Int            -- ^ Print algebraic real values with this precision. (SReal, default: 16)
-       , solverTweaks  :: [String]       -- ^ Additional lines of script to give to the solver (user specified)
-       , satCmd        :: String         -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
-       , smtFile       :: Maybe FilePath -- ^ If Just, the generated SMT script will be put in this file (for debugging purposes mostly)
-       , useSMTLib2    :: Bool           -- ^ If True, we'll treat the solver as using SMTLib2 input format. Otherwise, SMTLib1
-       , solver        :: SMTSolver      -- ^ The actual SMT solver.
+         verbose       :: Bool             -- ^ Debug mode
+       , timing        :: Bool             -- ^ Print timing information on how long different phases took (construction, solving, etc.)
+       , timeOut       :: Maybe Int        -- ^ How much time to give to the solver. (In seconds)
+       , printBase     :: Int              -- ^ Print integral literals in this base (2, 8, and 10, and 16 are supported.)
+       , printRealPrec :: Int              -- ^ Print algebraic real values with this precision. (SReal, default: 16)
+       , solverTweaks  :: [String]         -- ^ Additional lines of script to give to the solver (user specified)
+       , satCmd        :: String           -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
+       , smtFile       :: Maybe FilePath   -- ^ If Just, the generated SMT script will be put in this file (for debugging purposes mostly)
+       , useSMTLib2    :: Bool             -- ^ If True, we'll treat the solver as using SMTLib2 input format. Otherwise, SMTLib1
+       , solver        :: SMTSolver        -- ^ The actual SMT solver.
+       , roundingMode  :: RoundingMode     -- ^ Rounding mode to use for floating-point conversions
+       , useLogic      :: Maybe Logic      -- ^ If Nothing, pick automatically. Otherwise, either use the given one, or use the custom string.
        }
 
 -- | An SMT engine
@@ -74,9 +78,9 @@ data SMTSolver = SMTSolver {
 
 -- | A model, as returned by a solver
 data SMTModel = SMTModel {
-        modelAssocs    :: [(String, CW)]
-     ,  modelArrays    :: [(String, [String])]  -- very crude!
-     ,  modelUninterps :: [(String, [String])]  -- very crude!
+        modelAssocs    :: [(String, CW)]        -- ^ Mapping of symbolic values to constants.
+     ,  modelArrays    :: [(String, [String])]  -- ^ Arrays, very crude; only works with Yices.
+     ,  modelUninterps :: [(String, [String])]  -- ^ Uninterpreted funcs; very crude; only works with Yices.
      }
      deriving Show
 
@@ -263,6 +267,19 @@ class Modelable a where
   -- | Extract a model, the result is a tuple where the first argument (if True)
   -- indicates whether the model was "probable". (i.e., if the solver returned unknown.)
   getModel :: SatModel b => a -> Either String (Bool, b)
+  -- | Extract a model dictionary. Extract a dictionary mapping the variables to
+  -- their respective values as returned by the SMT solver. Also see `getModelDictionaries`.
+  getModelDictionary :: a -> M.Map String CW
+  -- | Extract a model value for a given element. Also see `getModelValues`.
+  getModelValue :: SymWord b => String -> a -> Maybe b
+  getModelValue v r = fromCW `fmap` (v `M.lookup` getModelDictionary r)
+  -- | Extract a representative name for the model value of an uninterpreted kind.
+  -- This is supposed to correspond to the value as computed internally by the
+  -- SMT solver; and is unportable from solver to solver. Also see `getModelUninterpretedValues`.
+  getModelUninterpretedValue :: String -> a -> Maybe String
+  getModelUninterpretedValue v r = case v `M.lookup` getModelDictionary r of
+                                     Just (CW _ (CWUninterpreted s)) -> Just s
+                                     _                               -> Nothing
 
   -- | A simpler variant of 'getModel' to get a model out without the fuss.
   extractModel :: SatModel b => a -> Maybe b
@@ -275,13 +292,27 @@ class Modelable a where
 extractModels :: SatModel a => AllSatResult -> [a]
 extractModels (AllSatResult (_, xs)) = [ms | Right (_, ms) <- map getModel xs]
 
+-- | Get dictionaries from an all-sat call. Similar to `getModelDictionary`.
+getModelDictionaries :: AllSatResult -> [M.Map String CW]
+getModelDictionaries (AllSatResult (_, xs)) = map getModelDictionary xs
+
+-- | Extract value of a variable from an all-sat call. Similar to `getModelValue`.
+getModelValues :: SymWord b => String -> AllSatResult -> [Maybe b]
+getModelValues s (AllSatResult (_, xs)) =  map (s `getModelValue`) xs
+
+-- | Extract value of an uninterpreted variable from an all-sat call. Similar to `getModelUninterpretedValue`.
+getModelUninterpretedValues :: String -> AllSatResult -> [Maybe String]
+getModelUninterpretedValues s (AllSatResult (_, xs)) =  map (s `getModelUninterpretedValue`) xs
+
 instance Modelable ThmResult where
-  getModel    (ThmResult r) = getModel r
-  modelExists (ThmResult r) = modelExists r
+  getModel           (ThmResult r) = getModel r
+  modelExists        (ThmResult r) = modelExists r
+  getModelDictionary (ThmResult r) = getModelDictionary r
 
 instance Modelable SatResult where
-  getModel    (SatResult r) = getModel r
-  modelExists (SatResult r) = modelExists r
+  getModel           (SatResult r) = getModel r
+  modelExists        (SatResult r) = modelExists r
+  getModelDictionary (SatResult r) = getModelDictionary r
 
 instance Modelable SMTResult where
   getModel (Unsatisfiable _) = Left "SBV.getModel: Unsatisfiable result"
@@ -292,6 +323,11 @@ instance Modelable SMTResult where
   modelExists (Satisfiable{}) = True
   modelExists (Unknown{})     = False -- don't risk it
   modelExists _               = False
+  getModelDictionary (Unsatisfiable _) = M.empty
+  getModelDictionary (Unknown _ m)     = M.fromList (modelAssocs m)
+  getModelDictionary (ProofError _ _)  = M.empty
+  getModelDictionary (TimeOut _)       = M.empty
+  getModelDictionary (Satisfiable _ m) = M.fromList (modelAssocs m)
 
 -- | Extract a model out, will throw error if parsing is unsuccessful
 parseModelOut :: SatModel a => SMTModel -> a
@@ -396,7 +432,7 @@ standardSolver config script cleanErrs failure success = do
     msg $ "Calling: " ++ show (unwords (exec:opts))
     case smtFile config of
       Nothing -> return ()
-      Just f  -> do putStrLn $ "** Saving the generated script in file: " ++ show f
+      Just f  -> do msg $ "Saving the generated script in file: " ++ show f
                     writeFile f (scriptBody script)
     contents <- timeIf isTiming nmSolver $ pipeProcess config nmSolver exec opts script cleanErrs
     msg $ nmSolver ++ " output:\n" ++ either id (intercalate "\n") contents

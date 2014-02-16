@@ -27,7 +27,8 @@ module Data.SBV.BitVectors.Model (
   , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
   , constrain, pConstrain, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
-  , sInt64s, sInteger, sIntegers, sReal, sReals, toSReal, slet
+  , sInt64s, sInteger, sIntegers, sReal, sReals, toSReal, sFloat, sFloats, sDouble, sDoubles, slet
+  , fusedMA
   )
   where
 
@@ -55,9 +56,9 @@ noUnint x = error $ "Unexpected operation called on uninterpreted value: " ++ sh
 noUnint2 :: String -> String -> a
 noUnint2 x y = error $ "Unexpected binary operation called on uninterpreted values: " ++ show (x, y)
 
-liftSym1 :: (State -> Kind -> SW -> IO SW) -> (AlgReal -> AlgReal) -> (Integer -> Integer) -> SBV b -> SBV b
-liftSym1 _   opCR opCI   (SBV k (Left a)) = SBV k $ Left  $ mapCW opCR opCI noUnint a
-liftSym1 opS _    _    a@(SBV k _)        = SBV k $ Right $ cache c
+liftSym1 :: (State -> Kind -> SW -> IO SW) -> (AlgReal -> AlgReal) -> (Integer -> Integer) -> (Float -> Float) -> (Double -> Double) -> SBV b -> SBV b
+liftSym1 _   opCR opCI opCF opCD   (SBV k (Left a)) = SBV k $ Left  $ mapCW opCR opCI opCF opCD noUnint a
+liftSym1 opS _    _    _    _    a@(SBV k _)        = SBV k $ Right $ cache c
    where c st = do swa <- sbvToSW st a
                    opS st k swa
 
@@ -67,13 +68,13 @@ liftSW2 opS k a b = cache c
                   sw2 <- sbvToSW st b
                   opS st k sw1 sw2
 
-liftSym2 :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgReal -> AlgReal -> AlgReal) -> (Integer -> Integer -> Integer) -> SBV b -> SBV b -> SBV b
-liftSym2 _   okCW opCR opCI   (SBV k (Left a)) (SBV _ (Left b)) | okCW a b = SBV k $ Left  $ mapCW2 opCR opCI noUnint2 a b
-liftSym2 opS _    _    _    a@(SBV k _)        b                           = SBV k $ Right $ liftSW2 opS k a b
+liftSym2 :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgReal -> AlgReal -> AlgReal) -> (Integer -> Integer -> Integer) -> (Float -> Float -> Float) -> (Double -> Double -> Double) -> SBV b -> SBV b -> SBV b
+liftSym2 _   okCW opCR opCI opCF opCD   (SBV k (Left a)) (SBV _ (Left b)) | okCW a b = SBV k $ Left  $ mapCW2 opCR opCI opCF opCD noUnint2 a b
+liftSym2 opS _    _    _    _    _    a@(SBV k _)        b                           = SBV k $ Right $ liftSW2 opS k a b
 
-liftSym2B :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgReal -> AlgReal -> Bool) -> (Integer -> Integer -> Bool) -> SBV b -> SBV b -> SBool
-liftSym2B _   okCW opCR opCI (SBV _ (Left a)) (SBV _ (Left b)) | okCW a b = literal (liftCW2 opCR opCI noUnint2 a b)
-liftSym2B opS _    _    _    a                b                           = SBV (KBounded False 1) $ Right $ liftSW2 opS (KBounded False 1) a b
+liftSym2B :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgReal -> AlgReal -> Bool) -> (Integer -> Integer -> Bool) -> (Float -> Float -> Bool) -> (Double -> Double -> Bool) -> SBV b -> SBV b -> SBool
+liftSym2B _   okCW opCR opCI opCF opCD (SBV _ (Left a)) (SBV _ (Left b)) | okCW a b = literal (liftCW2 opCR opCI opCF opCD noUnint2 a b)
+liftSym2B opS _    _    _    _    _    a                b                           = SBV (KBounded False 1) $ Right $ liftSW2 opS (KBounded False 1) a b
 
 liftSym1Bool :: (State -> Kind -> SW -> IO SW) -> (Bool -> Bool) -> SBool -> SBool
 liftSym1Bool _   opC (SBV _ (Left a)) = literal $ opC $ cwToBool a
@@ -207,6 +208,30 @@ instance SymWord AlgReal where
   mbMaxBound = Nothing
   mbMinBound = Nothing
 
+instance SymWord Float where
+  mkSymWord  = genMkSymVar KFloat
+  literal    = SBV KFloat . Left . CW KFloat . CWFloat
+  fromCW (CW _ (CWFloat a)) = a
+  fromCW c                  = error $ "SymWord.Float: Unexpected non-float value: " ++ show c
+  -- For Float, we conservatively return 'False' for isConcretely. The reason is that
+  -- this function is used for optimizations when only one of the argument is concrete,
+  -- and in the presence of NaN's it would be incorrect to do any optimization
+  isConcretely _ _ = False
+  mbMaxBound = Nothing
+  mbMinBound = Nothing
+
+instance SymWord Double where
+  mkSymWord  = genMkSymVar KDouble
+  literal    = SBV KDouble . Left . CW KDouble . CWDouble
+  fromCW (CW _ (CWDouble a)) = a
+  fromCW c                   = error $ "SymWord.Double: Unexpected non-double value: " ++ show c
+  -- For Double, we conservatively return 'False' for isConcretely. The reason is that
+  -- this function is used for optimizations when only one of the argument is concrete,
+  -- and in the presence of NaN's it would be incorrect to do any optimization
+  isConcretely _ _ = False
+  mbMaxBound = Nothing
+  mbMinBound = Nothing
+
 ------------------------------------------------------------------------------------
 -- * Smart constructors for creating symbolic values. These are not strictly
 -- necessary, as they are mere aliases for 'symbolic' and 'symbolics', but 
@@ -300,6 +325,22 @@ sReal = symbolic
 sReals :: [String] -> Symbolic [SReal]
 sReals = symbolics
 
+-- | Declare an 'SFloat'
+sFloat :: String -> Symbolic SFloat
+sFloat = symbolic
+
+-- | Declare a list of 'SFloat's
+sFloats :: [String] -> Symbolic [SFloat]
+sFloats = symbolics
+
+-- | Declare an 'SDouble'
+sDouble :: String -> Symbolic SDouble
+sDouble = symbolic
+
+-- | Declare a list of 'SDouble's
+sDoubles :: [String] -> Symbolic [SDouble]
+sDoubles = symbolics
+
 -- | Promote an SInteger to an SReal
 toSReal :: SInteger -> SReal
 toSReal x
@@ -348,29 +389,36 @@ for natural reasons..
 -}
 
 instance EqSymbolic (SBV a) where
-  (.==) = liftSym2B (mkSymOpSC (eqOpt trueSW)  Equal)    rationalCheck (==) (==)
-  (./=) = liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) rationalCheck (/=) (/=)
+  (.==) = liftSym2B (mkSymOpSC (eqOpt trueSW)  Equal)    rationalCheck (==) (==) (==) (==)
+  (./=) = liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) rationalCheck (/=) (/=) (/=) (/=)
 
+-- | eqOpt says the references are to the same SW, thus we can optimize. Note that
+-- we explicitly disallow KFloat/KDouble here. Why? Because it's *NOT* true that
+-- NaN == NaN, NaN >= NaN, and so-forth. So, we have to make sure we don't optimize
+-- floats and doubles, in case the argument turns out to be NaN.
 eqOpt :: SW -> SW -> SW -> Maybe SW
-eqOpt w x y = if x == y then Just w else Nothing
+eqOpt w x y = case kindOf x of
+                KFloat  -> Nothing
+                KDouble -> Nothing
+                _       -> if x == y then Just w else Nothing
 
 instance SymWord a => OrdSymbolic (SBV a) where
   x .< y
     | Just mb <- mbMaxBound, x `isConcretely` (== mb) = false
     | Just mb <- mbMinBound, y `isConcretely` (== mb) = false
-    | True                                            = liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan)    rationalCheck (<)  (<)  x y
+    | True                                            = liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan)    rationalCheck (<)  (<)  (<) (<) x y
   x .<= y
     | Just mb <- mbMinBound, x `isConcretely` (== mb) = true
     | Just mb <- mbMaxBound, y `isConcretely` (== mb) = true
-    | True                                            = liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq)       rationalCheck (<=) (<=) x y
+    | True                                            = liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq)       rationalCheck (<=) (<=) (<=) (<=) x y
   x .> y
     | Just mb <- mbMinBound, x `isConcretely` (== mb) = false
     | Just mb <- mbMaxBound, y `isConcretely` (== mb) = false
-    | True                                            = liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) rationalCheck (>)  (>)  x y
+    | True                                            = liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) rationalCheck (>)  (>)  (>) (>) x y
   x .>= y
     | Just mb <- mbMaxBound, x `isConcretely` (== mb) = true
     | Just mb <- mbMinBound, y `isConcretely` (== mb) = true
-    | True                                            = liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq)    rationalCheck (>=) (>=) x y
+    | True                                            = liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq)    rationalCheck (>=) (>=) (>=) (>=) x y
 
 -- Bool
 instance EqSymbolic Bool where
@@ -549,16 +597,16 @@ instance (Ord a, Num a, SymWord a) => Num (SBV a) where
   x + y
     | x `isConcretely` (== 0) = y
     | y `isConcretely` (== 0) = x
-    | True                    = liftSym2 (mkSymOp Plus)  rationalCheck (+) (+) x y
+    | True                    = liftSym2 (mkSymOp Plus)  rationalCheck (+) (+) (+) (+) x y
   x * y
     | x `isConcretely` (== 0) = 0
     | y `isConcretely` (== 0) = 0
     | x `isConcretely` (== 1) = y
     | y `isConcretely` (== 1) = x
-    | True                    = liftSym2 (mkSymOp Times) rationalCheck (*) (*) x y
+    | True                    = liftSym2 (mkSymOp Times) rationalCheck (*) (*) (*) (*) x y
   x - y
     | y `isConcretely` (== 0) = x
-    | True                    = liftSym2 (mkSymOp Minus) rationalCheck (-) (-) x y
+    | True                    = liftSym2 (mkSymOp Minus) rationalCheck (-) (-) (-) (-) x y
   abs a
    | hasSign a = ite (a .< 0) (-a) a
    | True      = a
@@ -566,11 +614,70 @@ instance (Ord a, Num a, SymWord a) => Num (SBV a) where
    | hasSign a = ite (a .< 0) (-1) (ite (a .== 0) 0 1)
    | True      = oneIf (a ./= 0)
 
-instance Fractional SReal where
+instance (SymWord a, Fractional a) => Fractional (SBV a) where
   fromRational = literal . fromRational
-  x / y        = liftSym2 (mkSymOp Quot) rationalCheck (/) die x y
+  x / y        = liftSym2 (mkSymOp Quot) rationalCheck (/) die (/) (/) x y
    where -- should never happen
-         die = error $ "impossible: non-real value found in Fractional.SReal " ++ show (x, y)
+         die = error "impossible: integer valued data found in Fractional instance"
+
+-- | Define Floating instance on SBV's; only for base types that are already floating; i.e., SFloat and SDouble
+-- Note that most of the fields are "undefined" for symbolic values, we add methods as they are supported by SMTLib.
+-- Currently, the only symbolicly available function in this class is sqrt.
+instance (SymWord a, Fractional a, Floating a) => Floating (SBV a) where
+    pi      = literal pi
+    exp     = lift1FNS "exp"     exp
+    log     = lift1FNS "log"     log
+    sqrt    = lift1F   sqrt      smtLibSquareRoot
+    sin     = lift1FNS "sin"     sin
+    cos     = lift1FNS "cos"     cos
+    tan     = lift1FNS "tan"     tan
+    asin    = lift1FNS "asin"    asin
+    acos    = lift1FNS "acos"    acos
+    atan    = lift1FNS "atan"    atan
+    sinh    = lift1FNS "sinh"    sinh
+    cosh    = lift1FNS "cosh"    cosh
+    tanh    = lift1FNS "tanh"    tanh
+    asinh   = lift1FNS "asinh"   asinh
+    acosh   = lift1FNS "acosh"   acosh
+    atanh   = lift1FNS "atanh"   atanh
+    (**)    = lift2FNS "**"      (**)
+    logBase = lift2FNS "logBase" logBase
+
+-- | Fused-multiply add. @fusedMA a b c = a * b + c@, for double and floating point values.
+-- Note that a 'fusedMA' call will *never* be concrete, even if all the arguments are constants; since
+-- we cannot guarantee the precision requirements, which is the whole reason why 'fusedMA' exists in the
+-- first place. (NB. 'fusedMA' only rounds once, even though it does two operations, and hence the extra
+-- precision.)
+fusedMA :: (SymWord a, Floating a) => SBV a -> SBV a -> SBV a -> SBV a
+fusedMA a b c = SBV k $ Right $ cache r
+  where k = kindOf a
+        r st = do swa <- sbvToSW st a
+                  swb <- sbvToSW st b
+                  swc <- sbvToSW st c
+                  newExpr st k (SBVApp smtLibFusedMA [swa, swb, swc])
+
+-- | Lift a float/double unary function, using a corresponding function in SMT-lib. We piggy-back on the uninterpreted
+-- function mechanism here, as it essentially is the same as introducing this as a new function.
+lift1F :: (SymWord a, Floating a) => (a -> a) -> Op -> SBV a -> SBV a
+lift1F f smtOp sv
+  | Just v <- unliteral sv = literal $ f v
+  | True                   = SBV k $ Right $ cache c
+  where k = kindOf sv
+        c st = do swa <- sbvToSW st sv
+                  newExpr st k (SBVApp smtOp [swa])
+
+-- | Lift a float/double unary function, only over constants
+lift1FNS :: (SymWord a, Floating a) => String -> (a -> a) -> SBV a -> SBV a
+lift1FNS nm f sv
+  | Just v <- unliteral sv = literal $ f v
+  | True                   = error $ "SBV." ++ nm ++ ": not supported for symbolic values of type " ++ show (kindOf sv)
+
+-- | Lift a float/double binary function, only over constants
+lift2FNS :: (SymWord a, Floating a) => String -> (a -> a -> a) -> SBV a -> SBV a -> SBV a
+lift2FNS nm f sv1 sv2
+  | Just v1 <- unliteral sv1
+  , Just v2 <- unliteral sv2 = literal $ f v1 v2
+  | True                     = error $ "SBV." ++ nm ++ ": not supported for symbolic values of type " ++ show (kindOf sv1)
 
 -- Most operations on concrete rationals require a compatibility check
 rationalCheck :: CW -> CW -> Bool
@@ -587,8 +694,20 @@ rationalSBVCheck _                    _                    = True
 noReal :: String -> AlgReal -> AlgReal -> AlgReal
 noReal o a b = error $ "SBV.AlgReal." ++ o ++ ": Unexpected arguments: " ++ show (a, b)
 
+noFloat :: String -> Float -> Float -> Float
+noFloat o a b = error $ "SBV.Float." ++ o ++ ": Unexpected arguments: " ++ show (a, b)
+
+noDouble :: String -> Double -> Double -> Double
+noDouble o a b = error $ "SBV.Double." ++ o ++ ": Unexpected arguments: " ++ show (a, b)
+
 noRealUnary :: String -> AlgReal -> AlgReal
 noRealUnary o a = error $ "SBV.AlgReal." ++ o ++ ": Unexpected argument: " ++ show a
+
+noFloatUnary :: String -> Float -> Float
+noFloatUnary o a = error $ "SBV.Float." ++ o ++ ": Unexpected argument: " ++ show a
+
+noDoubleUnary :: String -> Double -> Double
+noDoubleUnary o a = error $ "SBV.Double." ++ o ++ ": Unexpected argument: " ++ show a
 
 -- NB. In the optimizations below, use of -1 is valid as
 -- -1 has all bits set to True for both signed and unsigned values
@@ -598,38 +717,38 @@ instance (Num a, Bits a, SymWord a) => Bits (SBV a) where
     | x `isConcretely` (== -1) = y
     | y `isConcretely` (== 0)  = 0
     | y `isConcretely` (== -1) = x
-    | True                     = liftSym2 (mkSymOp  And) (const (const True)) (noReal ".&.") (.&.) x y
+    | True                     = liftSym2 (mkSymOp  And) (const (const True)) (noReal ".&.") (.&.) (noFloat ".&.") (noDouble ".&.") x y
   x .|. y
     | x `isConcretely` (== 0)  = y
     | x `isConcretely` (== -1) = -1
     | y `isConcretely` (== 0)  = x
     | y `isConcretely` (== -1) = -1
-    | True                     = liftSym2 (mkSymOp  Or)  (const (const True)) (noReal ".|.") (.|.) x y
+    | True                     = liftSym2 (mkSymOp  Or)  (const (const True)) (noReal ".|.") (.|.) (noFloat ".|.") (noDouble ".|.") x y
   x `xor` y
     | x `isConcretely` (== 0)  = y
     | y `isConcretely` (== 0)  = x
-    | True                     = liftSym2 (mkSymOp  XOr) (const (const True)) (noReal "xor") xor x y
-  complement = liftSym1 (mkSymOp1 Not) (noRealUnary "Not") complement
+    | True                     = liftSym2 (mkSymOp  XOr) (const (const True)) (noReal "xor") xor (noFloat "xor") (noDouble "xor") x y
+  complement = liftSym1 (mkSymOp1 Not) (noRealUnary "complement") complement (noFloatUnary "complement") (noDoubleUnary "complement")
   bitSize  _ = intSizeOf (undefined :: a)
   isSigned _ = hasSign   (undefined :: a)
   bit i      = 1 `shiftL` i
   shiftL x y
     | y < 0       = shiftR x (-y)
     | y == 0      = x
-    | True        = liftSym1 (mkSymOp1 (Shl y)) (noRealUnary "shiftL") (`shiftL` y) x
+    | True        = liftSym1 (mkSymOp1 (Shl y)) (noRealUnary "shiftL") (`shiftL` y) (noFloatUnary "shiftL") (noDoubleUnary "shiftL") x
   shiftR x y
     | y < 0       = shiftL x (-y)
     | y == 0      = x
-    | True        = liftSym1 (mkSymOp1 (Shr y)) (noRealUnary "shiftR") (`shiftR` y) x
+    | True        = liftSym1 (mkSymOp1 (Shr y)) (noRealUnary "shiftR") (`shiftR` y) (noFloatUnary "shiftR") (noDoubleUnary "shiftR") x
   rotateL x y
     | y < 0       = rotateR x (-y)
     | y == 0      = x
-    | isBounded x = let sz = bitSize x in liftSym1 (mkSymOp1 (Rol (y `mod` sz))) (noRealUnary "rotateL") (rot True sz y) x
+    | isBounded x = let sz = bitSize x in liftSym1 (mkSymOp1 (Rol (y `mod` sz))) (noRealUnary "rotateL") (rot True sz y) (noFloatUnary "rotateL") (noDoubleUnary "rotateL") x
     | True        = shiftL x y   -- for unbounded Integers, rotateL is the same as shiftL in Haskell
   rotateR x y
     | y < 0       = rotateL x (-y)
     | y == 0      = x
-    | isBounded x = let sz = bitSize x in liftSym1 (mkSymOp1 (Ror (y `mod` sz))) (noRealUnary "rotateR") (rot False sz y) x
+    | isBounded x = let sz = bitSize x in liftSym1 (mkSymOp1 (Ror (y `mod` sz))) (noRealUnary "rotateR") (rot False sz y) (noFloatUnary "rotateR") (noDoubleUnary "rotateR") x
     | True        = shiftR x y   -- for unbounded integers, rotateR is the same as shiftR in Haskell
   -- NB. testBit is *not* implementable on non-concrete symbolic words
   x `testBit` i
@@ -903,11 +1022,11 @@ instance SDivisible Integer where
 instance SDivisible CW where
   sQuotRem a b
     | CWInteger x <- cwVal a, CWInteger y <- cwVal b
-    = let (r1, r2) = sQuotRem x y in (a { cwVal = CWInteger r1 }, b { cwVal = CWInteger r2 })
+    = let (r1, r2) = sQuotRem x y in (normCW a{ cwVal = CWInteger r1 }, normCW b{ cwVal = CWInteger r2 })
   sQuotRem a b = error $ "SBV.sQuotRem: impossible, unexpected args received: " ++ show (a, b)
   sDivMod a b
     | CWInteger x <- cwVal a, CWInteger y <- cwVal b
-    = let (r1, r2) = sDivMod x y in (a { cwVal = CWInteger r1 }, b { cwVal = CWInteger r2 })
+    = let (r1, r2) = sDivMod x y in (normCW a { cwVal = CWInteger r1 }, normCW b { cwVal = CWInteger r2 })
   sDivMod a b = error $ "SBV.sDivMod: impossible, unexpected args received: " ++ show (a, b)
 
 instance SDivisible SWord64 where
@@ -980,8 +1099,14 @@ instance (SymWord b, Arbitrary b) => Arbitrary (SFunArray a b) where
 instance (SymWord a, Arbitrary a) => Arbitrary (SBV a) where
   arbitrary = liftM literal arbitrary
 
--- |  Symbolic choice operator, parameterized via a class
--- 'select' is a total-indexing function, with the default.
+-- |  Symbolic conditionals are modeled by the 'Mergeable' class, describing
+-- how to merge the results of an if-then-else call with a symbolic test. SBV
+-- provides all basic types as instances of this class, so users only need
+-- to declare instances for custom data-types of their programs as needed.
+--
+-- The function 'select' is a total-indexing function out of a list of choices
+-- with a default value, simulating array/list indexing. It's an n-way generalization
+-- of the 'ite' function.
 --
 -- Minimal complete definition: 'symbolicMerge'
 class Mergeable a where
@@ -1495,7 +1620,7 @@ instance Testable SBool where
 
 instance Testable (Symbolic SBool) where
   property m = QC.whenFail (putStrLn msg) $ QC.monadicIO test
-    where runOnce g = do (r, Result _ _ tvals _ _ cs _ _ _ _ _ cstrs _) <- runSymbolic' (Concrete g) m
+    where runOnce g = do (r, Result _ tvals _ _ cs _ _ _ _ _ cstrs _) <- runSymbolic' (Concrete g) m
                          let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
                              cond = all (cwToBool . cval) cstrs
                          when (isSymbolic r) $ error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show r ++ ")"

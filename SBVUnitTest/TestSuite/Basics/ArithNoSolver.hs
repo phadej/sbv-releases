@@ -23,6 +23,7 @@ import SBVTest
 testSuite :: SBVTestSuite
 testSuite = mkTestSuite $ \_ -> test $
         genReals
+     ++ genFloats
      ++ genQRems
      ++ genBinTest  "+"                (+)
      ++ genBinTest  "-"                (-)
@@ -176,10 +177,7 @@ genQRems = map mkTest $
      ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i8s,  y <- i8s , noOverflow x y] [x `sDivMod`  y | x <- si8s,  y <- si8s , noOverflow x y]
      ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i16s, y <- i16s, noOverflow x y] [x `sDivMod`  y | x <- si16s, y <- si16s, noOverflow x y]
      ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i32s, y <- i32s, noOverflow x y] [x `sDivMod`  y | x <- si32s, y <- si32s, noOverflow x y]
-     ++ (if divModInt64Bug    -- see below
-            then []
-            else zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i64s, y <- i64s, noOverflow x y] [x `sDivMod`  y | x <- si64s, y <- si64s, noOverflow x y]
-        )
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i64s, y <- i64s, noOverflow x y] [x `sDivMod`  y | x <- si64s, y <- si64s, noOverflow x y]
      ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- iUBs, y <- iUBs]                 [x `sDivMod`  y | x <- siUBs, y <- siUBs]
      ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- w8s,  y <- w8s ]                 [x `sQuotRem` y | x <- sw8s,  y <- sw8s ]
      ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- w16s, y <- w16s]                 [x `sQuotRem` y | x <- sw16s, y <- sw16s]
@@ -195,6 +193,8 @@ genQRems = map mkTest $
         pair (nm, x, y, (r1, r2)) (e1, e2)   = (nm, x, y, show (fromIntegral r1 `asTypeOf` e1, fromIntegral r2 `asTypeOf` e2) == show (e1, e2))
         mkTest (nm, x, y, s) = "arithCF-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: s `showsAs` "True"
         -- Haskell's divMod and quotRem overflows if x == minBound and y == -1 for bounded signed types; so avoid that case
+        -- NB. There's a bug filed against this; so remove this when it gets fixed:
+        -- See: https://ghc.haskell.org/trac/ghc/ticket/8695
         noOverflow x y = not (x == minBound && y == -1)
 
 genReals :: [Test]
@@ -210,6 +210,39 @@ genReals = map mkTest $
      ++ map ("/=",) (zipWith pair [(show x, show y, x /= y) | x <- rs, y <- rs        ] [x ./= y | x <- srs,  y <- srs                       ])
      ++ map ("/",)  (zipWith pair [(show x, show y, x /  y) | x <- rs, y <- rs, y /= 0] [x / y   | x <- srs,  y <- srs, unliteral y /= Just 0])
   where pair (x, y, a) b   = (x, y, Just a == unliteral b)
+        mkTest (nm, (x, y, s)) = "arithCF-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: s `showsAs` "True"
+
+genFloats :: [Test]
+genFloats = map mkTest $
+        map ("+",)  (zipWith pair  [(show x, show y, x +  y) | x <- fs, y <- fs        ] [x +   y | x <- sfs,  y <- sfs                       ])
+     ++ map ("-",)  (zipWith pair  [(show x, show y, x -  y) | x <- fs, y <- fs        ] [x -   y | x <- sfs,  y <- sfs                       ])
+     ++ map ("*",)  (zipWith pair  [(show x, show y, x *  y) | x <- fs, y <- fs        ] [x *   y | x <- sfs,  y <- sfs                       ])
+     ++ map ("<",)  (zipWith pairB [(     x,      y, x <  y) | x <- fs, y <- fs        ] [x .<  y | x <- sfs,  y <- sfs                       ])
+     ++ map ("<=",) (zipWith pairB [(     x,      y, x <= y) | x <- fs, y <- fs        ] [x .<= y | x <- sfs,  y <- sfs                       ])
+     ++ map (">",)  (zipWith pairB [(     x,      y, x >  y) | x <- fs, y <- fs        ] [x .>  y | x <- sfs,  y <- sfs                       ])
+     ++ map (">=",) (zipWith pairB [(     x,      y, x >= y) | x <- fs, y <- fs        ] [x .>= y | x <- sfs,  y <- sfs                       ])
+     ++ map ("==",) (zipWith pairB [(     x,      y, x == y) | x <- fs, y <- fs        ] [x .== y | x <- sfs,  y <- sfs                       ])
+     ++ map ("/=",) (zipWith pairN [(     x,      y, x /= y) | x <- fs, y <- fs        ] [x ./= y | x <- sfs,  y <- sfs                       ])
+     ++ map ("/",)  (zipWith pair  [(show x, show y, x /  y) | x <- fs, y <- fs, y /= 0] [x / y   | x <- sfs,  y <- sfs, unliteral y /= Just 0])
+     ++ map ("+",)  (zipWith pair  [(show x, show y, x +  y) | x <- ds, y <- ds        ] [x +   y | x <- sds,  y <- sds                       ])
+     ++ map ("-",)  (zipWith pair  [(show x, show y, x -  y) | x <- ds, y <- ds        ] [x -   y | x <- sds,  y <- sds                       ])
+     ++ map ("*",)  (zipWith pair  [(show x, show y, x *  y) | x <- ds, y <- ds        ] [x *   y | x <- sds,  y <- sds                       ])
+     ++ map ("<",)  (zipWith pairB [(     x,      y, x <  y) | x <- ds, y <- ds        ] [x .<  y | x <- sds,  y <- sds                       ])
+     ++ map ("<=",) (zipWith pairB [(     x,      y, x <= y) | x <- ds, y <- ds        ] [x .<= y | x <- sds,  y <- sds                       ])
+     ++ map (">",)  (zipWith pairB [(     x,      y, x >  y) | x <- ds, y <- ds        ] [x .>  y | x <- sds,  y <- sds                       ])
+     ++ map (">=",) (zipWith pairB [(     x,      y, x >= y) | x <- ds, y <- ds        ] [x .>= y | x <- sds,  y <- sds                       ])
+     ++ map ("==",) (zipWith pairB [(     x,      y, x == y) | x <- ds, y <- ds        ] [x .== y | x <- sds,  y <- sds                       ])
+     ++ map ("/=",) (zipWith pairN [(     x,      y, x /= y) | x <- ds, y <- ds        ] [x ./= y | x <- sds,  y <- sds                       ])
+     ++ map ("/",)  (zipWith pair  [(show x, show y, x /  y) | x <- ds, y <- ds, y /= 0] [x / y   | x <- sds,  y <- sds, unliteral y /= Just 0])
+  where pair (x, y, a) b = (x, y, same a (unliteral b))
+        same a (Just b) = (isNaN a &&& isNaN b) || (a == b)
+        same _ _        = False
+        pairB (x, y, a) b = (show x, show y, checkNaN f x y a (unliteral b)) where f v w = not (v || w)  -- Other comparison: Both should be False
+        pairN (x, y, a) b = (show x, show y, checkNaN f x y a (unliteral b)) where f v w =      v && w   -- /=: Both should be True
+        checkNaN f x y a (Just b)
+          | isNaN x || isNaN y = f a b
+          | True               = a == b
+        checkNaN _ _ _ _ _     = False
         mkTest (nm, (x, y, s)) = "arithCF-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: s `showsAs` "True"
 
 -- Concrete test data
@@ -272,16 +305,23 @@ siUBs :: [SInteger]
 siUBs = map literal iUBs
 
 rs :: [AlgReal]
-rs = [fromRational (i % d) | i <- is, d <- ds]
- where is = [-1000000 .. -999998] ++ [-2 .. 2] ++ [999998 ..  1000001]
-       ds = [2 .. 5] ++ [98 .. 102] ++ [999998 .. 1000000]
+rs = [fromRational (i % d) | i <- nums, d <- dens]
+ where nums = [-1000000 .. -999998] ++ [-2 .. 2] ++ [999998 ..  1000001]
+       dens = [2 .. 5] ++ [98 .. 102] ++ [999998 .. 1000000]
 
 srs :: [SReal]
 srs = map literal rs
 
+fs :: [Float]
+fs = xs ++ [-0.5, 0, 0.5] ++ map (* (-1)) xs
+ where xs = [nan, infinity, 0.68302244, 0.5268265, 0.10283524, 5.8336496e-2]
 
--- On 32 bit installations of GHC, divMod is buggy for Int64
--- Thus causing our tests to fail. See ticket: http://hackage.haskell.org/trac/ghc/ticket/7233
--- Luckily, it's easy to detect it and sidestep it until GHC is appropriately patched
-divModInt64Bug :: Bool
-divModInt64Bug = (1 `div` (minBound::Int64)) /= -1   -- Bug causes this expression to evaluate to 1
+sfs :: [SFloat]
+sfs = map literal fs
+
+ds :: [Double]
+ds = xs ++ [-0.5, 0, 0.5] ++ map (* (-1)) xs
+ where xs = [nan, infinity, 2.516632060108026e-2,0.8601891300751106,7.518897767550192e-2,1.1656043286207285e-2]
+
+sds :: [SDouble]
+sds = map literal ds

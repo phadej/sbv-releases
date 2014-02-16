@@ -33,9 +33,16 @@ veryclean: clean
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 
 /* The boolean type */
 typedef bool SBool;
+
+/* The float type */
+typedef float SFloat;
+
+/* The double type */
+typedef double SDouble;
 
 /* Unsigned bit-vectors */
 typedef uint8_t  SWord8 ;
@@ -61,6 +68,7 @@ SWord16 crcUSB5(const SWord16 msg);
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 #include <stdio.h>
 #include "crcUSB5.h"
 
@@ -79,6 +87,7 @@ int main(void)
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 #include "crcUSB5.h"
 
 SWord16 crcUSB5(const SWord16 msg)

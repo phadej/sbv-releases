@@ -12,12 +12,17 @@
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
-module Data.SBV.BitVectors.PrettyNum (PrettyNum(..), readBin, shex, shexI, sbin, sbinI) where
+module Data.SBV.BitVectors.PrettyNum (
+        PrettyNum(..), readBin, shex, shexI, sbin, sbinI
+      , showCFloat, showCDouble, showHFloat, showHDouble
+      , showSMTFloat, showSMTDouble, smtRoundingMode
+      ) where
 
 import Data.Char  (ord)
 import Data.Int   (Int8, Int16, Int32, Int64)
 import Data.List  (isPrefixOf)
 import Data.Maybe (fromJust)
+import Data.Ratio (numerator, denominator)
 import Data.Word  (Word8, Word16, Word32, Word64)
 import Numeric    (showIntAtBase, showHex, readInt)
 
@@ -166,3 +171,73 @@ readBin s = case readInt 2 isDigit cvt s' of
         isDigit = (`elem` "01")
         s' | "0b" `isPrefixOf` s = drop 2 s
            | True                = s
+
+-- | A version of show for floats that generates correct C literals for nan/infinite. NB. Requires "math.h" to be included.
+showCFloat :: Float -> String
+showCFloat f
+   | isNaN f             = "((float) NAN)"
+   | isInfinite f, f < 0 = "((float) (-INFINITY))"
+   | isInfinite f        = "((float) INFINITY)"
+   | True                = show f ++ "F"
+
+-- | A version of show for doubles that generates correct C literals for nan/infinite. NB. Requires "math.h" to be included.
+showCDouble :: Double -> String
+showCDouble f
+   | isNaN f             = "((double) NAN)"
+   | isInfinite f, f < 0 = "((double) (-INFINITY))"
+   | isInfinite f        = "((double) INFINITY)"
+   | True                = show f
+
+-- | A version of show for floats that generates correct Haskell literals for nan/infinite
+showHFloat :: Float -> String
+showHFloat f
+   | isNaN f             = "((0/0) :: Float)"
+   | isInfinite f, f < 0 = "((-1/0) :: Float)"
+   | isInfinite f        = "((1/0) :: Float)"
+   | True                = show f
+
+-- | A version of show for doubles that generates correct Haskell literals for nan/infinite
+showHDouble :: Double -> String
+showHDouble d
+   | isNaN d             = "((0/0) :: Double)"
+   | isInfinite d, d < 0 = "((-1/0) :: Double)"
+   | isInfinite d        = "((1/0) :: Double)"
+   | True                = show d
+
+-- | A version of show for floats that generates correct SMTLib literals using the rounding mode
+showSMTFloat :: RoundingMode -> Float -> String
+showSMTFloat rm f
+   | isNaN f             = as "NaN"
+   | isInfinite f, f < 0 = as "minusInfinity"
+   | isInfinite f        = as "plusInfinity"
+   | isNegativeZero f    = "(- ((_ asFloat 8 24) " ++ smtRoundingMode rm ++ " (/ 0 1)))"
+   | True                = "((_ asFloat 8 24) " ++ smtRoundingMode rm ++ " " ++ toSMTLibRational (toRational f) ++ ")"
+   where as s = "(as " ++ s ++ " (_ FP 8 24))"
+
+-- | A version of show for doubles that generates correct SMTLib literals using the rounding mode
+showSMTDouble :: RoundingMode -> Double -> String
+showSMTDouble rm d
+   | isNaN d             = as "NaN"
+   | isInfinite d, d < 0 = as "minusInfinity"
+   | isInfinite d        = as "plusInfinity"
+   | isNegativeZero d    = "(- ((_ asFloat 11 53) " ++ smtRoundingMode rm ++ " (/ 0 1)))"
+   | True                = "((_ asFloat 11 53) " ++ smtRoundingMode rm ++ " " ++ toSMTLibRational (toRational d) ++ ")"
+   where as s = "(as " ++ s ++ " (_ FP 11 53))"
+
+-- | Show a rational in SMTLib format
+toSMTLibRational :: Rational -> String
+toSMTLibRational r
+   | n < 0
+   = "(- (/ "  ++ show (abs n) ++ " " ++ show d ++ "))"
+   | True
+   = "(/ " ++ show n ++ " " ++ show d ++ ")"
+  where n = numerator r
+        d = denominator r
+
+-- | Convert a rounding mode to the format SMT-Lib2 understands.
+smtRoundingMode :: RoundingMode -> String
+smtRoundingMode RoundNearestTiesToEven = "roundNearestTiesToEven"
+smtRoundingMode RoundNearestTiesToAway = "roundNearestTiesToAway"
+smtRoundingMode RoundTowardPositive    = "roundTowardPositive"
+smtRoundingMode RoundTowardNegative    = "roundTowardNegative"
+smtRoundingMode RoundTowardZero        = "roundTowardZero"

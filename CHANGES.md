@@ -1,7 +1,55 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 2.10
+* Latest Hackage released version: 3.0
+
+### Version 3.0, 2014-02-16
+   
+ * Support for floating-point numbers:
+      * Preliminary support for IEEE-floating point arithmetic, introducing
+        the types `SFloat` and `SDouble`. The support is still quite new,
+        and Z3 is the only solver that currently features a solver for
+        this logic. Likely to have bugs, both at the SBV level, and at the
+        Z3 level; so any bug reports are welcome!
+ * New backend solvers:
+      * SBV now supports MathSAT from Fondazione Bruno Kessler and
+        DISI-University of Trento. See: http://mathsat.fbk.eu/
+ * Support all-sat calls in the presence of uninterpreted sorts:
+      * Implement better support for `allSat` in the presence of uninterpreted
+        sorts. Previously, SBV simply rejected running `allSat` queries
+        in the presence of uninterpreted sorts, since it was not possible
+        to generate a refuting model. The model returned by the SMT solver
+        is simply not usable, since it names constants that is not visible
+        in a subsequent run. Eric Seidel came up with the idea that we can
+        actually compute equivalence classes based on a produced model, and
+        assert the constraint that the new model should disallow the previously
+        found equivalence classes instead. The idea seems to work well
+        in practice, and there is also an example program demonstrating
+        the functionality: Examples/Uninterpreted/UISortAllSat.hs
+ * Programmable model extraction improvements:
+      * Add functions `getModelDictionary` and `getModelDictionaries`, which
+        provide low-level access to models returned from SMT solvers. Former
+        for `sat` and `prove` calls, latter for `allSat` calls. Together with
+        the exported utils from the `Data.SBV.Internals` module, this should
+        allow for expert users to dissect the models returned and do fancier
+        programming on top of SBV.
+      * Add `getModelValue`, `getModelValues`, `getModelUninterpretedValue`, and
+        `getModelUninterpretedValues`; which further aid in model value
+        extraction.
+ * Other:
+      * Allow users to specify the SMT-Lib logic to use, if necessary. SBV will
+        still pick the logic automatically, but users can now override that choice.
+	Comes in handy when playing with custom logics.
+ * Bug fixes:
+      * Address allsat-laziness issue (#78 in github issue tracker). Essentially,
+        simplify how all-sat is called so we can avoid calling the solver for
+        solutions that are not needed. Thanks to Eric Seidel for reporting.
+ * Examples:
+      * Add Data/SBV/Examples/Misc/ModelExtract.hs as a simple example for
+        programmable model extraction and usage.
+      * Add Data/SBV/Examples/Misc/Floating.hs for some FP examples.
+      * Use the AUFLIA logic in Examples.Existentials.Diophantine which helps
+        z3 complete the proof quickly. (The BV logics take too long for this problem.)
 
 ### Version 2.10, 2013-03-22
  
@@ -108,7 +156,7 @@
   - Improve test suite, adding many constant-folding tests
     and start using cabal based tests (--enable-tests option.)
 
-Versions 2.4, 2.5, and 2.6: Around mid October 2012
+### Versions 2.4, 2.5, and 2.6: Around mid October 2012
 
   - Workaround issues related hackage compilation, in particular to the
     problem with the new containers package release, which does provide
@@ -141,24 +189,24 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
 
 ### Version 2.1, 2012-05-24
 
- Library:
-  - Add support for uninterpreted sorts, together with user defined
-    domain axioms. See Data.SBV.Examples.Uninterpreted.Sort
-    and Data.SBV.Examples.Uninterpreted.Deduce for basic examples of
-    this feature.
-  - Add support for C code-generation with SReals. The user picks
-    one of 3 possible C types for the SReal type: CgFloat, CgDouble
-    or CgLongDouble, using the function cgSRealType. Naturally, the
-    resulting C program will suffer a loss of precision, as it will
-    be subject to IEE-754 rounding as implied by the underlying type.
-  - Add toSReal :: SInteger -> SReal, which can be used to promote
-    symbolic integers to reals. Comes handy in mixed integer/real
-    computations.
- Examples:
-  - Recast the dog-cat-mouse example to use the solver over reals.
-  - Add Data.SBV.Examples.Uninterpreted.Sort, and
-        Data.SBV.Examples.Uninterpreted.Deduce
-    for illustrating uninterpreted sorts and axioms.
+ * Library:
+    * Add support for uninterpreted sorts, together with user defined
+      domain axioms. See Data.SBV.Examples.Uninterpreted.Sort
+      and Data.SBV.Examples.Uninterpreted.Deduce for basic examples of
+      this feature.
+    * Add support for C code-generation with SReals. The user picks
+      one of 3 possible C types for the SReal type: CgFloat, CgDouble
+      or CgLongDouble, using the function cgSRealType. Naturally, the
+      resulting C program will suffer a loss of precision, as it will
+      be subject to IEE-754 rounding as implied by the underlying type.
+    * Add toSReal :: SInteger -> SReal, which can be used to promote
+      symbolic integers to reals. Comes handy in mixed integer/real
+      computations.
+ * Examples:
+    * Recast the dog-cat-mouse example to use the solver over reals.
+    * Add Data.SBV.Examples.Uninterpreted.Sort, and
+           Data.SBV.Examples.Uninterpreted.Deduce
+      for illustrating uninterpreted sorts and axioms.
 
 ### Version 2.0, 2012-05-10
   
@@ -187,28 +235,31 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
   for the expansion of the acronym SBV.
 
   Other notable changes in the library:
-    * Add functions s[TYPE] and s[TYPE]s for each symbolic type we support (i.e.,
-      sBool, sBools, sWord8, sWord8s, etc.), to create symbolic variables of the
-      right kind.  Strictly speaking these are just synonyms for 'free'
-      and 'mapM free' (plural versions), so they aren't adding any additional
-      power. Except, they are specialized at their respective types, and might be
-      easier to remember.
-    * Add function solve, which is merely a synonym for (return . bAnd), but
-      it simplifies expressing problems.
-    * Add class SNum, which simplifies writing polymorphic code over symbolic values
-    * Increase haddock coverage metrics
-    * Major code refactoring around symbolic kinds
-    * SMTLib2: Emit ":produce-models" call before setting the logic, as required
-      by the SMT-Lib2 standard. [Patch provided by arrowdodger on github, thanks!]
+
+  * Add functions s[TYPE] and s[TYPE]s for each symbolic type we support (i.e.,
+    sBool, sBools, sWord8, sWord8s, etc.), to create symbolic variables of the
+    right kind.  Strictly speaking these are just synonyms for 'free'
+    and 'mapM free' (plural versions), so they aren't adding any additional
+    power. Except, they are specialized at their respective types, and might be
+    easier to remember.
+  * Add function solve, which is merely a synonym for (return . bAnd), but
+    it simplifies expressing problems.
+  * Add class SNum, which simplifies writing polymorphic code over symbolic values
+  * Increase haddock coverage metrics
+  * Major code refactoring around symbolic kinds
+  * SMTLib2: Emit ":produce-models" call before setting the logic, as required
+    by the SMT-Lib2 standard. [Patch provided by arrowdodger on github, thanks!]
 
   Bugs fixed:
-    * [Performance] Use a much simpler default definition for "select": While the
-      older version (based on binary search on the bits of the indexer) was correct,
-      it created unnecessarily big expressions. Since SBV does not have a notion
-      of concrete subwords, the binary-search trick was not bringing any advantage
-      in any case. Instead, we now simply use a linear walk over the elements.
+
+   * [Performance] Use a much simpler default definition for "select": While the
+     older version (based on binary search on the bits of the indexer) was correct,
+     it created unnecessarily big expressions. Since SBV does not have a notion
+     of concrete subwords, the binary-search trick was not bringing any advantage
+     in any case. Instead, we now simply use a linear walk over the elements.
 
   Examples:
+
    * Change dog-cat-mouse example to use SInteger for the counts
    * Add merge-sort example: Data.SBV.Examples.BitPrecise.MergeSort
    * Add diophantine solver example: Data.SBV.Examples.Existentials.Diophantine
@@ -225,6 +276,7 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
 ### Version 1.2, 2012-02-25
 
  Library:
+
   * Add a hook so users can add custom script segments for SMT solvers. The new
     "solverTweaks" field in the SMTConfig data-type can be used for this purpose.
     The need for this came about due to the need to workaround a Z3 v3.2 issue
@@ -240,6 +292,7 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
 ### Version 1.1, 2012-02-14
 
  Library:
+
   * Rename bitValue to sbvTestBit
   * Add sbvPopCount
   * Add a custom implementation of 'popCount' for the Bits class
@@ -252,6 +305,7 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
 ### Version 1.0, 2012-02-13
 
  Library:
+
   * Z3 is now the "default" SMT solver. Yices is still available, but
     has to be specifically selected. (Use satWith, allSatWith, proveWith, etc.)
   * Better handling of the pConstrain probability threshold for test
@@ -267,15 +321,20 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
   * add function:
       extractModels :: SatModel a => AllSatResult -> [a]
     which simplifies accessing allSat results greatly.
+
  Code-generation:
+
   * add "cgGenerateMakefile" which allows the user to choose if SBV
     should generate a Makefile. (default: True)
+
  Other
+
   * Changes to make it compile with GHC 7.4.1.
 
 ### Version 0.9.24, 2011-12-28
 
   Library:
+
    * Add "forSome," analogous to "forAll." (The name "exists" would've
      been better, but it's already taken.) This is not as useful as
      one might think as forAll and forSome do not nest, as an inner
@@ -312,11 +371,17 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
      universal, in a sat call existential.) Of course, exists/forall are still
      available when mixed quantifiers are needed, or when the user wants to
      be explicit about the quantifiers.
+
   Examples
+
    * Add Data/SBV/Examples/Puzzles/Coins.hs. (Shows the usage of "constrain".)
+
   Dependencies
+
    * Bump up random package dependency to 1.0.1.1 (from 1.0.0.2)
+
   Internal
+
    * Major reorganization of files to and build infrastructure to
      decrease build times and better layout
    * Get rid of custom Setup.hs, just use simple build. The extra work
@@ -325,6 +390,7 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
 ### Version 0.9.23, 2011-12-05
   
   Library:
+
    * Add support for SInteger, the type of signed unbounded integer
      values. SBV can now prove theorems about unbounded numbers,
      following the semantics of Haskell's Integer type. (Requires z3 to
@@ -336,7 +402,9 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
      to use an alternate definition in the target language (i.e., C). This
      is important for efficient code generation, when we want to
      take advantage of native libraries available in the target platform.
+
   Other:
+
    * Change getModel to return a tuple in the success case, where
      the first component is a boolean indicating whether the model
      is "potential." This is used to indicate that the solver
@@ -370,99 +438,119 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
   C functions defined elsewhere. See below for details.
 
   Other changes:
-    Code:
-     * Change getModel, so it returns an Either value to indicate
-       something went wrong; instead of throwing an error
-     * Add support for computing CRCs directly (without needing
-       polynomial division).
-    Code generation:
-     * Add "cgGenerateDriver" function, which can be used to turn
-       on/off driver program generation. Default is to generate
-       a driver. (Issue "cgGenerateDriver False" to skip the driver.)
-       For a library, a driver will be generated if any of the
-       constituent parts has a driver. Otherwise it'll be skipped.
-     * Fix a bug in C code generation where "Not" over booleans were
-       incorrectly getting translated due to need for masking.
-     * Add support for compilation with uninterpreted functions. Users
-       can now specify the corresponding C code and SBV will simply
-       call the "native" functions instead of generating it. This
-       enables interfacing with other C programs. See the functions:
-       cgAddPrototype, cgAddDecl, and cgAddLDFlags.
-    Examples:
-     * Add CRC polynomial generation example via existentials
-     * Add USB CRC code generation example, both via polynomials and
-       using the internal CRC functionality
+
+  Code:
+
+   * Change getModel, so it returns an Either value to indicate
+     something went wrong; instead of throwing an error
+   * Add support for computing CRCs directly (without needing
+     polynomial division).
+
+  Code generation:
+
+   * Add "cgGenerateDriver" function, which can be used to turn
+     on/off driver program generation. Default is to generate
+     a driver. (Issue "cgGenerateDriver False" to skip the driver.)
+     For a library, a driver will be generated if any of the
+     constituent parts has a driver. Otherwise it'll be skipped.
+   * Fix a bug in C code generation where "Not" over booleans were
+     incorrectly getting translated due to need for masking.
+   * Add support for compilation with uninterpreted functions. Users
+     can now specify the corresponding C code and SBV will simply
+     call the "native" functions instead of generating it. This
+     enables interfacing with other C programs. See the functions:
+     cgAddPrototype, cgAddDecl, and cgAddLDFlags.
+
+  Examples:
+
+   * Add CRC polynomial generation example via existentials
+   * Add USB CRC code generation example, both via polynomials and using the internal CRC functionality
 
 ### Version 0.9.21, 2011-08-05
    
-   Code generation:
-    * Allow for inclusion of user makefiles
-    * Allow for CCFLAGS to be set by the user
-    * Other minor clean-up
+ Code generation:
+
+  * Allow for inclusion of user makefiles
+  * Allow for CCFLAGS to be set by the user
+  * Other minor clean-up
 
 ### Version 0.9.20, 2011-06-05
    
   Regression on 0.9.19; add missing file to cabal
 
 ### Version 0.9.19, 2011-06-05
-    
-   Code:
-    * Add SignCast class for conversion between signed/unsigned
-      quantities for same-sized bit-vectors
-    * Add full-binary trees that can be indexed symbolically (STree). The
-      advantage of this type is that the reads and writes take
-      logarithmic time. Suitable for implementing faster symbolic look-up.
-    * Expose HasSignAndSize class through Data.SBV.Internals
-    * Many minor improvements, file re-orgs
-   Examples:
-    * Add sentence-counting example
-    * Add an implementation of RC4
+
+
+  * Add SignCast class for conversion between signed/unsigned
+    quantities for same-sized bit-vectors
+  * Add full-binary trees that can be indexed symbolically (STree). The
+    advantage of this type is that the reads and writes take
+    logarithmic time. Suitable for implementing faster symbolic look-up.
+  * Expose HasSignAndSize class through Data.SBV.Internals
+  * Many minor improvements, file re-orgs
+
+Examples:
+
+  * Add sentence-counting example
+  * Add an implementation of RC4
 
 ### Version 0.9.18, 2011-04-07
 
-  Code:
-    * Re-engineer code-generation, and compilation to C.
-      In particular, allow arrays of inputs to be specified,
-      both as function arguments and output reference values.
-    * Add support for generation of generation of C-libraries,
-      allowing code generation for a set of functions that
-      work together.
-  Examples:
-    * Update code-generation examples to use the new API.
-    * Include a library-generation example for doing 128-bit
-      AES encryption
+Code:
+
+  * Re-engineer code-generation, and compilation to C.
+    In particular, allow arrays of inputs to be specified,
+    both as function arguments and output reference values.
+  * Add support for generation of generation of C-libraries,
+    allowing code generation for a set of functions that
+    work together.
+
+Examples:
+
+  * Update code-generation examples to use the new API.
+  * Include a library-generation example for doing 128-bit
+    AES encryption
 
 ### Version 0.9.17, 2011-03-29
    
-  Code:
-    * Simplify and reorganize the test suite
-  Examples:
-    * Improve AES decryption example, by using
-      table-lookups in InvMixColumns.
+Code:
+
+  * Simplify and reorganize the test suite
+
+Examples:
+
+  * Improve AES decryption example, by using
+    table-lookups in InvMixColumns.
   
 ### Version 0.9.16, 2011-03-28
 
-  Code:
-    * Further optimizations on Bits instance of SBV
-  Examples:
-    * Add AES algorithm as an example, showing how
-      encryption algorithms are particularly suitable
-      for use with the code-generator
+Code:
+
+  * Further optimizations on Bits instance of SBV
+
+Examples:
+
+  * Add AES algorithm as an example, showing how
+    encryption algorithms are particularly suitable
+    for use with the code-generator
 
 ### Version 0.9.15, 2011-03-24
    
-  Bug fixes:
-    * Fix rotateL/rotateR instances on concrete
-      words. Previous versions was bogus since
-      it relied on the Integer instance, which
-      does the wrong thing after normalization.
-    * Fix conversion of signed numbers from bits,
-      previous version did not handle two's
-      complement layout correctly
-  Testing:
-    * Add a sleuth of concrete test cases on
-      arithmetic to catch bugs. (There are many
-      of them, ~30K, but they run quickly.)
+Bug fixes:
+
+  * Fix rotateL/rotateR instances on concrete
+    words. Previous versions was bogus since
+    it relied on the Integer instance, which
+    does the wrong thing after normalization.
+  * Fix conversion of signed numbers from bits,
+    previous version did not handle two's
+    complement layout correctly
+
+Testing:
+
+  * Add a sleuth of concrete test cases on
+    arithmetic to catch bugs. (There are many
+    of them, ~30K, but they run quickly.)
 
 ### Version 0.9.14, 2011-03-19
     
@@ -473,25 +561,30 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
 
 ### Version 0.9.13, 2011-03-16
     
-  Bug fixes:
-    * Make sure SBool short-cut evaluations are done
-      as early as possible, as these help with coding
-      recursion-depth based algorithms, when dealing
-      with symbolic termination issues.
-  Examples:
-    * Add fibonacci code-generation example, original
-      code by Lee Pike.
-    * Add a GCD code-generation/verification example
+Bug fixes:
+
+  * Make sure SBool short-cut evaluations are done
+    as early as possible, as these help with coding
+    recursion-depth based algorithms, when dealing
+    with symbolic termination issues.
+
+Examples:
+
+  * Add fibonacci code-generation example, original
+    code by Lee Pike.
+  * Add a GCD code-generation/verification example
 
 ### Version 0.9.12, 2011-03-10
   
-  New features:
-    * Add support for compilation to C
-    * Add a mechanism for offline saving of SMT-Lib files
+New features:
 
-  Bug fixes:
-    * Output naming bug, reported by Josef Svenningsson
-    * Specification bug in Legato's multipler example
+  * Add support for compilation to C
+  * Add a mechanism for offline saving of SMT-Lib files
+
+Bug fixes:
+
+  * Output naming bug, reported by Josef Svenningsson
+  * Specification bug in Legato's multipler example
 
 ### Version 0.9.11, 2011-02-16
   
@@ -522,6 +615,6 @@ Versions 2.4, 2.5, and 2.6: Around mid October 2012
 
   * First stable public hackage release
 
-Versions 0.0.0 - 0.9.6, Mid 2010 through early 2011
+### Versions 0.0.0 - 0.9.6, Mid 2010 through early 2011
 
   * Basic infrastructure, design exploration

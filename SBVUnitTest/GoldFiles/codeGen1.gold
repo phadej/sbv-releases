@@ -33,9 +33,16 @@ veryclean: clean
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 
 /* The boolean type */
 typedef bool SBool;
+
+/* The float type */
+typedef float SFloat;
+
+/* The double type */
+typedef double SDouble;
 
 /* Unsigned bit-vectors */
 typedef uint8_t  SWord8 ;
@@ -62,6 +69,7 @@ SInt16 foo(const SInt16 x, const SInt64 *xArr, SWord16 *z,
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 #include <stdio.h>
 #include "foo.h"
 
@@ -114,6 +122,7 @@ int main(void)
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 #include "foo.h"
 
 SInt16 foo(const SInt16 x, const SInt64 *xArr, SWord16 *z,
