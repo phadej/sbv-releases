@@ -39,7 +39,7 @@ optionPrefix
 -- The default options are @\"-in -smt2\"@, which is valid for Z3 4.1. You can use the @SBV_Z3_OPTIONS@ environment variable to override the options.
 z3 :: SMTSolver
 z3 = SMTSolver {
-           name           = "z3"
+           name           = Z3
          , executable     = "z3"
          , options        = map (optionPrefix:) ["in", "smt2"]
          , engine         = \cfg isSat qinps modelMap skolemMap pgm -> do
@@ -72,7 +72,7 @@ z3 = SMTSolver {
  where cleanErrs = intercalate "\n" . filter (not . junk) . lines
        junk = ("WARNING:" `isPrefixOf`)
        zero :: RoundingMode -> Kind -> String
-       zero _  (KBounded False 1)  = "#b0"
+       zero _  KBool               = "false"
        zero _  (KBounded _     sz) = "#x" ++ replicate (sz `div` 4) '0'
        zero _  KUnbounded          = "0"
        zero _  KReal               = "0.0"
@@ -89,7 +89,7 @@ z3 = SMTSolver {
               extract (Left s)        = ["(echo \"((" ++ show s ++ " " ++ zero rm (kindOf s) ++ "))\")"]
               extract (Right (s, [])) = let g = "(get-value (" ++ show s ++ "))" in getVal (kindOf s) g
               extract (Right (s, ss)) = let g = "(get-value ((" ++ show s ++ concat [' ' : zero rm (kindOf a) | a <- ss] ++ ")))" in getVal (kindOf s) g
-              getVal KReal g = ["(set-option :pp.decimal false)", g, "(set-option :pp.decimal true)", g]
+              getVal KReal g = ["(set-option :pp.decimal false) " ++ g, "(set-option :pp.decimal true)  " ++ g]
               getVal _     g = [g]
        addTimeOut Nothing  o   = o
        addTimeOut (Just i) o

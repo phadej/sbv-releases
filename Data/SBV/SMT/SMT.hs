@@ -16,15 +16,13 @@ module Data.SBV.SMT.SMT where
 import qualified Control.Exception as C
 
 import Control.Concurrent (newEmptyMVar, takeMVar, putMVar, forkIO)
-import Control.DeepSeq    (NFData(..))
 import Control.Monad      (when, zipWithM)
 import Data.Char          (isSpace)
 import Data.Int           (Int8, Int16, Int32, Int64)
 import Data.List          (intercalate, isPrefixOf, isInfixOf)
-import Data.Maybe         (isNothing, fromJust)
 import Data.Word          (Word8, Word16, Word32, Word64)
 import System.Directory   (findExecutable)
-import System.Process     (readProcessWithExitCode, runInteractiveProcess, waitForProcess)
+import System.Process     (runInteractiveProcess, waitForProcess, terminateProcess)
 import System.Exit        (ExitCode(..))
 import System.IO          (hClose, hFlush, hPutStr, hGetContents, hGetLine)
 
@@ -35,72 +33,6 @@ import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.PrettyNum
 import Data.SBV.Utils.TDiff
 
--- | Solver configuration. See also 'z3', 'yices', 'cvc4', and 'boolector, which are instantiations of this type for those solvers, with
--- reasonable defaults. In particular, custom configuration can be created by varying those values. (Such as @z3{verbose=True}@.)
---
--- Most fields are self explanatory. The notion of precision for printing algebraic reals stems from the fact that such values does
--- not necessarily have finite decimal representations, and hence we have to stop printing at some depth. It is important to
--- emphasize that such values always have infinite precision internally. The issue is merely with how we print such an infinite
--- precision value on the screen. The field 'printRealPrec' controls the printing precision, by specifying the number of digits after
--- the decimal point. The default value is 16, but it can be set to any positive integer.
---
--- When printing, SBV will add the suffix @...@ at the and of a real-value, if the given bound is not sufficient to represent the real-value
--- exactly. Otherwise, the number will be written out in standard decimal notation. Note that SBV will always print the whole value if it
--- is precise (i.e., if it fits in a finite number of digits), regardless of the precision limit. The limit only applies if the representation
--- of the real value is not finite, i.e., if it is not rational.
-data SMTConfig = SMTConfig {
-         verbose       :: Bool             -- ^ Debug mode
-       , timing        :: Bool             -- ^ Print timing information on how long different phases took (construction, solving, etc.)
-       , timeOut       :: Maybe Int        -- ^ How much time to give to the solver. (In seconds)
-       , printBase     :: Int              -- ^ Print integral literals in this base (2, 8, and 10, and 16 are supported.)
-       , printRealPrec :: Int              -- ^ Print algebraic real values with this precision. (SReal, default: 16)
-       , solverTweaks  :: [String]         -- ^ Additional lines of script to give to the solver (user specified)
-       , satCmd        :: String           -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
-       , smtFile       :: Maybe FilePath   -- ^ If Just, the generated SMT script will be put in this file (for debugging purposes mostly)
-       , useSMTLib2    :: Bool             -- ^ If True, we'll treat the solver as using SMTLib2 input format. Otherwise, SMTLib1
-       , solver        :: SMTSolver        -- ^ The actual SMT solver.
-       , roundingMode  :: RoundingMode     -- ^ Rounding mode to use for floating-point conversions
-       , useLogic      :: Maybe Logic      -- ^ If Nothing, pick automatically. Otherwise, either use the given one, or use the custom string.
-       }
-
--- | An SMT engine
-type SMTEngine = SMTConfig -> Bool -> [(Quantifier, NamedSymVar)] -> [(String, UnintKind)] -> [Either SW (SW, [SW])] -> String -> IO SMTResult
-
--- | An SMT solver
-data SMTSolver = SMTSolver {
-         name           :: String               -- ^ Printable name of the solver
-       , executable     :: String               -- ^ The path to its executable
-       , options        :: [String]             -- ^ Options to provide to the solver
-       , engine         :: SMTEngine            -- ^ The solver engine, responsible for interpreting solver output
-       , xformExitCode  :: ExitCode -> ExitCode -- ^ Should we re-interpret exit codes. Most solvers behave rationally, i.e., id will do. Some (like CVC4) don't.
-       , capabilities   :: SolverCapabilities   -- ^ Various capabilities of the solver
-       }
-
--- | A model, as returned by a solver
-data SMTModel = SMTModel {
-        modelAssocs    :: [(String, CW)]        -- ^ Mapping of symbolic values to constants.
-     ,  modelArrays    :: [(String, [String])]  -- ^ Arrays, very crude; only works with Yices.
-     ,  modelUninterps :: [(String, [String])]  -- ^ Uninterpreted funcs; very crude; only works with Yices.
-     }
-     deriving Show
-
--- | The result of an SMT solver call. Each constructor is tagged with
--- the 'SMTConfig' that created it so that further tools can inspect it
--- and build layers of results, if needed. For ordinary uses of the library,
--- this type should not be needed, instead use the accessor functions on
--- it. (Custom Show instances and model extractors.)
-data SMTResult = Unsatisfiable SMTConfig            -- ^ Unsatisfiable
-               | Satisfiable   SMTConfig SMTModel   -- ^ Satisfiable with model
-               | Unknown       SMTConfig SMTModel   -- ^ Prover returned unknown, with a potential (possibly bogus) model
-               | ProofError    SMTConfig [String]   -- ^ Prover errored out
-               | TimeOut       SMTConfig            -- ^ Computation timed out (see the 'timeout' combinator)
-
--- | A script, to be passed to the solver.
-data SMTScript = SMTScript {
-          scriptBody  :: String        -- ^ Initial feed
-        , scriptModel :: Maybe String  -- ^ Optional continuation script, if the result is sat
-        }
-
 -- | Extract the final configuration from a result
 resultConfig :: SMTResult -> SMTConfig
 resultConfig (Unsatisfiable c) = c
@@ -108,16 +40,6 @@ resultConfig (Satisfiable c _) = c
 resultConfig (Unknown c _)     = c
 resultConfig (ProofError c _)  = c
 resultConfig (TimeOut c)       = c
-
-instance NFData SMTResult where
-  rnf (Unsatisfiable _)   = ()
-  rnf (Satisfiable _ xs)  = rnf xs `seq` ()
-  rnf (Unknown _ xs)      = rnf xs `seq` ()
-  rnf (ProofError _ xs)   = rnf xs `seq` ()
-  rnf (TimeOut _)         = ()
-
-instance NFData SMTModel where
-  rnf (SMTModel assocs unints uarrs) = rnf assocs `seq` rnf unints `seq` rnf uarrs `seq` ()
 
 -- | A 'prove' call results in a 'ThmResult'
 newtype ThmResult    = ThmResult    SMTResult
@@ -130,17 +52,19 @@ newtype SatResult    = SatResult    SMTResult
 -- we should warn the user about prefix-existentials.
 newtype AllSatResult = AllSatResult (Bool, [SMTResult])
 
+-- | User friendly way of printing theorem results
 instance Show ThmResult where
   show (ThmResult r) = showSMTResult "Q.E.D."
                                      "Unknown"     "Unknown. Potential counter-example:\n"
                                      "Falsifiable" "Falsifiable. Counter-example:\n" r
 
+-- | User friendly way of printing satisfiablity results
 instance Show SatResult where
   show (SatResult r) = showSMTResult "Unsatisfiable"
                                      "Unknown"     "Unknown. Potential model:\n"
                                      "Satisfiable" "Satisfiable. Model:\n" r
 
--- NB. The Show instance of AllSatResults have to be careful in being lazy enough
+-- | The Show instance of AllSatResults. Note that we have to be careful in being lazy enough
 -- as the typical use case is to pull results out as they become available.
 instance Show AllSatResult where
   show (AllSatResult (e, xs)) = go (0::Int) xs
@@ -181,47 +105,69 @@ genParse :: Integral a => Kind -> [CW] -> Maybe (a, [CW])
 genParse k (x@(CW _ (CWInteger i)):r) | kindOf x == k = Just (fromIntegral i, r)
 genParse _ _                                          = Nothing
 
--- Base case, that comes in handy if there are no real variables
+-- | Base case for 'SatModel' at unit type. Comes in handy if there are no real variables.
 instance SatModel () where
   parseCWs xs = return ((), xs)
 
+-- | 'Bool' as extracted from a model
 instance SatModel Bool where
-  parseCWs xs = do (x, r) <- genParse (KBounded False 1) xs
+  parseCWs xs = do (x, r) <- genParse KBool xs
                    return ((x :: Integer) /= 0, r)
 
+-- | 'Word8' as extracted from a model
 instance SatModel Word8 where
   parseCWs = genParse (KBounded False 8)
 
+-- | 'Int8' as extracted from a model
 instance SatModel Int8 where
   parseCWs = genParse (KBounded True 8)
 
+-- | 'Word16' as extracted from a model
 instance SatModel Word16 where
   parseCWs = genParse (KBounded False 16)
 
+-- | 'Int16' as extracted from a model
 instance SatModel Int16 where
   parseCWs = genParse (KBounded True 16)
 
+-- | 'Word32' as extracted from a model
 instance SatModel Word32 where
   parseCWs = genParse (KBounded False 32)
 
+-- | 'Int32' as extracted from a model
 instance SatModel Int32 where
   parseCWs = genParse (KBounded True 32)
 
+-- | 'Word64' as extracted from a model
 instance SatModel Word64 where
   parseCWs = genParse (KBounded False 64)
 
+-- | 'Int64' as extracted from a model
 instance SatModel Int64 where
   parseCWs = genParse (KBounded True 64)
 
+-- | 'Integer' as extracted from a model
 instance SatModel Integer where
   parseCWs = genParse KUnbounded
 
+-- | 'AlgReal' as extracted from a model
 instance SatModel AlgReal where
   parseCWs (CW KReal (CWAlgReal i) : r) = Just (i, r)
   parseCWs _                            = Nothing
 
--- when reading a list; go as long as we can (maximal-munch)
--- note that this never fails..
+-- | 'Float' as extracted from a model
+instance SatModel Float where
+  parseCWs (CW KFloat (CWFloat i) : r) = Just (i, r)
+  parseCWs _                           = Nothing
+
+-- | 'Double' as extracted from a model
+instance SatModel Double where
+  parseCWs (CW KDouble (CWDouble i) : r) = Just (i, r)
+  parseCWs _                             = Nothing
+
+-- | A list of values as extracted from a model. When reading a list, we
+-- go as long as we can (maximal-munch). Note that this never fails, as
+-- we can always return the empty list!
 instance SatModel a => SatModel [a] where
   parseCWs [] = Just ([], [])
   parseCWs xs = case parseCWs xs of
@@ -230,31 +176,37 @@ instance SatModel a => SatModel [a] where
                                     Nothing       -> Just ([], ys)
                   Nothing     -> Just ([], xs)
 
+-- | Tuples extracted from a model
 instance (SatModel a, SatModel b) => SatModel (a, b) where
   parseCWs as = do (a, bs) <- parseCWs as
                    (b, cs) <- parseCWs bs
                    return ((a, b), cs)
 
+-- | 3-Tuples extracted from a model
 instance (SatModel a, SatModel b, SatModel c) => SatModel (a, b, c) where
   parseCWs as = do (a,      bs) <- parseCWs as
                    ((b, c), ds) <- parseCWs bs
                    return ((a, b, c), ds)
 
+-- | 4-Tuples extracted from a model
 instance (SatModel a, SatModel b, SatModel c, SatModel d) => SatModel (a, b, c, d) where
   parseCWs as = do (a,         bs) <- parseCWs as
                    ((b, c, d), es) <- parseCWs bs
                    return ((a, b, c, d), es)
 
+-- | 5-Tuples extracted from a model
 instance (SatModel a, SatModel b, SatModel c, SatModel d, SatModel e) => SatModel (a, b, c, d, e) where
   parseCWs as = do (a, bs)            <- parseCWs as
                    ((b, c, d, e), fs) <- parseCWs bs
                    return ((a, b, c, d, e), fs)
 
+-- | 6-Tuples extracted from a model
 instance (SatModel a, SatModel b, SatModel c, SatModel d, SatModel e, SatModel f) => SatModel (a, b, c, d, e, f) where
   parseCWs as = do (a, bs)               <- parseCWs as
                    ((b, c, d, e, f), gs) <- parseCWs bs
                    return ((a, b, c, d, e, f), gs)
 
+-- | 7-Tuples extracted from a model
 instance (SatModel a, SatModel b, SatModel c, SatModel d, SatModel e, SatModel f, SatModel g) => SatModel (a, b, c, d, e, f, g) where
   parseCWs as = do (a, bs)                  <- parseCWs as
                    ((b, c, d, e, f, g), hs) <- parseCWs bs
@@ -304,16 +256,19 @@ getModelValues s (AllSatResult (_, xs)) =  map (s `getModelValue`) xs
 getModelUninterpretedValues :: String -> AllSatResult -> [Maybe String]
 getModelUninterpretedValues s (AllSatResult (_, xs)) =  map (s `getModelUninterpretedValue`) xs
 
+-- | 'ThmResult' as a generic model provider
 instance Modelable ThmResult where
   getModel           (ThmResult r) = getModel r
   modelExists        (ThmResult r) = modelExists r
   getModelDictionary (ThmResult r) = getModelDictionary r
 
+-- | 'SatResult' as a generic model provider
 instance Modelable SatResult where
   getModel           (SatResult r) = getModel r
   modelExists        (SatResult r) = modelExists r
   getModelDictionary (SatResult r) = getModelDictionary r
 
+-- | 'SMTResult' as a generic model provider
 instance Modelable SMTResult where
   getModel (Unsatisfiable _) = Left "SBV.getModel: Unsatisfiable result"
   getModel (Unknown _ m)     = Right (True, parseModelOut m)
@@ -388,8 +343,9 @@ shUA (f, cases) = ("  -- array: " ++ f) : map shC cases
   where shC s = "       " ++ s
 
 -- | Helper function to spin off to an SMT solver.
-pipeProcess :: SMTConfig -> String -> String -> [String] -> SMTScript -> (String -> String) -> IO (Either String [String])
-pipeProcess cfg nm execName opts script cleanErrs = do
+pipeProcess :: SMTConfig -> String -> [String] -> SMTScript -> (String -> String) -> IO (Either String [String])
+pipeProcess cfg execName opts script cleanErrs = do
+        let nm = show (name (solver cfg))
         mbExecPath <- findExecutable execName
         case mbExecPath of
           Nothing -> return $ Left $ "Unable to locate executable for " ++ nm
@@ -428,13 +384,13 @@ standardSolver config script cleanErrs failure success = do
         exec     = executable smtSolver
         opts     = options smtSolver
         isTiming = timing config
-        nmSolver = name smtSolver
+        nmSolver = show (name smtSolver)
     msg $ "Calling: " ++ show (unwords (exec:opts))
     case smtFile config of
       Nothing -> return ()
       Just f  -> do msg $ "Saving the generated script in file: " ++ show f
                     writeFile f (scriptBody script)
-    contents <- timeIf isTiming nmSolver $ pipeProcess config nmSolver exec opts script cleanErrs
+    contents <- timeIf isTiming nmSolver $ pipeProcess config  exec opts script cleanErrs
     msg $ nmSolver ++ " output:\n" ++ either id (intercalate "\n") contents
     case contents of
       Left e   -> return $ failure (lines e)
@@ -444,41 +400,46 @@ standardSolver config script cleanErrs failure success = do
 -- and can speak SMT-Lib2 (just a little).
 runSolver :: SMTConfig -> FilePath -> [String] -> SMTScript -> IO (ExitCode, String, String)
 runSolver cfg execPath opts script
- | isNothing $ scriptModel script
- = let checkCmd | useSMTLib2 cfg = '\n' : satCmd cfg
-                | True           = ""
-   in readProcessWithExitCode execPath opts (scriptBody script ++ checkCmd)
- | True
- = do (send, ask, cleanUp) <- do
+ = do (send, ask, cleanUp, pid) <- do
                 (inh, outh, errh, pid) <- runInteractiveProcess execPath opts Nothing Nothing
                 let send l    = hPutStr inh (l ++ "\n") >> hFlush inh
-                    recv      = hGetLine outh `C.catch` (\(_ :: C.SomeException) -> return "")
+                    recv      = hGetLine outh
                     ask l     = send l >> recv
-                    cleanUp r = do outMVar <- newEmptyMVar
-                                   out <- hGetContents outh
-                                   _ <- forkIO $ C.evaluate (length out) >> putMVar outMVar ()
-                                   err <- hGetContents errh
-                                   _ <- forkIO $ C.evaluate (length err) >> putMVar outMVar ()
-                                   hClose inh
-                                   takeMVar outMVar
-                                   takeMVar outMVar
-                                   hClose outh
-                                   hClose errh
-                                   ex <- waitForProcess pid
-                                   -- if the status is unknown, prepare for the possibility of not having a model
-                                   -- TBD: This is rather crude and potentially Z3 specific
-                                   return $ if "unknown" `isPrefixOf` r && "error" `isInfixOf` (out ++ err)
-                                            then (ExitSuccess, r               , "")
-                                            else (ex,          r ++ "\n" ++ out, err)
-                return (send, ask, cleanUp)
-      mapM_ send (lines (scriptBody script))
-      r <- ask $ satCmd cfg
-      when (any (`isPrefixOf` r) ["sat", "unknown"]) $ do
-        let mls = lines (fromJust (scriptModel script))
-        when (verbose cfg) $ do putStrLn "** Sending the following model extraction commands:"
-                                mapM_ putStrLn mls
-        mapM_ send mls
-      cleanUp r
+                    cleanUp response
+                        = do hClose inh
+                             outMVar <- newEmptyMVar
+                             out <- hGetContents outh
+                             _ <- forkIO $ C.evaluate (length out) >> putMVar outMVar ()
+                             err <- hGetContents errh
+                             _ <- forkIO $ C.evaluate (length err) >> putMVar outMVar ()
+                             takeMVar outMVar
+                             takeMVar outMVar
+                             hClose outh
+                             hClose errh
+                             ex <- waitForProcess pid
+                             return $ case response of
+                                        Nothing        -> (ex, out, err)
+                                        Just (r, vals) -> -- if the status is unknown, prepare for the possibility of not having a model
+                                                          -- TBD: This is rather crude and potentially Z3 specific
+                                                          let finalOut = intercalate "\n" (r : vals)
+                                                          in if "unknown" `isPrefixOf` r && "error" `isInfixOf` (out ++ err)
+                                                             then (ExitSuccess, finalOut               , "")
+                                                             else (ex,          finalOut ++ "\n" ++ out, err)
+                return (send, ask, cleanUp, pid)
+      let executeSolver = do mapM_ send (lines (scriptBody script))
+                             response <- case scriptModel script of
+                                           Nothing -> do send $ satCmd cfg
+                                                         return Nothing
+                                           Just ls -> do r <- ask $ satCmd cfg
+                                                         vals <- if any (`isPrefixOf` r) ["sat", "unknown"]
+                                                                 then do let mls = lines ls
+                                                                         when (verbose cfg) $ do putStrLn "** Sending the following model extraction commands:"
+                                                                                                 mapM_ putStrLn mls
+                                                                         mapM ask mls
+                                                                 else return []
+                                                         return $ Just (r, vals)
+                             cleanUp response
+      executeSolver `C.onException`  terminateProcess pid
 
 -- | In case the SMT-Lib solver returns a response over multiple lines, compress them so we have
 -- each S-Expression spanning only a single line. We'll ignore things line parentheses inside quotes

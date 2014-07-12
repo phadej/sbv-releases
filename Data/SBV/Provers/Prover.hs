@@ -18,30 +18,28 @@ module Data.SBV.Provers.Prover (
          SMTSolver(..), SMTConfig(..), Predicate, Provable(..)
        , ThmResult(..), SatResult(..), AllSatResult(..), SMTResult(..)
        , isSatisfiable, isSatisfiableWith, isTheorem, isTheoremWith
-       , Equality(..)
        , prove, proveWith
        , sat, satWith
        , allSat, allSatWith
        , isVacuous, isVacuousWith
-       , solve
        , SatModel(..), Modelable(..), displayModels, extractModels
        , getModelDictionaries, getModelValues, getModelUninterpretedValues
        , boolector, cvc4, yices, z3, mathSAT, defaultSMTCfg
        , compileToSMTLib, generateSMTBenchmarks
-       , sbvCheckSolverInstallation
+       , isSBranchFeasibleInState
        ) where
 
-import Control.Monad      (when, unless)
-import Data.List          (intercalate)
-import Data.Maybe         (mapMaybe)
-import System.FilePath    (addExtension, splitExtension)
-import System.Time        (getClockTime)
-import System.IO.Unsafe   (unsafeInterleaveIO)
+import Control.Monad       (when, unless)
+import Control.Monad.Trans (liftIO)
+import Data.List           (intercalate)
+import Data.Maybe          (mapMaybe, fromMaybe)
+import System.FilePath     (addExtension, splitExtension)
+import System.Time         (getClockTime)
+import System.IO.Unsafe    (unsafeInterleaveIO)
 
 import qualified Data.Set as Set (Set, toList)
 
 import Data.SBV.BitVectors.Data
-import Data.SBV.BitVectors.Model
 import Data.SBV.SMT.SMT
 import Data.SBV.SMT.SMTLib
 import qualified Data.SBV.Provers.Boolector  as Boolector
@@ -50,21 +48,21 @@ import qualified Data.SBV.Provers.Yices      as Yices
 import qualified Data.SBV.Provers.Z3         as Z3
 import qualified Data.SBV.Provers.MathSAT    as MathSAT
 import Data.SBV.Utils.TDiff
-import Data.SBV.Utils.Boolean
 
 mkConfig :: SMTSolver -> Bool -> [String] -> SMTConfig
-mkConfig s isSMTLib2 tweaks = SMTConfig { verbose       = False
-                                        , timing        = False
-                                        , timeOut       = Nothing
-                                        , printBase     = 10
-                                        , printRealPrec = 16
-                                        , smtFile       = Nothing
-                                        , solver        = s
-                                        , solverTweaks  = tweaks
-                                        , useSMTLib2    = isSMTLib2
-                                        , satCmd        = "(check-sat)"
-                                        , roundingMode  = RoundNearestTiesToEven
-                                        , useLogic      = Nothing
+mkConfig s isSMTLib2 tweaks = SMTConfig { verbose        = False
+                                        , timing         = False
+                                        , sBranchTimeOut = Nothing
+                                        , timeOut        = Nothing
+                                        , printBase      = 10
+                                        , printRealPrec  = 16
+                                        , smtFile        = Nothing
+                                        , solver         = s
+                                        , solverTweaks   = tweaks
+                                        , useSMTLib2     = isSMTLib2
+                                        , satCmd         = "(check-sat)"
+                                        , roundingMode   = RoundNearestTiesToEven
+                                        , useLogic       = Nothing
                                         }
 
 -- | Default configuration for the Boolector SMT solver
@@ -234,16 +232,6 @@ prove = proveWith defaultSMTCfg
 sat :: Provable a => a -> IO SatResult
 sat = satWith defaultSMTCfg
 
--- | Form the symbolic conjunction of a given list of boolean conditions. Useful in expressing
--- problems with constraints, like the following:
---
--- @
---   do [x, y, z] <- sIntegers [\"x\", \"y\", \"z\"]
---      solve [x .> 5, y + z .< x]
--- @
-solve :: [SBool] -> Symbolic SBool
-solve = return . bAnd
-
 -- | Return all satisfying assignments for a predicate, equivalent to @'allSatWith' 'defaultSMTCfg'@.
 -- Satisfying assignments are constructed lazily, so they will be available as returned by the solver
 -- and on demand.
@@ -255,40 +243,8 @@ solve = return . bAnd
 allSat :: Provable a => a -> IO AllSatResult
 allSat = allSatWith defaultSMTCfg
 
--- | Check if the given constraints are satisfiable, equivalent to @'isVacuousWith' 'defaultSMTCfg'@. This
--- call can be used to ensure that the specified constraints (via 'constrain') are satisfiable, i.e., that
--- the proof involving these constraints is not passing vacuously. Here is an example. Consider the following
--- predicate:
---
--- >>> let pred = do { x <- forall "x"; constrain $ x .< x; return $ x .>= (5 :: SWord8) }
---
--- This predicate asserts that all 8-bit values are larger than 5, subject to the constraint that the
--- values considered satisfy @x .< x@, i.e., they are less than themselves. Since there are no values that
--- satisfy this constraint, the proof will pass vacuously:
---
--- >>> prove pred
--- Q.E.D.
---
--- We can use 'isVacuous' to make sure to see that the pass was vacuous:
---
--- >>> isVacuous pred
--- True
---
--- While the above example is trivial, things can get complicated if there are multiple constraints with
--- non-straightforward relations; so if constraints are used one should make sure to check the predicate
--- is not vacuously true. Here's an example that is not vacuous:
---
---  >>> let pred' = do { x <- forall "x"; constrain $ x .> 6; return $ x .>= (5 :: SWord8) }
---
--- This time the proof passes as expected:
---
---  >>> prove pred'
---  Q.E.D.
---
--- And the proof is not vacuous:
---
---  >>> isVacuous pred'
---  False
+-- | Check if the given constraints are satisfiable, equivalent to @'isVacuousWith' 'defaultSMTCfg'@.
+-- See the function 'constrain' for an example use of 'isVacuous'.
 isVacuous :: Provable a => a -> IO Bool
 isVacuous = isVacuousWith defaultSMTCfg
 
@@ -373,7 +329,7 @@ satWith config a = simulate cvt config True [] a >>= callSolver True "Checking S
 -- | Determine if the constraints are vacuous using the given SMT-solver
 isVacuousWith :: Provable a => SMTConfig -> a -> IO Bool
 isVacuousWith config a = do
-        Result ki tr uic is cs ts as uis ax asgn cstr _ <- runSymbolic True $ forAll_ a >>= output
+        Result ki tr uic is cs ts as uis ax asgn cstr _ <- runSymbolic (True, Just config) $ forAll_ a >>= output
         case cstr of
            [] -> return False -- no constraints, no need to check
            _  -> do let is'  = [(EX, i) | (_, i) <- is] -- map all quantifiers to "exists" for the constraint check
@@ -451,7 +407,7 @@ simulate converter config isSat comments predicate = do
         let msg = when (verbose config) . putStrLn . ("** " ++)
             isTiming = timing config
         msg "Starting symbolic simulation.."
-        res <- timeIf isTiming "problem construction" $ runSymbolic isSat $ (if isSat then forSome_ else forAll_) predicate >>= output
+        res <- timeIf isTiming "problem construction" $ runSymbolic (isSat, Just config) $ (if isSat then forSome_ else forAll_) predicate >>= output
         msg $ "Generated symbolic trace:\n" ++ show res
         msg "Translating to SMT-Lib.."
         runProofOn converter config isSat comments res
@@ -461,7 +417,7 @@ runProofOn converter config isSat comments res =
         let isTiming   = timing config
             solverCaps = capabilities (solver config)
         in case res of
-             Result ki _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs [o@(SW (KBounded False 1) _)] ->
+             Result ki _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs [o@(SW KBool _)] ->
                timeIf isTiming "translation"
                 $ let uiMap     = mapMaybe arrayUIKind arrs ++ map unintFnUIKind uis
                       skolemMap = skolemize (if isSat then is else map flipQ is)
@@ -481,56 +437,23 @@ runProofOn converter config isSat comments res =
                                        ++ "\nDetected while generating the trace:\n" ++ show res
                                        ++ "\n*** Check calls to \"output\", they are typically not needed!"
 
--- | Check whether the given solver is installed and is ready to go. This call does a
--- simple call to the solver to ensure all is well.
-sbvCheckSolverInstallation :: SMTConfig -> IO Bool
-sbvCheckSolverInstallation cfg = do ThmResult r <- proveWith cfg $ \x -> (x+x) .== ((x*2) :: SWord8)
-                                    case r of
-                                      Unsatisfiable _ -> return True
-                                      _               -> return False
-
--- | Equality as a proof method. Allows for
--- very concise construction of equivalence proofs, which is very typical in
--- bit-precise proofs.
-infix 4 ===
-class Equality a where
-  (===) :: a -> a -> IO ThmResult
-
-instance (SymWord a, EqSymbolic z) => Equality (SBV a -> z) where
-  k === l = prove $ \a -> k a .== l a
-
-instance (SymWord a, SymWord b, EqSymbolic z) => Equality (SBV a -> SBV b -> z) where
-  k === l = prove $ \a b -> k a b .== l a b
-
-instance (SymWord a, SymWord b, EqSymbolic z) => Equality ((SBV a, SBV b) -> z) where
-  k === l = prove $ \a b -> k (a, b) .== l (a, b)
-
-instance (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> z) where
-  k === l = prove $ \a b c -> k a b c .== l a b c
-
-instance (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c) -> z) where
-  k === l = prove $ \a b c -> k (a, b, c) .== l (a, b, c)
-
-instance (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> z) where
-  k === l = prove $ \a b c d -> k a b c d .== l a b c d
-
-instance (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d) -> z) where
-  k === l = prove $ \a b c d -> k (a, b, c, d) .== l (a, b, c, d)
-
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> z) where
-  k === l = prove $ \a b c d e -> k a b c d e .== l a b c d e
-
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e) -> z) where
-  k === l = prove $ \a b c d e -> k (a, b, c, d, e) .== l (a, b, c, d, e)
-
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> z) where
-  k === l = prove $ \a b c d e f -> k a b c d e f .== l a b c d e f
-
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f) -> z) where
-  k === l = prove $ \a b c d e f -> k (a, b, c, d, e, f) .== l (a, b, c, d, e, f)
-
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> SBV g -> z) where
-  k === l = prove $ \a b c d e f g -> k a b c d e f g .== l a b c d e f g
-
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> z) where
-  k === l = prove $ \a b c d e f g -> k (a, b, c, d, e, f, g) .== l (a, b, c, d, e, f, g)
+-- | Check if a branch condition is feasible in the current state
+isSBranchFeasibleInState :: State -> String -> SBool -> IO Bool
+isSBranchFeasibleInState st branch cond = do
+       let cfg = let pickedConfig = fromMaybe defaultSMTCfg (getSBranchRunConfig st)
+                 in pickedConfig { timeOut = sBranchTimeOut pickedConfig }
+           msg = when (verbose cfg) . putStrLn . ("** " ++)
+       sw <- sbvToSW st cond
+       () <- forceSWArg sw
+       Result ki tr uic is cs ts as uis ax asgn cstr _ <- liftIO $ extractSymbolicSimulationState st
+       let -- Construct the corresponding sat-checker for the branch. Note that we need to
+           -- forget about the quantifiers and just use an "exist", as we're looking for a
+           -- point-satisfiability check here; whatever the original program was.
+           pgm = Result ki tr uic [(EX, n) | (_, n) <- is] cs ts as uis ax asgn cstr [sw]
+           cvt = if useSMTLib2 cfg then toSMTLib2 else toSMTLib1
+       check <- runProofOn cvt cfg True [] pgm >>= callSolver True ("sBranch: Checking " ++ show branch ++ " feasibility") SatResult cfg
+       res <- case check of
+                SatResult (Unsatisfiable _) -> return False
+                _                           -> return True   -- No risks, even if it timed-our or anything else, we say it's feasible
+       msg $ "sBranch: Conclusion: " ++ if res then "Feasible" else "Unfeasible"
+       return res

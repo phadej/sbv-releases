@@ -1,7 +1,57 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 3.0
+* Latest Hackage released version: 3.1
+
+### Version 3.1, 2014-07-12
+ 
+ NB: GHC 7.8.1 and 7.8.2 has a serious bug (https://ghc.haskell.org/trac/ghc/ticket/9078)
+     that causes SBV to crash under heavy/repeated calls. The bug is addressed
+     in GHC 7.8.3; so upgrading to 7.8.3 is essential for using SBV!
+
+ New features/bug-fixes in v3.1:
+
+ * Using multiple-SMT solvers in parallel:
+      * Added functions that let the user run multiple solvers, using asynchronous
+        threads. All results can be obtained (proveWithAll, proveWithAny, satWithAll),
+	or SBV can return the fastest result (satWithAny, allSatWithAll, allSatWithAny).
+	These functions are good for playing with multiple-solvers, especially on
+	machines with multiple-cores.
+      * Add function: sbvAvailableSolvers; which returns the list of solvers currently
+        available, as installed on the machine we are running. (Not the list that SBV
+	supports, but those that are actually available at run-time.) This function
+	is useful with the multi-solve API.
+ * Implement sBranch:
+      * sBranch is a variant of 'ite' that consults the external
+        SMT solver to see if a given branch condition is satisfiable
+	before evaluating it. This can make certain "otherwise recursive
+	and thus not-symbolically-terminating inputs" amenable to symbolic
+	simulation, if termination can be established this way. Needless
+	to say, this problem is always decidable as far as SBV programs
+	are concerned, but it does not mean the decision procedure is cheap!
+	Use with care. 
+      * sBranchTimeOut config parameter can be used to curtail long runs when
+        sBranch is used. Of course, if time-out happens, SBV will
+	assume the branch is feasible, in which case symbolic-termination
+	may come back to bite you.)
+ * New API:
+      * Add predicate 'isSNaN' which allows testing 'SFloat'/'SDouble' values
+        for nan-ness. This is similar to the Prelude function 'isNaN', except
+	the Prelude version requires a RealFrac instance, which unfortunately is
+	not currently implementable for cases. (Requires trigonometric functions etc.)
+	Thus, we provide 'isSNaN' separately (along with the already existing
+	'isFPPoint') to simplify reasoning with floating-point.
+ * Examples:
+     * Add Data/SBV/Examples/Misc/SBranch.hs, to illustrate the use of sBranch.
+ * Bug fixes:
+     * Fix pipe-blocking issue, which exhibited itself in the presence of
+       large numbers of variables (> 10K or so). See github issue #86. Thanks
+       to Philipp Meyer for the fine report.
+ * Misc:
+     * Add missing SFloat/SDouble instances for SatModel class
+     * Explicitly support KBool as a kind, separating it from "KUnbounded False 1".
+       Thanks to Brian Huffman for contributing the changes. This should have no
+       user-visible impact, but comes in handy for internal reasons.
 
 ### Version 3.0, 2014-02-16
    

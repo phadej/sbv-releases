@@ -13,6 +13,7 @@
 module Data.SBV.SMT.SMTLib2(cvt, addNonEqConstraints) where
 
 import Data.Bits     (bit)
+import Data.Char     (intToDigit)
 import Data.Function (on)
 import Data.Ord      (comparing)
 import qualified Data.Foldable as F (toList)
@@ -20,7 +21,7 @@ import qualified Data.Map      as M
 import qualified Data.IntMap   as IM
 import qualified Data.Set      as Set
 import Data.List (intercalate, partition, groupBy, sortBy)
-import Numeric (showHex)
+import Numeric (showIntAtBase, showHex)
 
 import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
@@ -264,7 +265,7 @@ swFunType :: [SW] -> SW -> String
 swFunType ss s = "(" ++ unwords (map swType ss) ++ ") " ++ swType s
 
 smtType :: Kind -> String
-smtType (KBounded False 1) = "Bool"
+smtType KBool              = "Bool"
 smtType (KBounded _ sz)    = "(_ BitVec " ++ show sz ++ ")"
 smtType KUnbounded         = "Int"
 smtType KReal              = "Real"
@@ -287,11 +288,16 @@ cvtSW skolemMap s
   | True
   = show s
 
--- NB. The following works with SMTLib2 since all sizes are multiples of 4 (or just 1, which is specially handled)
+-- Carefully code hex numbers, SMTLib is picky about lengths of hex constants. For the time
+-- being, SBV only supports sizes that are multiples of 4, but the below code is more robust
+-- in case of future extensions to support arbitrary sizes.
 hex :: Int -> Integer -> String
 hex 1  v = "#b" ++ show v
-hex sz v = "#x" ++ pad (sz `div` 4) (showHex v "")
-  where pad n s = replicate (n - length s) '0' ++ s
+hex sz v
+  | sz `mod` 4 == 0 = "#x" ++ pad (sz `div` 4) (showHex v "")
+  | True            = "#b" ++ pad sz (showBin v "")
+   where pad n s = replicate (n - length s) '0' ++ s
+         showBin = showIntAtBase 2 intToDigit
 
 cvtCW :: RoundingMode -> CW -> String
 cvtCW rm x
@@ -335,7 +341,8 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         boolOp   = all isBoolean arguments
         bad | intOp = error $ "SBV.SMTLib2: Unsupported operation on unbounded integers: " ++ show expr
             | True  = error $ "SBV.SMTLib2: Unsupported operation on real values: " ++ show expr
-        ensureBV = bvOp || bad
+        ensureBVOrBool = bvOp || boolOp || bad
+        ensureBV       = bvOp || bad
         addRM s = s ++ " " ++ smtRoundingMode rm
         lift2  o _ [x, y] = "(" ++ o ++ " " ++ x ++ " " ++ y ++ ")"
         lift2  o _ sbvs   = error $ "SBV.SMTLib2.sh.lift2: Unexpected arguments: "   ++ show (o, sbvs)
@@ -368,6 +375,7 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
           | needsCheck = "(ite " ++ cond ++ ssw e ++ " " ++ lkUp ++ ")"
           | True       = lkUp
           where needsCheck = case aKnd of
+                              KBool            -> (2::Integer) > fromIntegral l
                               KBounded _ n     -> (2::Integer)^n > fromIntegral l
                               KUnbounded       -> True
                               KReal            -> error "SBV.SMT.SMTLib2.cvtExp: unexpected real valued index"
@@ -379,6 +387,7 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                  | hasSign i = "(or " ++ le0 ++ " " ++ gtl ++ ") "
                  | True      = gtl ++ " "
                 (less, leq) = case aKnd of
+                                KBool            -> error "SBV.SMT.SMTLib2.cvtExp: unexpected boolean valued index"
                                 KBounded{}       -> if hasSign i then ("bvslt", "bvsle") else ("bvult", "bvule")
                                 KUnbounded       -> ("<", "<=")
                                 KReal            -> ("<", "<=")
@@ -419,7 +428,7 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
            | intOp = "(div " ++ ssw a ++ " " ++ show (bit i :: Integer) ++ ")"  -- Implement shiftR by division by 2^i
            | True  = bad
         sh (SBVApp op args)
-          | Just f <- lookup op smtBVOpTable, ensureBV
+          | Just f <- lookup op smtBVOpTable, ensureBVOrBool
           = f (any hasSign args) (map ssw args)
           where -- The first 4 operators below do make sense for Integer's in Haskell, but there's
                 -- no obvious counterpart for them in the SMTLib translation.
