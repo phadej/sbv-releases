@@ -155,7 +155,9 @@ module Data.SBV (
   -- ** Polynomial arithmetic and CRCs
   , Polynomial(..), crcBV, crc
   -- ** Conditionals: Mergeable values
-  , Mergeable(..)
+  , Mergeable(..), ite, iteLazy, sBranch
+  -- ** Conditional symbolic simulation
+  , sAssert, sAssertCont
   -- ** Symbolic equality
   , EqSymbolic(..)
   -- ** Symbolic ordering
@@ -219,7 +221,7 @@ module Data.SBV (
   , getModelDictionaries, getModelValues, getModelUninterpretedValues
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), SMTLibLogic(..), Logic(..), OptimizeOpts(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
+  , SMTConfig(..), SMTLibLogic(..), Logic(..), OptimizeOpts(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
@@ -329,7 +331,7 @@ sbvCheckSolverInstallation cfg = do ThmResult r <- proveWith cfg $ \x -> (x+x) .
                                       Unsatisfiable _ -> return True
                                       _               -> return False
 
--- The default configs
+-- | The default configs corresponding to supported SMT solvers
 defaultSolverConfig :: Solver -> SMTConfig
 defaultSolverConfig Z3        = z3
 defaultSolverConfig Yices     = yices

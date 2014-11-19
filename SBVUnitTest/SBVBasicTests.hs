@@ -47,18 +47,25 @@ checkGoldDir gd = do e <- doesDirectoryExist gd
 run :: FilePath -> IO ()
 run gd = do putStrLn $ "*** Starting SBV basic tests..\n*** Gold files at: " ++ show gd
             checkGoldDir gd
-            (cts, _) <- runTestText (PutText put ()) $ TestList $ map (mkTst . snd) testCollection
-            hPutStrLn stderr $ showCounts cts
-            decide cts
-  where mkTst (SBVTestSuite f) = f $ generateGoldCheck gd False
-        put s _ st = length s `seq` return st
+            let collections = map (mkTst . snd) testCollection
+                cNames      = map fst testCollection
+            putStrLn $ "*** Running " ++ show (length collections) ++ " test categories."
+            runEach 1 (zip cNames collections)
+  where runEach :: Int -> [(String, Test)] -> IO ()
+        runEach _ []            = exitSuccess
+        runEach i ((n, tc):tcs) = do putStrLn $ "Starting category: " ++ show n
+                                     (cts, _) <- runTestText (PutText put ()) tc
+                                     hPutStrLn stderr $ showCounts cts
+                                     decide n cts
+                                     runEach (i+1) tcs
+        mkTst (SBVTestSuite f) = f $ generateGoldCheck gd False
+        put _ _ = return
 
-decide :: Counts -> IO ()
-decide (Counts c t e f) = do
+decide :: String -> Counts -> IO ()
+decide cat (Counts c t e f) = do
         when (c /= t) $ putStrLn $ "*** Not all test cases were tried. (Only tested " ++ show t ++ " of " ++ show c ++ ")"
         when (e /= 0) $ putStrLn $ "*** " ++ show e ++ " (of " ++ show c ++ ") test cases in error."
         when (f /= 0) $ putStrLn $ "*** " ++ show f ++ " (of " ++ show c ++ ") test cases failed."
         if c == t && e == 0 && f == 0
-           then do putStrLn $ "All " ++ show c ++ " test cases successfully passed."
-                   exitSuccess
+           then putStrLn $ "All " ++ show c ++ " test cases in category " ++ show cat ++ " successfully passed."
            else exitWith $ ExitFailure 2

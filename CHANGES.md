@@ -1,13 +1,45 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 3.1
+* Latest Hackage released version: 3.2
+
+### Version 3.2, 2014-11-18
+
+  * Implement 'sAssert'. This adds conditional symbolic simulation, by ensuring arbitrary
+    boolean conditions hold during simulation; similar to ASSERT calls in other languages.
+    Note that failures will be detected at symbolic-simulation time, i.e., each assert will
+    generate a call to the external solver to ensure that the condition is never violated.
+    If violation is possible the user will get an error, indicating the failure conditions.
+
+  * Also implement 'sAssertCont' which allows for a programmatic way to extract/display results
+    for consumers of 'sAssert'. While the latter simply calls 'error' in case of an assertion
+    violation, the 'sAssertCont' variant takes a continuation which can be used to program
+    how the results should be interpreted/displayed. (This is useful for libraries built on top of
+    SBV.) Note that the type of the continuation is such that execution should still stop, i.e.,
+    once an assertion violation is detected, symbolic simulation will never continue.
+
+  * Rework/simplify the 'Mergeable' class to make sure 'sBranch' is sufficiently lazy
+    in case of structural merges. The original implementation was only
+    lazy at the Word instance, but not at lists/tuples etc. Thanks to Brian Huffman
+    for reporting this bug.
+
+  * Add a few constant-folding optimizations for 'sDiv'and 'sRem'
+
+  * Boolector: Modify output parser to conform to the new Boolector output format. This
+    means that you need at least v2.0.0 of Boolector installed if you want to use that
+    particular solver.
+
+  * Fix long-standing translation bug regarding boolean Ord class comparisons. (i.e., 
+    'False > True' etc.) While Haskell allows for this, SMT-Lib does not; and hence
+    we have to be careful in translating. Thanks to Brian Huffman for reporting.
+
+  * C code generation: Correctly translate square-root and fusedMA functions to C.
 
 ### Version 3.1, 2014-07-12
  
  NB: GHC 7.8.1 and 7.8.2 has a serious bug (https://ghc.haskell.org/trac/ghc/ticket/9078)
      that causes SBV to crash under heavy/repeated calls. The bug is addressed
-     in GHC 7.8.3; so upgrading to 7.8.3 is essential for using SBV!
+     in GHC 7.8.3; so upgrading to GHC 7.8.3 is essential for using SBV!
 
  New features/bug-fixes in v3.1:
 
