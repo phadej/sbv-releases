@@ -43,6 +43,8 @@ import Data.Word       (Word8, Word16, Word32, Word64)
 
 import qualified Data.Map as M
 
+import qualified Control.Exception as C
+
 import Test.QuickCheck                           (Testable(..), Arbitrary(..))
 import qualified Test.QuickCheck         as QC   (whenFail)
 import qualified Test.QuickCheck.Monadic as QC   (monadicIO, run)
@@ -52,10 +54,8 @@ import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
 import Data.SBV.Utils.Boolean
 
--- The following two imports are only needed because of the doctest expressions we have. Sigh..
--- It might be a good idea to reorg some of the content to avoid this.
 import Data.SBV.Provers.Prover (isSBranchFeasibleInState, isConditionSatisfiable, isVacuous, prove, defaultSMTCfg)
-import Data.SBV.SMT.SMT (SatResult(..), ThmResult, showModel, getModelDictionary)
+import Data.SBV.SMT.SMT (SafeResult(..), SatResult(..), ThmResult, getModelDictionary)
 
 -- | Newer versions of GHC (Starting with 7.8 I think), distinguishes between FiniteBits and Bits classes.
 -- We should really use FiniteBitSize for SBV which would make things better. In the interim, just work
@@ -1221,9 +1221,8 @@ sBranch t a b
 -- Otherwise symbolic simulation will stop with a run-time error.
 sAssert :: Mergeable a => String -> SBool -> a -> a
 sAssert msg = sAssertCont msg defCont
-  where die m = error $ intercalate "\n" $ ("Assertion failure: " ++ show msg) : m
-        defCont _   Nothing   = die ["*** Fails in all assignments to inputs"]
-        defCont cfg (Just md) = die [showModel cfg (SMTModel (M.toList md) [] [])]
+  where defCont _   Nothing   = C.throw (SafeAlwaysFails  msg)
+        defCont cfg (Just md) = C.throw (SafeFailsInModel msg cfg (SMTModel (M.toList md) [] []))
 
 -- | Symbolic assert with a programmable continuation. Check that the given boolean condition is always true in the given path.
 -- Otherwise symbolic simulation will transfer the failing model to the given continuation. The
@@ -1649,16 +1648,16 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
                  kg = kindOf (undefined :: g)
                  kh = kindOf (undefined :: h)
                  result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5 arg6)
-                          | True = do newUninterpreted st nm (SBVType [kh, kg, kf, ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
-                                      sw0 <- sbvToSW st arg0
-                                      sw1 <- sbvToSW st arg1
-                                      sw2 <- sbvToSW st arg2
-                                      sw3 <- sbvToSW st arg3
-                                      sw4 <- sbvToSW st arg4
-                                      sw5 <- sbvToSW st arg5
-                                      sw6 <- sbvToSW st arg6
-                                      mapM_ forceSWArg [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
-                                      newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
+                           | True = do newUninterpreted st nm (SBVType [kh, kg, kf, ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
+                                       sw0 <- sbvToSW st arg0
+                                       sw1 <- sbvToSW st arg1
+                                       sw2 <- sbvToSW st arg2
+                                       sw3 <- sbvToSW st arg3
+                                       sw4 <- sbvToSW st arg4
+                                       sw5 <- sbvToSW st arg5
+                                       sw6 <- sbvToSW st arg6
+                                       mapM_ forceSWArg [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
+                                       newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
 
 -- Uncurried functions of two arguments
 instance (SymWord c, SymWord b, HasKind a) => Uninterpreted ((SBV c, SBV b) -> SBV a) where
