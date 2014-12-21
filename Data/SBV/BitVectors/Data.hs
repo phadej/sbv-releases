@@ -226,7 +226,7 @@ instance Show SBVType where
   show (SBVType xs) = intercalate " -> " $ map show xs
 
 -- | Symbolic operations
-data Op = Plus | Times | Minus
+data Op = Plus | Times | Minus | UNeg | Abs
         | Quot | Rem
         | Equal | NotEqual
         | LessThan | GreaterThan | LessEq | GreaterEq
@@ -246,13 +246,13 @@ data Op = Plus | Times | Minus
 -- might be confusing. This function will *not* be uninterpreted in reality, as QF_FPA will define it. It's
 -- a bit of a shame, but much easier to implement it this way.
 smtLibSquareRoot :: Op
-smtLibSquareRoot = Uninterpreted "squareRoot"
+smtLibSquareRoot = Uninterpreted "fp.sqrt"
 
 -- | SMT-Lib's fusedMA over floats/doubles. Similar to the 'smtLibSquareRoot'. Note that we cannot implement
 -- this function in Haskell as precision loss would be inevitable. Maybe Haskell will eventually add this op
 -- to the Num class.
 smtLibFusedMA :: Op
-smtLibFusedMA = Uninterpreted "fusedMA"
+smtLibFusedMA = Uninterpreted "fp.fma"
 
 -- | A symbolic expression
 data SBVExpr = SBVApp !Op ![SW]
@@ -392,7 +392,7 @@ instance Show Op where
   show op
     | Just s <- op `lookup` syms = s
     | True                       = error "impossible happened; can't find op!"
-    where syms = [ (Plus, "+"), (Times, "*"), (Minus, "-")
+    where syms = [ (Plus, "+"), (Times, "*"), (Minus, "-"), (UNeg, "-"), (Abs, "abs")
                  , (Quot, "quot")
                  , (Rem,  "rem")
                  , (Equal, "=="), (NotEqual, "/=")
@@ -746,7 +746,7 @@ registerKind st k
   = error $ "SBV: " ++ show sortName ++ " is a reserved sort; please use a different name."
   | True
   = modifyIORef (rUsedKinds st) (Set.insert k)
- where reserved = ["Int", "Real", "List", "Array", "Bool", "NUMERAL", "DECIMAL", "STRING", "FP"]  -- Reserved by SMT-Lib
+ where reserved = ["Int", "Real", "List", "Array", "Bool", "NUMERAL", "DECIMAL", "STRING", "FP", "FloatingPoint"]  -- Reserved by SMT-Lib
 
 -- | Create a new constant; hash-cons as necessary
 newConst :: State -> CW -> IO SW

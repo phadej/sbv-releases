@@ -624,12 +624,15 @@ instance (Ord a, Num a, SymWord a) => Num (SBV a) where
   x - y
     | y `isConcretely` (== 0) = x
     | True                    = liftSym2 (mkSymOp Minus) rationalCheck (-) (-) (-) (-) x y
-  abs a
-   | hasSign a = ite (a .< 0) (-a) a
-   | True      = a
+  -- Abs is problematic for floating point, due to -0; case, so we carefully shuttle it down
+  -- to the solver to avoid the can of worms. (Alternative would be to do an if-then-else here.)
+  abs = liftSym1 (mkSymOp1 Abs) abs abs abs abs
   signum a
    | hasSign a = ite (a .< 0) (-1) (ite (a .== 0) 0 1)
    | True      = oneIf (a ./= 0)
+  -- negate is tricky because on double/float -0 is different than 0; so we
+  -- just cannot rely on its default definition; which would be 0-0, which is not -0!
+  negate = liftSym1 (mkSymOp1 UNeg) (\x -> -x) (\x -> -x) (\x -> -x) (\x -> -x)
 
 instance (SymWord a, Fractional a) => Fractional (SBV a) where
   fromRational = literal . fromRational

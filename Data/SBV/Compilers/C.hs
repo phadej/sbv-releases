@@ -487,18 +487,18 @@ ppExpr cfg consts (SBVApp op opArgs) = p op (map (showSW cfg consts) opArgs)
                   , (Equal, "=="), (NotEqual, "!="), (LessThan, "<"), (GreaterThan, ">"), (LessEq, "<="), (GreaterEq, ">=")
                   , (And, "&"), (Or, "|"), (XOr, "^")
                   ]
-        uninterpret "squareRoot" as = let f = case kindOf (head opArgs) of
+        uninterpret "fp.sqrt" as = let f = case kindOf (head opArgs) of
                                                KFloat  -> text "sqrtf"
                                                KDouble -> text "sqrt"
                                                k       -> die $ "squareRoot on unexpected kind: " ++ show k
-                                      in f <> parens (fsep (punctuate comma as))
-        uninterpret "fusedMA"    as = let f = case kindOf (head opArgs) of
+                                   in f <> parens (fsep (punctuate comma as))
+        uninterpret "fp.fma"  as = let f = case kindOf (head opArgs) of
                                                 KFloat  -> text "fmaf"
                                                 KDouble -> text "fma"
                                                 k       -> die $ "fusedMA on unexpected kind: " ++ show k
-                                      in f <> parens (fsep (punctuate comma as))
-        uninterpret s []            = text "/* Uninterpreted constant */" <+> text s
-        uninterpret s as            = text "/* Uninterpreted function */" <+> text s <> parens (fsep (punctuate comma as))
+                                   in f <> parens (fsep (punctuate comma as))
+        uninterpret s []         = text "/* Uninterpreted constant */" <+> text s
+        uninterpret s as         = text "/* Uninterpreted function */" <+> text s <> parens (fsep (punctuate comma as))
         p (ArrRead _)       _  = tbd "User specified arrays (ArrRead)"
         p (ArrEq _ _)       _  = tbd "User specified arrays (ArrEq)"
         p (Uninterpreted s) as = uninterpret s as
@@ -542,6 +542,12 @@ ppExpr cfg consts (SBVApp op opArgs) = p op (map (showSW cfg consts) opArgs)
         -- Brief googling suggests C99 does indeed truncate toward 0, but other C compilers might differ.
         p Quot [a, b] = parens (b <+> text "== 0") <+> text "?" <+> text "0" <+> text ":" <+> parens (a <+> text "/" <+> b)
         p Rem  [a, b] = parens (b <+> text "== 0") <+> text "?" <+>    a     <+> text ":" <+> parens (a <+> text "%" <+> b)
+        p UNeg [a]    = parens (text "-" <+> a)
+        p Abs  [a]    = let f = case kindOf (head opArgs) of
+                                  KFloat  -> text "fabsf"
+                                  KDouble -> text "fabs"
+                                  _       -> text "abs"
+                        in f <> parens a
         p o [a, b]
           | Just co <- lookup o cBinOps
           = a <+> text co <+> b

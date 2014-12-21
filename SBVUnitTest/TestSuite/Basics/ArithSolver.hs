@@ -218,20 +218,30 @@ genDoubles :: [Test]
 genDoubles = genIEEE754 "genDoubles" ds
 
 genIEEE754 :: (RealFloat a, Show a, SymWord a, Ord a, Floating a) => String -> [a] -> [Test]
-genIEEE754 origin vs = map mkTest $  [("+",  show x, show y, mkThm2        (+)   x y (x +  y)) | x <- vs, y <- vs        ]
-                                  ++ [("-",  show x, show y, mkThm2        (-)   x y (x -  y)) | x <- vs, y <- vs        ]
-                                  ++ [("*",  show x, show y, mkThm2        (*)   x y (x *  y)) | x <- vs, y <- vs        ]
-                                  ++ [("/",  show x, show y, mkThm2        (/)   x y (x /  y)) | x <- vs, y <- vs, y /= 0]
-                                  ++ [("<",  show x, show y, mkThm2C False (.<)  x y (x <  y)) | x <- vs, y <- vs        ]
-                                  ++ [("<=", show x, show y, mkThm2C False (.<=) x y (x <= y)) | x <- vs, y <- vs        ]
-                                  ++ [(">",  show x, show y, mkThm2C False (.>)  x y (x >  y)) | x <- vs, y <- vs        ]
-                                  ++ [(">=", show x, show y, mkThm2C False (.>=) x y (x >= y)) | x <- vs, y <- vs        ]
-                                  ++ [("==", show x, show y, mkThm2C False (.==) x y (x == y)) | x <- vs, y <- vs        ]
-                                  ++ [("/=", show x, show y, mkThm2C True  (./=) x y (x /= y)) | x <- vs, y <- vs        ]
-  where mkTest (nm, x, y, t) = origin ++ ".arithmetic-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: assert t
+genIEEE754 origin vs = map tst1 uns ++ map tst2 bins
+  where uns =     [("abs",    show x,         mkThm1        abs      x   (abs x))    | x <- vs]
+               ++ [("negate", show x,         mkThm1        negate   x   (negate x)) | x <- vs]
+               ++ [("signum", show x,         mkThm1        signum   x   (signum x)) | x <- tail vs]  -- TODO: Remove tail, skipping over NaN due to GHC bug
+        bins =    [("+",      show x, show y, mkThm2        (+)      x y (x +  y))   | x <- vs, y <- vs        ]
+               ++ [("-",      show x, show y, mkThm2        (-)      x y (x -  y))   | x <- vs, y <- vs        ]
+               ++ [("*",      show x, show y, mkThm2        (*)      x y (x *  y))   | x <- vs, y <- vs        ]
+               ++ [("/",      show x, show y, mkThm2        (/)      x y (x /  y))   | x <- vs, y <- vs, y /= 0]
+               ++ [("<",      show x, show y, mkThm2C False (.<)     x y (x <  y))   | x <- vs, y <- vs        ]
+               ++ [("<=",     show x, show y, mkThm2C False (.<=)    x y (x <= y))   | x <- vs, y <- vs        ]
+               ++ [(">",      show x, show y, mkThm2C False (.>)     x y (x >  y))   | x <- vs, y <- vs        ]
+               ++ [(">=",     show x, show y, mkThm2C False (.>=)    x y (x >= y))   | x <- vs, y <- vs        ]
+               ++ [("==",     show x, show y, mkThm2C False (.==)    x y (x == y))   | x <- vs, y <- vs        ]
+               ++ [("/=",     show x, show y, mkThm2C True  (./=)    x y (x /= y))   | x <- vs, y <- vs        ]
+        tst2 (nm, x, y, t) = origin ++ ".arithmetic-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: assert t
+        tst1 (nm, x,    t) = origin ++ ".arithmetic-" ++ nm ++ "." ++ x              ~: assert t
         eqF v val
           | isNaN val = constrain $ isSNaN v
           | True      = constrain $ v .== literal val
+        mkThm1 op x r = isThm $ do a <- free "x"
+                                   eqF a x
+                                   return $ if isNaN r
+                                            then isSNaN (op a)
+                                            else literal r .== op a
         mkThm2 op x y r = isThm $ do [a, b] <- mapM free ["x", "y"]
                                      eqF a x
                                      eqF b y
@@ -313,8 +323,8 @@ rs = [fromRational (i % d) | i <- is, d <- dens]
 
 -- Admittedly paltry test-cases for float/double
 fs  :: [Float]
-fs = nan : -infinity : infinity : 0 : [-5.0, -4.7 .. 5] ++ [5]
+fs = nan : -infinity : infinity : 0 : -0 : [-5.0, -4.1 .. 5] ++ [5]
 
 ds  :: [Double]
-ds = nan : -infinity : infinity : 0 : [-5.0, -4.7 .. 5] ++ [5]
+ds = nan : -infinity : infinity : 0 : -0 : [-5.0, -4.1 .. 5] ++ [5]
 {-# ANN module "HLint: ignore Reduce duplication" #-}
