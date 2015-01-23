@@ -189,6 +189,11 @@ instance SatModel Double where
   parseCWs (CW KDouble (CWDouble i) : r) = Just (i, r)
   parseCWs _                             = Nothing
 
+-- | 'CW' as extracted from a model; trivial definition
+instance SatModel CW where
+  parseCWs (cw : r) = Just (cw, r)
+  parseCWs []       = Nothing
+
 -- | A list of values as extracted from a model. When reading a list, we
 -- go as long as we can (maximal-munch). Note that this never fails, as
 -- we can always return the empty list!

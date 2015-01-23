@@ -29,7 +29,7 @@ module Data.SBV.BitVectors.Data
  , CW(..), CWVal(..), AlgReal(..), cwSameType, cwIsBit, cwToBool
  , mkConstCW ,liftCW2, mapCW, mapCW2
  , SW(..), trueSW, falseSW, trueCW, falseCW, normCW
- , SBV(..), NodeId(..), mkSymSBV
+ , SBV(..), NodeId(..), mkSymSBV, mkSymSBVWithRandom
  , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), mkSFunArray, SArray(..), arrayUIKind
  , sbvToSW, sbvToSymSW, forceSWArg
  , SBVExpr(..), newExpr
@@ -707,7 +707,7 @@ instance Eq (SBV a) where
   a /= b = error $ "Comparing symbolic bit-vectors; Use (./=) instead. Received: " ++ show (a, b)
 
 instance HasKind a => HasKind (SBV a) where
-  kindOf _ = kindOf (undefined :: a)
+  kindOf (SBV k _) = k
 
 -- | Increment the variable counter
 incCtr :: State -> IO Int
@@ -815,10 +815,15 @@ sbvToSW st (SBV _ (Right f)) = uncache f st
 newtype Symbolic a = Symbolic (ReaderT State IO a)
                    deriving (Applicative, Functor, Monad, MonadIO, MonadReader State)
 
--- | Create a symbolic value, based on the quantifier we have. If an explicit quantifier is given, we just use that.
--- If not, then we pick existential for SAT calls and universal for everything else.
+-- | Create a symbolic variable. Equivalent to 'mkSymSBVWithRandom randomIO'.
 mkSymSBV :: forall a. (Random a, SymWord a) => Maybe Quantifier -> Kind -> Maybe String -> Symbolic (SBV a)
-mkSymSBV mbQ k mbNm = do
+mkSymSBV = mkSymSBVWithRandom randomIO
+
+-- | Create a symbolic value, based on the quantifier we have. If an explicit quantifier is given, we just use that.
+-- If not, then we pick existential for SAT calls and universal for everything else. The @rand@ argument is used
+-- in generating random values for this variable when used for 'quickCheck' purposes.
+mkSymSBVWithRandom :: forall a. SymWord a => IO (SBV a) -> Maybe Quantifier -> Kind -> Maybe String -> Symbolic (SBV a)
+mkSymSBVWithRandom rand mbQ k mbNm = do
         st <- ask
         let q = case (mbQ, runMode st) of
                   (Just x,  _)                -> x   -- user given, just take it
@@ -828,9 +833,9 @@ mkSymSBV mbQ k mbNm = do
                   (Nothing, CodeGen)          -> ALL -- code generation, pick universal
         case runMode st of
           Concrete _ | q == EX -> case mbNm of
-                                    Nothing -> error $ "Cannot quick-check in the presence of existential variables, type: " ++ showType (undefined :: SBV a)
-                                    Just nm -> error $ "Cannot quick-check in the presence of existential variable " ++ nm ++ " :: " ++ showType (undefined :: SBV a)
-          Concrete _           -> do v@(SBV _ (Left cw)) <- liftIO randomIO
+                                    Nothing -> error $ "Cannot quick-check in the presence of existential variables, type: " ++ showType (undefined :: a)
+                                    Just nm -> error $ "Cannot quick-check in the presence of existential variable " ++ nm ++ " :: " ++ showType (undefined :: a)
+          Concrete _           -> do v@(SBV _ (Left cw)) <- liftIO rand
                                      liftIO $ modifyIORef (rCInfo st) ((maybe "_" id mbNm, cw):)
                                      return v
           _          -> do (sw, internalName) <- liftIO $ newSW st k
