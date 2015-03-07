@@ -1,7 +1,39 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 3.5
+* Latest Hackage released version: 4.1, 2015-03-06
+
+### Version 4.1, 2015-03-06
+
+  * Add support for the ABC solver from Berkeley. Thanks to Adam Foltzer
+    for the required infrastructure! See: http://www.eecs.berkeley.edu/~alanmi/abc/
+    And Alan Mishchenko for adding infrastructure to ABC to work with SBV.
+
+  * Upgrade the Boolector connection to use a SMT-Lib2 based interaction. NB. You
+    need at least Boolector 2.0.6 installed!
+
+  * Tracking changes in the SMT-Lib floating-point theory. If you are
+    using symbolic floating-point types (i.e., SFloat and SDouble), then
+    you should upgrade to this version and also get a very latest (unstable)
+    Z3 release. See http://smtlib.cs.uiowa.edu/theories/FloatingPoint.smt2
+    for details.
+
+  * Introduce a new class, 'RoundingFloat', which supports floating-point
+    operations with arbitrary rounding-modes. Note that Haskell only allows
+    RoundNearestTiesToAway, but with SBV, we get all 5 IEEE754 rounding-modes
+    and all the basic operations ('fpAdd', 'fpMul', 'fpDiv', etc.) with these
+    modes.
+    
+  * Allow Floating-Point RoundingMode to be symbolic as well
+
+  * Improve the example "Data/SBV/Examples/Misc/Floating.hs" to include
+    rounding-mode based addition example.
+    
+  * Changes required to make SBV compile with GHC 7.10; mostly around instance
+    NFData declarations. Thanks to Iavor Diatchki for the patch.
+
+  * Export a few extra symbols from the Internals module (mainly for
+    Cryptol usage.)
 
 ### Version 4.0, 2015-01-22
 

@@ -18,16 +18,20 @@ module Data.SBV.Internals (
   , SBV(..), slet, CW(..), Kind(..), CWVal(..), AlgReal(..), Quantifier(..), mkConstCW, genVar, genVar_
   , liftQRem, liftDMod, symbolicMergeWithKind
   , cache, sbvToSW, newExpr, normCW, SBVExpr(..), Op(..), mkSymSBVWithRandom
+  , SBVType(..), newUninterpreted, forceSWArg
   -- * Operations useful for instantiating SBV type classes
   , genLiteral, genFromCW, genMkSymVar, checkAndConvert, genParse
+  -- * Polynomial operations that operate on bit-vectors
+  , ites, mdp, addPoly
   -- * Compilation to C
   , compileToC', compileToCLib', CgPgmBundle(..), CgPgmKind(..)
   ) where
 
 import Data.SBV.BitVectors.Data       (Result, SBVRunMode(..), runSymbolic, runSymbolic', SBV(..), CW(..), Kind(..), CWVal(..), AlgReal(..), Quantifier(..), mkConstCW)
-import Data.SBV.BitVectors.Data       (cache, sbvToSW, newExpr, normCW, SBVExpr(..), Op(..), mkSymSBVWithRandom)
+import Data.SBV.BitVectors.Data       (cache, sbvToSW, newExpr, normCW, SBVExpr(..), Op(..), mkSymSBVWithRandom, SBVType(..), newUninterpreted, forceSWArg)
 import Data.SBV.BitVectors.Model      (genVar, genVar_, slet, liftQRem, liftDMod, symbolicMergeWithKind, genLiteral, genFromCW, genMkSymVar)
 import Data.SBV.BitVectors.Splittable (checkAndConvert)
 import Data.SBV.Compilers.C           (compileToC', compileToCLib')
 import Data.SBV.Compilers.CodeGen     (CgPgmBundle(..), CgPgmKind(..))
 import Data.SBV.SMT.SMT               (genParse)
+import Data.SBV.Tools.Polynomial      (ites, mdp, addPoly)

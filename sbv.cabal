@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       4.0
+Version:       4.1
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -55,6 +55,7 @@ Library
                   , Data.SBV.Bridge.MathSAT
                   , Data.SBV.Bridge.Yices
                   , Data.SBV.Bridge.Z3
+                  , Data.SBV.Bridge.ABC
                   , Data.SBV.Internals
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
@@ -94,6 +95,7 @@ Library
                   , Data.SBV.BitVectors.Data
                   , Data.SBV.BitVectors.Model
                   , Data.SBV.BitVectors.PrettyNum
+                  , Data.SBV.BitVectors.Rounding
                   , Data.SBV.BitVectors.SignCast
                   , Data.SBV.BitVectors.Splittable
                   , Data.SBV.BitVectors.STree
@@ -110,6 +112,7 @@ Library
                   , Data.SBV.Provers.Yices
                   , Data.SBV.Provers.Z3
                   , Data.SBV.Provers.MathSAT
+                  , Data.SBV.Provers.ABC
                   , Data.SBV.Tools.ExpectedValue
                   , Data.SBV.Tools.GenTest
                   , Data.SBV.Tools.Optimize

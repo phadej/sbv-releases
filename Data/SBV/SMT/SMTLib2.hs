@@ -13,19 +13,17 @@
 module Data.SBV.SMT.SMTLib2(cvt, addNonEqConstraints) where
 
 import Data.Bits     (bit)
-import Data.Char     (intToDigit)
 import Data.Function (on)
 import Data.Ord      (comparing)
+import Data.List     (intercalate, partition, groupBy, sortBy)
+
 import qualified Data.Foldable as F (toList)
 import qualified Data.Map      as M
 import qualified Data.IntMap   as IM
 import qualified Data.Set      as Set
-import Data.List (intercalate, partition, groupBy, sortBy)
-import Numeric (showIntAtBase, showHex)
 
-import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
-import Data.SBV.BitVectors.PrettyNum (showSMTFloat, showSMTDouble, smtRoundingMode)
+import Data.SBV.BitVectors.PrettyNum (smtRoundingMode, cwToSMTLib)
 
 -- | Add constraints to generate /new/ models. This function is used to query the SMT-solver, while
 -- disallowing a previous model.
@@ -51,7 +49,7 @@ addNonEqConstraints rm qinps allNonEqConstraints (SMTLibPgm _ (aliasTable, pre, 
 nonEqs :: RoundingMode -> [(String, CW)] -> [String]
 nonEqs rm scs = format $ interp ps ++ disallow (map eqClass uninterpClasses)
   where isFree (KUserSort _ (Left _, _)) = True
-        isFree _                              = False
+        isFree _                         = False
         (ups, ps) = partition (isFree . kindOf . snd) scs
         format []     =  []
         format [m]    =  ["(assert " ++ m ++ ")"]
@@ -80,7 +78,7 @@ tbd :: String -> a
 tbd e = error $ "SBV.SMTLib2: Not-yet-supported: " ++ e
 
 -- | Translate a problem into an SMTLib2 script
-cvt :: RoundingMode                 -- ^ User selected rounding mode to be used for floating point arithmetic
+cvt :: RoundingMode               -- ^ User selected rounding mode to be used for floating point arithmetic
     -> Maybe Logic                  -- ^ SMT-Lib logic, if requested by the user
     -> SolverCapabilities           -- ^ capabilities of the current solver
     -> Set.Set Kind                 -- ^ kinds used
@@ -110,8 +108,8 @@ cvt rm smtLogic solverCaps kindInfo isSat comments inputs skolemInps consts tbls
            = ["(set-logic " ++ show l ++ ") ; NB. User specified."]
            | hasDouble || hasFloat    -- NB. We don't check for quantifiers here, we probably should..
            = if hasBVs
-             then ["(set-logic QF_FPABV)"]
-             else ["(set-logic QF_FPA)"]
+             then ["(set-logic QF_FPBV)"]
+             else ["(set-logic QF_FP)"]
            | hasInteger || hasReal || not (null usorts)
            = case mbDefaultLogic solverCaps of
                 Nothing -> ["; Has unbounded values (Int/Real) or uninterpreted sorts; no logic specified."]   -- combination, let the solver pick
@@ -192,6 +190,10 @@ cvt rm smtLogic solverCaps kindInfo isSat comments inputs skolemInps consts tbls
         userName s = case s `lookup` map snd inputs of
                         Just u  | show s /= u -> " ; tracks user variable " ++ show u
                         _ -> ""
+        -- following sorts are built-in; do not translate them:
+        builtInSort = (`elem` ["RoundingMode"])
+        declSort (s, _)
+          | builtInSort s           = []
         declSort (s, (Left  r,  _)) = ["(declare-sort " ++ s ++ " 0)  ; N.B. Uninterpreted: " ++ r]
         declSort (s, (Right fs, _)) = [ "(declare-datatypes () ((" ++ s ++ " " ++ unwords (map (\c -> "(" ++ c ++ ")") fs) ++ ")))"
                                       , "(define-fun " ++ s ++ "_constrIndex ((x " ++ s ++ ")) Int"
@@ -296,42 +298,8 @@ cvtSW skolemMap s
   | True
   = show s
 
--- Carefully code hex numbers, SMTLib is picky about lengths of hex constants. For the time
--- being, SBV only supports sizes that are multiples of 4, but the below code is more robust
--- in case of future extensions to support arbitrary sizes.
-hex :: Int -> Integer -> String
-hex 1  v = "#b" ++ show v
-hex sz v
-  | sz `mod` 4 == 0 = "#x" ++ pad (sz `div` 4) (showHex v "")
-  | True            = "#b" ++ pad sz (showBin v "")
-   where pad n s = replicate (n - length s) '0' ++ s
-         showBin = showIntAtBase 2 intToDigit
-
 cvtCW :: RoundingMode -> CW -> String
-cvtCW rm x
-  | isBoolean       x, CWInteger  w      <- cwVal x = if w == 0 then "false" else "true"
-  | isUninterpreted x, CWUserSort (_, s) <- cwVal x = s
-  | isReal          x, CWAlgReal  r      <- cwVal x = algRealToSMTLib2 r
-  | isFloat         x, CWFloat    f      <- cwVal x = showSMTFloat  rm f
-  | isDouble        x, CWDouble   d      <- cwVal x = showSMTDouble rm d
-  | not (isBounded x), CWInteger  w      <- cwVal x = if w >= 0 then show w else "(- " ++ show (abs w) ++ ")"
-  | not (hasSign x)  , CWInteger  w      <- cwVal x = hex (intSizeOf x) w
-  -- signed numbers (with 2's complement representation) is problematic
-  -- since there's no way to put a bvneg over a positive number to get minBound..
-  -- Hence, we punt and use binary notation in that particular case
-  | hasSign x        , CWInteger  w      <- cwVal x = if w == negate (2 ^ intSizeOf x)
-                                                      then mkMinBound (intSizeOf x)
-                                                      else negIf (w < 0) $ hex (intSizeOf x) (abs w)
-  | True = error $ "SBV.cvtCW: Impossible happened: Kind/Value disagreement on: " ++ show (kindOf x, x)
-
-negIf :: Bool -> String -> String
-negIf True  a = "(bvneg " ++ a ++ ")"
-negIf False a = a
-
--- anamoly at the 2's complement min value! Have to use binary notation here
--- as there is no positive value we can provide to make the bvneg work.. (see above)
-mkMinBound :: Int -> String
-mkMinBound i = "#b1" ++ replicate (i-1) '0'
+cvtCW = cwToSMTLib
 
 getTable :: TableMap -> Int -> String
 getTable m i
@@ -427,7 +395,7 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         sh (SBVApp (Uninterpreted nm) [])   = nm
         sh (SBVApp (Uninterpreted nm) args) = "(" ++ nm' ++ " " ++ unwords (map ssw args) ++ ")"
           where -- slight hack needed here to take advantage of custom floating-point functions.. sigh.
-                fpSpecials = ["fp.sqrt", "fusedMA"]
+                fpSpecials = ["fp.sqrt", "fp.fma"]
                 nm' | (floatOp || doubleOp) && (nm `elem` fpSpecials) = addRM nm
                     | True                                            = nm
         sh (SBVApp (Extract 0 0) [a])   -- special SInteger -> SReal conversion
@@ -464,6 +432,8 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                , (Not,  lift1B "not" "bvnot")
                                , (Join, lift2 "concat")
                                ]
+        sh (SBVApp (FPRound w) args)
+          = "(" ++ w ++ " " ++ unwords (map ssw args) ++ ")"
         sh inp@(SBVApp op args)
           | intOp, Just f <- lookup op smtOpIntTable
           = f True (map ssw args)

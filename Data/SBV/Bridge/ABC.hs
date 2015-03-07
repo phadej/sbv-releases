@@ -1,50 +1,48 @@
 ---------------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Bridge.Yices
--- Copyright   :  (c) Levent Erkok
+-- Module      :  Data.SBV.Bridge.ABC
+-- Copyright   :  (c) Adam Foltzer
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
 -- Stability   :  experimental
 --
--- Interface to the Yices SMT solver. Import this module if you want to use the
--- Yices SMT prover as your backend solver. Also see:
+-- Interface to the ABC verification and synthesis tool. Import this
+-- module if you want to use ABC as your backend solver. Also see:
 --
---       - "Data.SBV.Bridge.Boolector"
---
---       - "Data.SBV.Bridge.CVC4"
+--       - "Data.SBV.Bridge.Yices"
 --
 --       - "Data.SBV.Bridge.Z3"
 --
+--       - "Data.SBV.Bridge.Boolector"
+--
 --       - "Data.SBV.Bridge.MathSAT"
 --
---       - "Data.SBV.Bridge.ABC"
+--       - "Data.SBV.Bridge.CVC4"
 ---------------------------------------------------------------------------------
 
-module Data.SBV.Bridge.Yices (
-  -- * Yices specific interface
+module Data.SBV.Bridge.ABC (
+  -- * ABC specific interface
   sbvCurrentSolver
   -- ** Proving, checking satisfiability, and safety
   , prove, sat, safe, allSat, isVacuous, isTheorem, isSatisfiable
   -- ** Optimization routines
   , optimize, minimize, maximize
-  -- * Non-Yices specific SBV interface
-  -- $moduleExportIntro
   , module Data.SBV
   ) where
 
 import Data.SBV hiding (prove, sat, safe, allSat, isVacuous, isTheorem, isSatisfiable, optimize, minimize, maximize, sbvCurrentSolver)
 
--- | Current solver instance, pointing to yices.
+-- | Current solver instance, pointing to abc.
 sbvCurrentSolver :: SMTConfig
-sbvCurrentSolver = yices
+sbvCurrentSolver = abc
 
--- | Prove theorems, using the Yices SMT solver
+-- | Prove theorems, using ABC
 prove :: Provable a
       => a              -- ^ Property to check
       -> IO ThmResult   -- ^ Response from the SMT solver, containing the counter-example if found
 prove = proveWith sbvCurrentSolver
 
--- | Find satisfying solutions, using the Yices SMT solver
+-- | Find satisfying solutions, using ABC
 sat :: Provable a
     => a                -- ^ Property to check
     -> IO SatResult     -- ^ Response of the SMT Solver, containing the model if found
@@ -56,33 +54,33 @@ safe :: SExecutable a
      -> IO SafeResult   -- ^ Response of the SMT solver, containing the unsafe model if found
 safe = safeWith sbvCurrentSolver
 
--- | Find all satisfying solutions, using the Yices SMT solver
+-- | Find all satisfying solutions, using ABC
 allSat :: Provable a
        => a                -- ^ Property to check
        -> IO AllSatResult  -- ^ List of all satisfying models
 allSat = allSatWith sbvCurrentSolver
 
--- | Check vacuity of the explicit constraints introduced by calls to the 'constrain' function, using the Yices SMT solver
+-- | Check vacuity of the explicit constraints introduced by calls to the 'constrain' function, using ABC
 isVacuous :: Provable a
           => a             -- ^ Property to check
           -> IO Bool       -- ^ True if the constraints are unsatisifiable
 isVacuous = isVacuousWith sbvCurrentSolver
 
--- | Check if the statement is a theorem, with an optional time-out in seconds, using the Yices SMT solver
+-- | Check if the statement is a theorem, with an optional time-out in seconds, using ABC
 isTheorem :: Provable a
           => Maybe Int          -- ^ Optional time-out, specify in seconds
           -> a                  -- ^ Property to check
           -> IO (Maybe Bool)    -- ^ Returns Nothing if time-out expires
 isTheorem = isTheoremWith sbvCurrentSolver
 
--- | Check if the statement is satisfiable, with an optional time-out in seconds, using the Yices SMT solver
+-- | Check if the statement is satisfiable, with an optional time-out in seconds, using ABC
 isSatisfiable :: Provable a
               => Maybe Int       -- ^ Optional time-out, specify in seconds
               -> a               -- ^ Property to check
               -> IO (Maybe Bool) -- ^ Returns Nothing if time-out expiers
 isSatisfiable = isSatisfiableWith sbvCurrentSolver
 
--- | Optimize cost functions, using the Yices SMT solver
+-- | Optimize cost functions, using ABC
 optimize :: (SatModel a, SymWord a, Show a, SymWord c, Show c)
          => OptimizeOpts                -- ^ Parameters to optimization (Iterative, Quantified, etc.)
          -> (SBV c -> SBV c -> SBool)   -- ^ Betterness check: This is the comparison predicate for optimization
@@ -92,7 +90,7 @@ optimize :: (SatModel a, SymWord a, Show a, SymWord c, Show c)
          -> IO (Maybe [a])              -- ^ Returns Nothing if there is no valid solution, otherwise an optimal solution
 optimize = optimizeWith sbvCurrentSolver
 
--- | Minimize cost functions, using the Yices SMT solver
+-- | Minimize cost functions, using ABC
 minimize :: (SatModel a, SymWord a, Show a, SymWord c, Show c)
          => OptimizeOpts                -- ^ Parameters to optimization (Iterative, Quantified, etc.)
          -> ([SBV a] -> SBV c)          -- ^ Cost function to minimize
@@ -101,7 +99,7 @@ minimize :: (SatModel a, SymWord a, Show a, SymWord c, Show c)
          -> IO (Maybe [a])              -- ^ Returns Nothing if there is no valid solution, otherwise an optimal solution
 minimize = minimizeWith sbvCurrentSolver
 
--- | Maximize cost functions, using the Yices SMT solver
+-- | Maximize cost functions, using ABC
 maximize :: (SatModel a, SymWord a, Show a, SymWord c, Show c)
          => OptimizeOpts                -- ^ Parameters to optimization (Iterative, Quantified, etc.)
          -> ([SBV a] -> SBV c)          -- ^ Cost function to maximize

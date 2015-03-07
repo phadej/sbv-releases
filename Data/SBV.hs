@@ -123,7 +123,7 @@ module Data.SBV (
   , SInteger
   -- *** IEEE-floating point numbers
   -- $floatingPoints
-  , SFloat, SDouble, RoundingMode(..), nan, infinity, sNaN, sInfinity, fusedMA, isSNaN, isFPPoint
+  , SFloat, SDouble, RoundingFloat(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity, fusedMA, isSNaN, isFPPoint
   -- *** Signed algebraic reals
   -- $algReals
   , SReal, AlgReal, toSReal
@@ -228,7 +228,7 @@ module Data.SBV (
   , getModelDictionaries, getModelValues, getModelUninterpretedValues
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), SMTLibLogic(..), Logic(..), OptimizeOpts(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
+  , SMTConfig(..), SMTLibLogic(..), Logic(..), OptimizeOpts(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
@@ -282,6 +282,7 @@ import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.Model
 import Data.SBV.BitVectors.PrettyNum
+import Data.SBV.BitVectors.Rounding
 import Data.SBV.BitVectors.SignCast
 import Data.SBV.BitVectors.Splittable
 import Data.SBV.BitVectors.STree
@@ -345,6 +346,7 @@ defaultSolverConfig Yices     = yices
 defaultSolverConfig Boolector = boolector
 defaultSolverConfig CVC4      = cvc4
 defaultSolverConfig MathSAT   = mathSAT
+defaultSolverConfig ABC       = abc
 
 -- | Return the known available solver configs, installed on your machine.
 sbvAvailableSolvers :: IO [SMTConfig]

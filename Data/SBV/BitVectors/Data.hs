@@ -19,12 +19,13 @@
 {-# LANGUAGE    StandaloneDeriving         #-}
 {-# LANGUAGE    DefaultSignatures          #-}
 {-# LANGUAGE    NamedFieldPuns             #-}
+{-# LANGUAGE    DeriveDataTypeable         #-}
 {-# OPTIONS_GHC -fno-warn-orphans          #-}
 
 module Data.SBV.BitVectors.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
  , SInt8, SInt16, SInt32, SInt64, SInteger, SReal, SFloat, SDouble
- , nan, infinity, sNaN, sInfinity, RoundingMode(..), smtLibSquareRoot, smtLibFusedMA
+ , nan, infinity, sNaN, sInfinity, RoundingMode(..), SRoundingMode, smtLibSquareRoot, smtLibFusedMA
  , SymWord(..)
  , CW(..), CWVal(..), AlgReal(..), cwSameType, cwIsBit, cwToBool
  , mkConstCW ,liftCW2, mapCW, mapCW2
@@ -59,6 +60,7 @@ import Data.List            (intercalate, sortBy)
 import Data.Maybe           (isJust, fromJust)
 
 import qualified Data.Generics as G    (Data(..), DataType, dataTypeName, dataTypeOf, tyconUQname, dataTypeConstrs, constrFields)
+import qualified Data.Typeable as T    (Typeable)
 import qualified Data.IntMap   as IMap (IntMap, empty, size, toAscList, lookup, insert, insertWith)
 import qualified Data.Map      as Map  (Map, empty, toList, size, insert, lookup)
 import qualified Data.Set      as Set  (Set, empty, toList, insert)
@@ -247,11 +249,13 @@ data Op = Plus | Times | Minus | UNeg | Abs
         | ArrEq   Int Int
         | ArrRead Int
         | Uninterpreted String
+        -- Floating point uops with custom rounding-modes
+        | FPRound String
         deriving (Eq, Ord)
 
 -- | SMT-Lib's square-root over floats/doubles. We piggy back on to the uninterpreted function mechanism
 -- to implement these; which is not a terrible idea; although the use of the constructor 'Uninterpreted'
--- might be confusing. This function will *not* be uninterpreted in reality, as QF_FPA will define it. It's
+-- might be confusing. This function will *not* be uninterpreted in reality, as QF_FP will define it. It's
 -- a bit of a shame, but much easier to implement it this way.
 smtLibSquareRoot :: Op
 smtLibSquareRoot = Uninterpreted "fp.sqrt"
@@ -397,6 +401,7 @@ instance Show Op where
   show (ArrEq i j)   = "array_" ++ show i ++ " == array_" ++ show j
   show (ArrRead i)   = "select array_" ++ show i
   show (Uninterpreted i) = "[uninterpreted] " ++ i
+  show (FPRound w)       = w
   show op
     | Just s <- op `lookup` syms = s
     | True                       = error "impossible happened; can't find op!"
@@ -487,7 +492,9 @@ instance Show Result where
                 ++ map (("  " ++) . show) cstrs
                 ++ ["OUTPUTS"]
                 ++ map (("  " ++) . show) os
-    where usorts = [s | KUserSort s _ <- Set.toList kinds]
+    where usorts = [sh s t | KUserSort s t <- Set.toList kinds]
+                   where sh s (Left   _, _) = s
+                         sh s (Right es, _) = s ++ " (" ++ intercalate ", " es ++ ")"
           shs sw = show sw ++ " :: " ++ showType sw
           sht ((i, at, rt), es)  = "  Table " ++ show i ++ " : " ++ show at ++ "->" ++ show rt ++ " = " ++ show es
           shc (sw, cw) = "  " ++ show sw ++ " = " ++ show cw
@@ -692,6 +699,16 @@ data RoundingMode = RoundNearestTiesToEven  -- ^ Round to nearest representable 
                   | RoundTowardPositive     -- ^ Round towards positive infinity. (Also known as rounding-up or ceiling.)
                   | RoundTowardNegative     -- ^ Round towards negative infinity. (Also known as rounding-down or floor.)
                   | RoundTowardZero         -- ^ Round towards zero. (Also known as truncation.)
+                  deriving (Eq, Ord, G.Data, T.Typeable, Read, Show, Bounded, Enum)
+
+-- | 'RoundingMode' can be used symbolically
+instance SymWord RoundingMode
+
+-- | 'RoundingMode' kind
+instance HasKind RoundingMode
+
+-- | The symbolic variant of 'RoundingMode'
+type SRoundingMode = SBV RoundingMode
 
 -- Not particularly "desirable", but will do if needed
 instance Show (SBV a) where
@@ -754,7 +771,8 @@ registerKind st k
   = error $ "SBV: " ++ show sortName ++ " is a reserved sort; please use a different name."
   | True
   = modifyIORef (rUsedKinds st) (Set.insert k)
- where reserved = ["Int", "Real", "List", "Array", "Bool", "NUMERAL", "DECIMAL", "STRING", "FP", "FloatingPoint"]  -- Reserved by SMT-Lib
+ where -- TODO: this list is not comprehensive!
+       reserved = ["Int", "Real", "List", "Array", "Bool", "NUMERAL", "DECIMAL", "STRING", "FP", "FloatingPoint", "fp"]  -- Reserved by SMT-Lib
 
 -- | Create a new constant; hash-cons as necessary
 newConst :: State -> CW -> IO SW
@@ -1300,8 +1318,8 @@ data SMTLibVersion = SMTLib1
 data SMTLibPgm = SMTLibPgm SMTLibVersion  ( [(String, SW)]          -- alias table
                                           , [String]                -- pre: declarations.
                                           , [String])               -- post: formula
-instance NFData SMTLibVersion
-instance NFData SMTLibPgm
+instance NFData SMTLibVersion where rnf a = seq a ()
+instance NFData SMTLibPgm     where rnf a = seq a ()
 
 instance Show SMTLibPgm where
   show (SMTLibPgm _ (_, pre, post)) = intercalate "\n" $ pre ++ post
@@ -1316,18 +1334,19 @@ instance NFData Result where
                        `seq` rnf consts `seq` rnf tbls `seq` rnf arrs
                        `seq` rnf uis    `seq` rnf axs  `seq` rnf pgm
                        `seq` rnf cstr   `seq` rnf outs
-instance NFData Kind
-instance NFData ArrayContext
-instance NFData SW
-instance NFData SBVExpr
-instance NFData Quantifier
-instance NFData SBVType
-instance NFData UnintKind
+instance NFData Kind          where rnf a = seq a ()
+instance NFData ArrayContext  where rnf a = seq a ()
+instance NFData SW            where rnf a = seq a ()
+instance NFData SBVExpr       where rnf a = seq a ()
+instance NFData Quantifier    where rnf a = seq a ()
+instance NFData SBVType       where rnf a = seq a ()
+instance NFData UnintKind     where rnf a = seq a ()
 instance NFData a => NFData (Cached a) where
   rnf (Cached f) = f `seq` ()
 instance NFData a => NFData (SBV a) where
   rnf (SBV x y) = rnf x `seq` rnf y `seq` ()
-instance NFData SBVPgm
+instance NFData SBVPgm        where rnf a = seq a ()
+
 
 instance NFData SMTResult where
   rnf (Unsatisfiable _)   = ()
@@ -1344,14 +1363,13 @@ instance NFData SMTScript where
 
 -- | SMT-Lib logics. If left unspecified SBV will pick the logic based on what it determines is needed. However, the
 -- user can override this choice using the 'useLogic' parameter to the configuration. This is especially handy if
--- one is experimenting with custom logics that might be supported on new solvers.
+-- one is experimenting with custom logics that might be supported on new solvers. See <http://smtlib.cs.uiowa.edu/logics.shtml>
+-- for the official list.
 data SMTLibLogic
   = AUFLIA    -- ^ Formulas over the theory of linear integer arithmetic and arrays extended with free sort and function symbols but restricted to arrays with integer indices and values
   | AUFLIRA   -- ^ Linear formulas with free sort and function symbols over one- and two-dimentional arrays of integer index and real value
   | AUFNIRA   -- ^ Formulas with free function and predicate symbols over a theory of arrays of arrays of integer index and real value
   | LRA       -- ^ Linear formulas in linear real arithmetic
-  | UFLRA     -- ^ Linear real arithmetic with uninterpreted sort and function symbols. 
-  | UFNIA     -- ^ Non-linear integer arithmetic with uninterpreted sort and function symbols. 
   | QF_ABV    -- ^ Quantifier-free formulas over the theory of bitvectors and bitvector arrays
   | QF_AUFBV  -- ^ Quantifier-free formulas over the theory of bitvectors and bitvector arrays extended with free sort and function symbols
   | QF_AUFLIA -- ^ Quantifier-free linear formulas over the theory of integer arrays extended with free sort and function symbols
@@ -1369,8 +1387,10 @@ data SMTLibLogic
   | QF_UFLIA  -- ^ Unquantified linear integer arithmetic with uninterpreted sort and function symbols. 
   | QF_UFLRA  -- ^ Unquantified linear real arithmetic with uninterpreted sort and function symbols. 
   | QF_UFNRA  -- ^ Unquantified non-linear real arithmetic with uninterpreted sort and function symbols. 
-  | QF_FPABV  -- ^ Quantifier-free formulas over the theory of floating point numbers, arrays, and bit-vectors
-  | QF_FPA    -- ^ Quantifier-free formulas over the theory of floating point numbers
+  | UFLRA     -- ^ Linear real arithmetic with uninterpreted sort and function symbols. 
+  | UFNIA     -- ^ Non-linear integer arithmetic with uninterpreted sort and function symbols. 
+  | QF_FPBV   -- ^ Quantifier-free formulas over the theory of floating point numbers, arrays, and bit-vectors
+  | QF_FP     -- ^ Quantifier-free formulas over the theory of floating point numbers
   deriving Show
 
 -- | Chosen logic for the solver
@@ -1461,6 +1481,7 @@ data Solver = Z3
             | Boolector
             | CVC4
             | MathSAT
+            | ABC
             deriving (Show, Enum, Bounded)
 
 -- | An SMT solver
