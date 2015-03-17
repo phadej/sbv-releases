@@ -1,7 +1,23 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 4.1, 2015-03-06
+* Latest Hackage released version: 4.2, 2015-03-17
+
+### Version 4.2, 2015-03-17
+
+  * Add exponentiation (.^). Thanks to Daniel Wagner for contributing the code!
+
+  * Better handling of SBV_$SOLVER_OPTIONS, in particular keeping track of
+    proper quoting in environment variables. Thanks to Adam Foltzer for
+    the patch!
+
+  * Silence some hlint/ghci warnings. Thanks to Trevor Elliott for the patch!
+
+  * Haddock documentation fixes, improvements, etc.
+  
+  * Change ABC default option string to %blast; "&sweep -C 5000; &syn4; &cec -s -m -C 2000"
+    which seems to give good results. Use SBV_ABC_OPTIONS environment variable (or
+    via abc.rc file and a combination of SBV_ABC_OPTIONS) to experiment.
 
 ### Version 4.1, 2015-03-06
 
