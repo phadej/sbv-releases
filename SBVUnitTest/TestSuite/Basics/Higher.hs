@@ -31,4 +31,3 @@ testSuite = mkTestSuite $ \goldCheck -> test [
  ]
  where double          = (2*) === (\x -> x+(x::SWord8))
        onlyFailsFor128 = (2*) === (\x -> ite (x .== 128) 5 (x+(x::SWord8)))
-

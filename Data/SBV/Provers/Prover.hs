@@ -11,7 +11,6 @@
 
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE BangPatterns         #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 
@@ -172,10 +171,18 @@ instance (SymWord a, Provable p) => Provable (SBV a -> p) where
   forSome (s:ss) k = exists s >>= \a -> forSome ss $ k a
   forSome []     k = forSome_ k
 
--- Arrays (memory), only supported universally for the time being
-instance (HasKind a, HasKind b, SymArray array, Provable p) => Provable (array a b -> p) where
-  forAll_       k = newArray_  Nothing >>= \a -> forAll_   $ k a
-  forAll (s:ss) k = newArray s Nothing >>= \a -> forAll ss $ k a
+-- SFunArrays (memory, functional representation), only supported universally for the time being
+instance (HasKind a, HasKind b, Provable p) => Provable (SArray a b -> p) where
+  forAll_       k = declNewSArray (\t -> "array_" ++ show t) Nothing >>= \a -> forAll_   $ k a
+  forAll (s:ss) k = declNewSArray (const s)                  Nothing >>= \a -> forAll ss $ k a
+  forAll []     k = forAll_ k
+  forSome_      _ = error "SBV.forSome: Existential arrays are not currently supported."
+  forSome _     _ = error "SBV.forSome: Existential arrays are not currently supported."
+
+-- SArrays (memory, SMT-Lib notion of arrays), only supported universally for the time being
+instance (HasKind a, HasKind b, Provable p) => Provable (SFunArray a b -> p) where
+  forAll_       k = declNewSFunArray Nothing >>= \a -> forAll_   $ k a
+  forAll (_:ss) k = declNewSFunArray Nothing >>= \a -> forAll ss $ k a
   forAll []     k = forAll_ k
   forSome_      _ = error "SBV.forSome: Existential arrays are not currently supported."
   forSome _     _ = error "SBV.forSome: Existential arrays are not currently supported."
@@ -504,3 +511,5 @@ internalSATCheck cfg st cond msg = do
        pgm = Result ki tr uic [(EX, n) | (_, n) <- is] cs ts as uis ax asgn cstr [sw]
        cvt = if useSMTLib2 cfg then toSMTLib2 else toSMTLib1
    runProofOn cvt cfg True [] pgm >>= callSolver True msg SatResult cfg
+
+{-# ANN module ("HLint: ignore Reduce duplication" :: String) #-}

@@ -1,7 +1,61 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 4.2, 2015-03-17
+* Latest Hackage released version: 4.3, 2015-04-10
+
+### Version 4.3, 2015-04-10
+
+  * Introduce Data.SBV.Dynamic, by Brian Huffman. This is mostly an internal
+    reorg of the SBV codebase, and end-users should not be impacted by the
+    changes. The introduction of the Dynamic SBV variant (i.e., one that does
+    not mandate a phantom type as in "SBV Word8" etc. allows library writers
+    more flexibility as they deal with arbitrary bit-vector sizes. The main
+    customor of these changes are the Cryptol language and the associated
+    toolset, but other developers building on top of SBV can find it useful
+    as well. NB: The "strongly-typed" aspect of SBV is still the main way
+    end-users should interact with SBV, and nothing changed in that respect!
+
+  * Add symbolic variants of floating-point rounding-modes for convenience
+
+  * Rename toSReal to sIntegerToSReal, which captures the intent more clearly
+
+  * Code clean-up: remove mbMinBound/mbMaxBound thus allowing less calls to
+    unliteral. Contributed by Brian Huffman.
+
+  * Introduce FP conversion functions:
+  
+       * Between SReal and SFloat/SDouble
+           * fpToSReal
+           * sRealToSFloat
+           * sRealToSDouble
+       * Between SWord32 and SFloat
+       	   * sWord32ToSFloat
+       	   * sFloatToSWord32
+       * Between SWord64 and SDouble. (Relational, due to non-unique NaNs)
+       	   * sWord64ToSDouble
+	   * sDoubleToSWord64
+       * From float to sign/exponent/mantissa fields: (Relational, due to non-unique NaNs)
+           * blastSFloat
+           * blastSDouble
+
+  * Rework floating point classifiers. Remove isSNaN and isFPPoint (both renamed),
+    and add the following new recognizers:
+
+       * isNormalFP
+       * isSubnormalFP
+       * isZeroFP
+       * isInfiniteFP
+       * isNaNFP
+       * isNegativeFP
+       * isPositiveFP
+       * isNegativeZeroFP
+       * isPositiveZeroFP
+       * isPointFP (corresponds to a real number, i.e., neither NaN nor infinity)
+
+  * Reimplement sbvTestBit, by Brian Huffman. This version is much faster at large
+    word sizes, as it avoids the costly mask generation.
+
+  * Code changes to suppress warnings with GHC7.10. General clean-up.
 
 ### Version 4.2, 2015-03-17
 

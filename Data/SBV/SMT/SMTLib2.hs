@@ -38,7 +38,7 @@ addNonEqConstraints rm qinps allNonEqConstraints (SMTLibPgm _ (aliasTable, pre, 
     ++ [ "; --- refuted-models ---" ]
     ++ refutedModel
     ++ post
- where refutedModel = concatMap (nonEqs rm) (map (map intName) nonEqConstraints)
+ where refutedModel = concatMap (nonEqs rm . map intName) nonEqConstraints
        intName (s, c)
           | Just sw <- s `lookup` aliasTable = (show sw, c)
           | True                             = (s, c)
@@ -398,9 +398,6 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                 fpSpecials = ["fp.sqrt", "fp.fma"]
                 nm' | (floatOp || doubleOp) && (nm `elem` fpSpecials) = addRM nm
                     | True                                            = nm
-        sh (SBVApp (Extract 0 0) [a])   -- special SInteger -> SReal conversion
-          | kindOf a == KUnbounded
-          = "(to_real " ++ ssw a ++ ")"
         sh (SBVApp (Extract i j) [a]) | ensureBV = "((_ extract " ++ show i ++ " " ++ show j ++ ") " ++ ssw a ++ ")"
         sh (SBVApp (Rol i) [a])
            | bvOp  = rot  ssw "rotate_left"  i a

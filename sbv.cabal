@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       4.2
+Version:       4.3
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -48,7 +48,7 @@ Library
                     TypeSynonymInstances
   Build-Depends   : base >= 4 && < 5
                   , array, async, containers, deepseq, directory, filepath, old-time
-                  , pretty, process, mtl, QuickCheck, random, syb
+                  , pretty, process, mtl, QuickCheck, random, syb, data-binary-ieee754
   Exposed-modules : Data.SBV
                   , Data.SBV.Bridge.Boolector
                   , Data.SBV.Bridge.CVC4
@@ -56,6 +56,7 @@ Library
                   , Data.SBV.Bridge.Yices
                   , Data.SBV.Bridge.Z3
                   , Data.SBV.Bridge.ABC
+                  , Data.SBV.Dynamic
                   , Data.SBV.Internals
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
@@ -92,13 +93,17 @@ Library
                   , Data.SBV.Examples.Uninterpreted.Sort
                   , Data.SBV.Examples.Uninterpreted.UISortAllSat
   Other-modules   : Data.SBV.BitVectors.AlgReals
+                  , Data.SBV.BitVectors.Concrete
                   , Data.SBV.BitVectors.Data
+                  , Data.SBV.BitVectors.Kind
                   , Data.SBV.BitVectors.Model
+                  , Data.SBV.BitVectors.Operations
                   , Data.SBV.BitVectors.PrettyNum
                   , Data.SBV.BitVectors.Rounding
                   , Data.SBV.BitVectors.SignCast
                   , Data.SBV.BitVectors.Splittable
                   , Data.SBV.BitVectors.STree
+                  , Data.SBV.BitVectors.Symbolic
                   , Data.SBV.Compilers.C
                   , Data.SBV.Compilers.CodeGen
                   , Data.SBV.SMT.SMT

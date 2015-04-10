@@ -28,16 +28,16 @@ import Data.SBV
 --
 -- >>> prove assocPlus
 -- Falsifiable. Counter-example:
---   s0 = -7.888609e-31 :: SFloat
---   s1 = 3.944307e-31 :: SFloat
---   s2 = NaN :: SFloat
+--   s0 = -9.62965e-35 :: SFloat
+--   s1 = Infinity :: SFloat
+--   s2 = -Infinity :: SFloat
 --
 -- Indeed:
 --
--- >>> let i = 0/0 :: Float
--- >>> ((-7.888609e-31 + 3.944307e-31) + i) :: Float
+-- >>> let i = 1/0 :: Float
+-- >>> (-9.62965e-35 + (i + (-i)))
 -- NaN
--- >>> (-7.888609e-31 + (3.944307e-31 + i)) :: Float
+-- >>> ((-9.62965e-35 + i) + (-i))
 -- NaN
 --
 -- But keep in mind that @NaN@ does not equal itself in the floating point world! We have:
@@ -48,7 +48,7 @@ assocPlus :: SFloat -> SFloat -> SFloat -> SBool
 assocPlus x y z = x + (y + z) .== (x + y) + z
 
 -- | Prove that addition is not associative, even if we ignore @NaN@/@Infinity@ values.
--- To do this, we use the predicate 'isFPPoint', which is true of a floating point
+-- To do this, we use the predicate 'isPointFP', which is true of a floating point
 -- number ('SFloat' or 'SDouble') if it is neither @NaN@ nor @Infinity@. (That is, it's a
 -- representable point in the real-number line.)
 --
@@ -56,25 +56,25 @@ assocPlus x y z = x + (y + z) .== (x + y) + z
 --
 -- >>> assocPlusRegular
 -- Falsifiable. Counter-example:
---   x = -3.7777752e22 :: SFloat
---   y = -1.180801e18 :: SFloat
---   z = 9.4447324e21 :: SFloat
+--   x = -1.0491915e7 :: SFloat
+--   y = 1967115.5 :: SFloat
+--   z = 982003.94 :: SFloat
 --
 -- Indeed, we have:
 --
--- >>> ((-3.7777752e22 + (-1.180801e18)) + 9.4447324e21) :: Float
--- -2.83342e22
--- >>> (-3.7777752e22 + ((-1.180801e18) + 9.4447324e21)) :: Float
--- -2.8334201e22
+-- >>> ((-1.0491915e7) + (1967115.5 + 982003.94)) :: Float
+-- -7542795.5
+-- >>> (((-1.0491915e7) + 1967115.5) + 982003.94) :: Float
+-- -7542796.0
 --
--- Note the loss of precision in the first expression.
+-- Note the significant difference between two additions!
 assocPlusRegular :: IO ThmResult
 assocPlusRegular = prove $ do [x, y, z] <- sFloats ["x", "y", "z"]
                               let lhs = x+(y+z)
                                   rhs = (x+y)+z
                               -- make sure we do not overflow at the intermediate points
-                              constrain $ isFPPoint lhs
-                              constrain $ isFPPoint rhs
+                              constrain $ isPointFP lhs
+                              constrain $ isPointFP rhs
                               return $ lhs .== rhs
 
 -----------------------------------------------------------------------------
@@ -87,23 +87,23 @@ assocPlusRegular = prove $ do [x, y, z] <- sFloats ["x", "y", "z"]
 --
 -- >>> nonZeroAddition
 -- Falsifiable. Counter-example:
---   a = 2.1474839e10 :: SFloat
---   b = -7.275957e-11 :: SFloat
+--   a = -2.0 :: SFloat
+--   b = -3.0e-45 :: SFloat
 --
 -- Indeed, we have:
 --
--- >>> 2.1474839e10 + (-7.275957e-11) == (2.1474839e10 :: Float)
+-- >>> (-2.0) + (-3.0e-45) == (-2.0 :: Float)
 -- True
 --
 -- But:
 --
--- >>> -7.275957e-11 == (0 :: Float)
+-- >>> -3.0e-45 == (0::Float)
 -- False
 --
 nonZeroAddition :: IO ThmResult
 nonZeroAddition = prove $ do [a, b] <- sFloats ["a", "b"]
-                             constrain $ isFPPoint a
-                             constrain $ isFPPoint b
+                             constrain $ isPointFP a
+                             constrain $ isPointFP b
                              constrain $ a + b .== a
                              return $ b .== 0
 
@@ -118,17 +118,17 @@ nonZeroAddition = prove $ do [a, b] <- sFloats ["a", "b"]
 --
 -- >>> multInverse
 -- Falsifiable. Counter-example:
---   a = 1.2354518252390238e308 :: SDouble
+--   a = -2.0445642768532407e154 :: SDouble
 --
 -- Indeed, we have:
 --
--- >>> let a = 1.2354518252390238e308 :: Double
+-- >>> let a = -2.0445642768532407e154 :: Double
 -- >>> a * (1/a)
--- 0.9999999999999998
+-- 0.9999999999999999
 multInverse :: IO ThmResult
 multInverse = prove $ do a <- sDouble "a"
-                         constrain $ isFPPoint a
-                         constrain $ isFPPoint (1/a)
+                         constrain $ isPointFP a
+                         constrain $ isPointFP (1/a)
                          return $ a * (1/a) .== 1
 
 -----------------------------------------------------------------------------
@@ -146,52 +146,35 @@ multInverse = prove $ do a <- sDouble "a"
 -- >>> roundingAdd
 -- Satisfiable. Model:
 --   rm = RoundTowardPositive :: RoundingMode
---   x = 1.7014118e38 :: SFloat
---   y = 1.1754942e-38 :: SFloat
+--   x = 246080.08 :: SFloat
+--   y = 16255.999 :: SFloat
 --
 -- Unfortunately we can't directly validate this result at the Haskell level, as Haskell only supports
 -- 'RoundNearestTiesToEven'. We have:
 --
--- >>> (1.7014118e38 + 1.1754942e-38) :: Float
--- 1.7014118e38
+-- >>> (246080.08 + 16255.999) :: Float
+-- 262336.06
 --
--- Note that result is identical to the first argument. But with a 'RoundTowardPositive', we would
--- get the result @1.701412e38@. While we cannot directly see this from within Haskell, we can
--- use SBV to provide us with that result thusly:
+-- While we cannot directly see the result when the mode is 'RoundTowardPositive' in Haskell, we can use
+-- SBV to provide us with that result thusly:
 --
--- >>> sat $ \x -> x .== fpAdd (literal RoundTowardPositive) (1.7014118e38::SFloat)  (1.1754942e-38::SFloat)
+-- >>> sat $ \z -> z .== fpAdd sRoundTowardPositive 246080.08 (16255.999::SFloat)
 -- Satisfiable. Model:
---   s0 = 1.701412e38 :: SFloat
+--   s0 = 262336.1 :: SFloat
 --
--- We can see why these two resuls are different if we treat these values as arbitrary
--- precision reals, as represented by the 'SReal' type:
---
--- >>> let x = 1.7014118e38 :: SReal
--- >>> let y = 1.1754942e-38 :: SReal
--- >>> x
--- 170141180000000000000000000000000000000.0 :: SReal
--- >>> y
--- 0.000000000000000000000000000000000000011754942 :: SReal
--- >>> x + y
--- 170141180000000000000000000000000000000.000000000000000000000000000000000000011754942 :: SReal
---
--- When we do 'RoundNearestTiesToEven', the entire suffix falls off, as it happens that the infinitely
--- precise result is closer to the value of @x@. But when we use 'RoundTowardPositive', we reach
--- for the next representable number, which happens to be @1.701412e38@. You might wonder why not
--- @1.7014119e38@? Because that number is not precisely representable as a 'Float':
---
--- >>> 1.7014119e38:: Float
--- 1.7014118e38
---
--- But @1.701412e38@ is:
---
--- >>> 1.701412e38 :: Float
--- 1.701412e38
---
--- Floating point representation and semantics is indeed a thorny subject, <https://ece.uwaterloo.ca/~dwharder/NumericalAnalysis/02Numerics/Double/paper.pdf> happens to be an excellent guide, however.
+-- We can see why these two resuls are indeed different. To see why, one would have to convert the
+-- individual numbers to Float's, which would induce rounding-errors, add them up, and round-back;
+-- a tedious operation, but one that might prove illimunating for the interested reader. We'll merely
+-- note that floating point representation and semantics is indeed a thorny
+-- subject, and point to <https://ece.uwaterloo.ca/~dwharder/NumericalAnalysis/02Numerics/Double/paper.pdf> as
+-- an excellent guide.
 roundingAdd :: IO SatResult
 roundingAdd = sat $ do m :: SRoundingMode <- free "rm"
+                       constrain $ m ./= literal RoundNearestTiesToEven
                        x <- sFloat "x"
                        y <- sFloat "y"
-                       constrain $ m ./= literal RoundNearestTiesToEven
-                       return $ fpAdd m x y ./= x + y
+                       let lhs = fpAdd m x y
+                       let rhs = x + y
+                       constrain $ isPointFP lhs
+                       constrain $ isPointFP rhs
+                       return $ lhs ./= rhs

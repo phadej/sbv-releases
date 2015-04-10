@@ -105,8 +105,11 @@
 -- get in touch if there is a solver you'd like to see included.
 ---------------------------------------------------------------------------------
 
+{-# LANGUAGE CPP                  #-}
 {-# LANGUAGE FlexibleInstances    #-}
+#if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
+#endif
 
 module Data.SBV (
   -- * Programming with symbolic values
@@ -125,10 +128,18 @@ module Data.SBV (
   , SInteger
   -- *** IEEE-floating point numbers
   -- $floatingPoints
-  , SFloat, SDouble, RoundingFloat(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity, fusedMA, isSNaN, isFPPoint
+  , SFloat, SDouble, RoundingFloat(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity, fusedMA
+  -- **** Rounding modes
+  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero
+  -- **** FP classifiers
+  , isNormalFP, isSubnormalFP, isZeroFP, isInfiniteFP, isNaNFP, isNegativeFP, isPositiveFP, isNegativeZeroFP, isPositiveZeroFP, isPointFP
+  -- **** Conversion to and from Word32, Word64
+  , sWord32ToSFloat, sWord64ToSDouble, sFloatToSWord32, sDoubleToSWord64
+  -- **** Blasting floats to sign, exponent, mantissa bits
+  , blastSFloat, blastSDouble
   -- *** Signed algebraic reals
   -- $algReals
-  , SReal, AlgReal, toSReal
+  , SReal, AlgReal, sIntegerToSReal, fpToSReal, sRealToSFloat, sRealToSDouble
   -- ** Creating a symbolic variable
   -- $createSym
   , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble
@@ -310,20 +321,46 @@ import Data.Word
 sbvCurrentSolver :: SMTConfig
 sbvCurrentSolver = z3
 
--- | Note that the floating point value NaN does not compare equal to itself,
--- so we need a special recognizer for that. Haskell provides the isNaN predicate
--- with the `RealFrac` class, which unfortunately is not currently implementable for
--- symbolic cases. (Requires trigonometric functions etc.) Thus, we provide this
--- recognizer separately. Note that the definition simply tests equality against
--- itself, which fails for NaN. Who said equality for floating point was reflexive?
-isSNaN :: (Floating a, SymWord a) => SBV a -> SBool
-isSNaN x = x ./= x
+-- | Is the floating-point number a normal value. (i.e., not denormalized.)
+isNormalFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isNormalFP = liftFPPredicate "fp.isNormal" isNormalized
+  where isNormalized x = not (isDenormalized x || isInfinite x || isNaN x)
 
--- | We call a FP number FPPoint if it is neither NaN, nor +/- infinity.
-isFPPoint :: (Floating a, SymWord a) => SBV a -> SBool
-isFPPoint x =     x .== x           -- gets rid of NaN's
-              &&& x .< sInfinity    -- gets rid of +inf
-              &&& x .> -sInfinity   -- gets rid of -inf
+-- | Is the floating-point number a subnormal value. (Also known as denormal.)
+isSubnormalFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isSubnormalFP = liftFPPredicate "fp.isSubnormal" isDenormalized
+
+-- | Is the floating-point number 0? (Note that both +0 and -0 will satisfy this predicate.)
+isZeroFP :: (Floating a, SymWord a) => SBV a -> SBool
+isZeroFP = liftFPPredicate "fp.isZero" (== 0)
+
+-- | Is the floating-point number infinity? (Note that both +oo and -oo will satisfy this predicate.)
+isInfiniteFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isInfiniteFP = liftFPPredicate "fp.isInfinite" isInfinite
+
+-- | Is the floating-point number a NaN value?
+isNaNFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isNaNFP = liftFPPredicate "fp.isNaN" isNaN
+
+-- | Is the floating-point number negative? Note that -0 satisfies this predicate but +0 does not.
+isNegativeFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isNegativeFP = liftFPPredicate "fp.isNegative" (\x -> x < 0 ||       isNegativeZero x)
+
+-- | Is the floating-point number positive? Note that +0 satisfies this predicate but -0 does not.
+isPositiveFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isPositiveFP = liftFPPredicate "fp.isPositive" (\x -> x >= 0 && not (isNegativeZero x))
+
+-- | Is the floating point number -0?
+isNegativeZeroFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isNegativeZeroFP x = isZeroFP x &&& isNegativeFP x
+
+-- | Is the floating point number +0?
+isPositiveZeroFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isPositiveZeroFP x = isZeroFP x &&& isPositiveFP x
+
+-- | Is the floating-point number a regular floating point, i.e., not NaN, nor +oo, nor -oo. Normals or denormals are allowed.
+isPointFP :: (RealFloat a, SymWord a) => SBV a -> SBool
+isPointFP x = bnot (isNaNFP x ||| isInfiniteFP x)
 
 -- | Form the symbolic conjunction of a given list of boolean conditions. Useful in expressing
 -- problems with constraints, like the following:
@@ -406,43 +443,96 @@ infix 4 ===
 class Equality a where
   (===) :: a -> a -> IO ThmResult
 
-instance (SymWord a, EqSymbolic z) => Equality (SBV a -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, EqSymbolic z) => Equality (SBV a -> z) where
   k === l = prove $ \a -> k a .== l a
 
-instance (SymWord a, SymWord b, EqSymbolic z) => Equality (SBV a -> SBV b -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+
+ (SymWord a, SymWord b, EqSymbolic z) => Equality (SBV a -> SBV b -> z) where
   k === l = prove $ \a b -> k a b .== l a b
 
-instance (SymWord a, SymWord b, EqSymbolic z) => Equality ((SBV a, SBV b) -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+  {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, EqSymbolic z) => Equality ((SBV a, SBV b) -> z) where
   k === l = prove $ \a b -> k (a, b) .== l (a, b)
 
-instance (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> z) where
   k === l = prove $ \a b c -> k a b c .== l a b c
 
-instance (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c) -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c) -> z) where
   k === l = prove $ \a b c -> k (a, b, c) .== l (a, b, c)
 
-instance (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> z) where
   k === l = prove $ \a b c d -> k a b c d .== l a b c d
 
-instance (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d) -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d) -> z) where
   k === l = prove $ \a b c d -> k (a, b, c, d) .== l (a, b, c, d)
 
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> z) where
   k === l = prove $ \a b c d e -> k a b c d e .== l a b c d e
 
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e) -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e) -> z) where
   k === l = prove $ \a b c d e -> k (a, b, c, d, e) .== l (a, b, c, d, e)
 
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> z) where
   k === l = prove $ \a b c d e f -> k a b c d e f .== l a b c d e f
 
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f) -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f) -> z) where
   k === l = prove $ \a b c d e f -> k (a, b, c, d, e, f) .== l (a, b, c, d, e, f)
 
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> SBV g -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> SBV g -> z) where
   k === l = prove $ \a b c d e f g -> k a b c d e f g .== l a b c d e f g
 
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> z) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+ {-# OVERLAPPABLE #-}
+#endif
+ (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> z) where
   k === l = prove $ \a b c d e f g -> k (a, b, c, d, e, f, g) .== l (a, b, c, d, e, f, g)
 
 -- Haddock section documentation
