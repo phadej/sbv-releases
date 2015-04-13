@@ -153,8 +153,18 @@ mapCW2 r i f d u x y = case (cwSameType x y, cwVal x, cwVal y) of
 
 -- | Show instance for 'CW'.
 instance Show CW where
-  show w | cwIsBit w = show (cwToBool w)
-  show w             = liftCW show show show show snd w ++ " :: " ++ show (cwKind w)
+  show = showCW True
+
+-- | Show a CW, with kind info if bool is True. Note that bits never get their type printed
+-- as it is more or less useless. (i.e., No need to say SBool for True and False)
+showCW :: Bool -> CW -> String
+showCW _   w | cwIsBit w = show (cwToBool w)
+showCW shk w             = liftCW show show show show snd w ++ kInfo
+      where kInfo | shk  = " :: " ++ shKind (cwKind w)
+                  | True = ""
+            shKind k@(KUserSort {})       = show k
+            shKind k | ('S':sk) <- show k = sk
+            shKind k                      = show k
 
 -- | Create a constant word from an integral.
 mkConstCW :: Integral a => Kind -> a -> CW

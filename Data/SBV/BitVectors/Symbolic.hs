@@ -427,9 +427,13 @@ svSigned :: SVal -> Bool
 svSigned x = kindHasSign (svKind x)
 
 -- | Show instance for 'SVal'. Not particularly "desirable", but will do if needed
+-- NB. We do not show the type info on constant KBool values, since there's no
+-- implicit "fromBoolean" applied to Booleans in Haskell; and thus a statement
+-- of the form "True :: SBool" is just meaningless. (There should be a fromBoolean!)
 instance Show SVal where
-  show (SVal _ (Left c))  = show c
-  show (SVal k (Right _)) = "<symbolic> :: " ++ show k
+  show (SVal KBool (Left c))  = showCW False c
+  show (SVal k     (Left c))  = showCW False c ++ " :: " ++ show k
+  show (SVal k     (Right _)) =         "<symbolic> :: " ++ show k
 
 -- | Equality constraint on SBV values. Not desirable since we can't really compare two
 -- symbolic values, but will do.
@@ -965,12 +969,15 @@ data RoundingMode = RoundNearestTiesToEven  -- ^ Round to nearest representable 
 -- exactly. Otherwise, the number will be written out in standard decimal notation. Note that SBV will always print the whole value if it
 -- is precise (i.e., if it fits in a finite number of digits), regardless of the precision limit. The limit only applies if the representation
 -- of the real value is not finite, i.e., if it is not rational.
+--
+-- The 'printBase' field can be used to print numbers in base 2, 10, or 16. If base 2 or 16 is used, then floating-point values will
+-- be printed in their internal memory-layout format as well, which can come in handy for bit-precise analysis.
 data SMTConfig = SMTConfig {
          verbose        :: Bool             -- ^ Debug mode
        , timing         :: Bool             -- ^ Print timing information on how long different phases took (construction, solving, etc.)
        , sBranchTimeOut :: Maybe Int        -- ^ How much time to give to the solver for each call of 'sBranch' check. (In seconds. Default: No limit.)
        , timeOut        :: Maybe Int        -- ^ How much time to give to the solver. (In seconds. Default: No limit.)
-       , printBase      :: Int              -- ^ Print integral literals in this base (2, 8, 10, and 16 are supported.)
+       , printBase      :: Int              -- ^ Print integral literals in this base (2, 10, and 16 are supported.)
        , printRealPrec  :: Int              -- ^ Print algebraic real values with this precision. (SReal, default: 16)
        , solverTweaks   :: [String]         -- ^ Additional lines of script to give to the solver (user specified)
        , satCmd         :: String           -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.

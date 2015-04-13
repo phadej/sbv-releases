@@ -1,7 +1,36 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 4.3, 2015-04-10
+* Latest Hackage released version: 4.4, 2015-04-13
+
+### Version 4.4, 2015-04-13
+
+  * Hook-up crackNum package; so counter-examples involving floats and
+    doubles can be printed in detail when the printBase is chosen to be
+    2 or 16. (With base 10, we still get the simple output.) 
+
+      ```
+      Prelude Data.SBV> satWith z3{printBase=2} $ \x -> x .== (2::SFloat)
+      Satisfiable. Model:
+        s0 = 2.0 :: Float
+                        3  2          1         0
+                        1 09876543 21098765432109876543210
+                        S ---E8--- ----------F23----------
+                Binary: 0 10000000 00000000000000000000000
+                   Hex: 4000 0000
+             Precision: SP
+                  Sign: Positive
+              Exponent: 1 (Stored: 128, Bias: 127)
+                 Value: +2.0 (NORMAL)
+      ```
+
+  * Change how we print type info; for models insted of SType just print Type (i.e.,
+    for SWord8, instead print Word8) which makes more sense and is more consistent.
+    This change should be mostly relevant as how we see the counter-example output.
+
+  * Fix long standing bug #75, where we now support arrays with Boolean source/targets.
+    This is not a very commonly used case, but by letting the solver pick the logic,
+    we now allow arrays to be uniformly supported.
 
 ### Version 4.3, 2015-04-10
 
