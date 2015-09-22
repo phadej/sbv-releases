@@ -10,12 +10,19 @@
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE RankNTypes #-}
-module SBVTest(generateGoldCheck, showsAs, ioShowsAs, mkTestSuite, SBVTestSuite(..), module Test.HUnit, isThm, isSat, free, newArray, numberOfModels) where
+module SBVTest(
+          generateGoldCheck, showsAs, ioShowsAs, mkTestSuite, SBVTestSuite(..)
+        , isThm, isSat, runSAT, numberOfModels
+        , module Test.HUnit
+        , module Data.SBV
+        ) where
 
-import Data.SBV        (Provable(..), isTheorem, isSatisfiable, AllSatResult(..), allSat, SymWord(free), SymArray(newArray))
-import Data.Maybe      (fromJust)
-import System.FilePath ((</>))
-import Test.HUnit      (Test(..), Assertion, assert, (~:), test)
+import Data.SBV                (SMTConfig(..), Provable(..), isTheorem, isTheoremWith, isSatisfiable, AllSatResult(..), allSat, SymWord(free), SymArray(newArray), defaultSMTCfg)
+import Data.SBV.Internals      (runSymbolic, Symbolic, Result)
+
+import Data.Maybe              (fromJust)
+import System.FilePath         ((</>))
+import Test.HUnit              (Test(..), Assertion, assert, (~:), test)
 
 -- | A Test-suite, parameterized by the gold-check generator/checker
 data SBVTestSuite = SBVTestSuite ((forall a. Show a => (IO a -> FilePath -> IO ())) -> Test)
@@ -57,3 +64,7 @@ isSat p = fromJust `fmap` isSatisfiable Nothing p
 numberOfModels :: Provable a => a -> IO Int
 numberOfModels p = do AllSatResult (_, rs) <- allSat p
                       return $ length rs
+
+-- | Symbolicly run a SAT instance using the default config
+runSAT :: Symbolic a -> IO Result
+runSAT = runSymbolic (True, defaultSMTCfg)

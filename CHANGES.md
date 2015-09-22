@@ -1,7 +1,126 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 4.4, 2015-04-13
+* Latest Hackage released version: 5.0, 2015-09-22
+
+### Version 5.0, 2015-09-22
+
+  * Note: This is a backwards-compatibility breaking release, see below for details.
+
+  * SBV now requires GHC 7.10.1 or newer to be compiled, taking advantage of newer features/bug-fixes
+    in GHC. If you really need SBV to compile with older GHCs, please get in touch.
+
+  * SBV no longer supports SMTLib1. We now exclusively use SMTLib2 for communicating with backend
+    solvers. Strictly speaking, this means some loss in functionality: Uninterpreted-function models
+    that we supported via Yices-1 are no longer available. In practice this facility was not really
+    used, and required a very old version of Yices that was no longer supported by SRI and has
+    lacked in other features. So, in reality this change should hardly matter for end-users.
+
+  * Added function "label", which is useful in emitting comments around expressions. It is essentially
+    a no-op, but does generate a comment with the given text in the SMT-Lib and C output, for diagnostic
+    purposes.
+
+  * Added "sFromIntegral": Conversions from all integral types (SInteger, SWord/SInts) between
+    each other. Similar to the "fromIntegral" function of Haskell. These generate simple casts when
+    used in code-generation to C, and thus are very efficient.
+
+  * SBV no longer supports the functions sBranch/sAssert, as we realized these functions can cause
+    soundness issues under certain conditions. While the triggering scenarios are not common use-cases
+    for these functions, we are opting for safety, and thus removing support. See
+    http://github.com/LeventErkok/sbv/issues/180 for details; and see below for the new function
+    'isSatisfiableInCurrentPath'.
+
+  * A new function 'isSatisfiableInCurrentPath' is added, which checks for satisfiability during a
+    symbolic simulation run. This function can be used as the basis of sBranch/sAssert like functionality
+    if needed. The difference is that this is a much lower level call, and also exposes the fact that
+    the result is in the 'Symbolic' monad (which avoids the soundness issue). Of course, the new type
+    makes it less useful as it will not be a drop-in replacement for if-then-else like structure. Intended
+    to be used by tools built on top of SBV, as opposed to end-users.
+
+  * SBV no longer implements the 'SignCast' class, as its functionality is replaced by the 'sFromIntegral'
+    function. Programs using the functions 'signCast' and 'unsignCast' should simply replace both
+    with calls to 'sFromIntegral'. (Note that extra type-annotations might be necessary, similar to
+    the uses of the 'fromIntegral' function in Haskell.)
+
+  * Backend solver related changes:
+
+       * Yices: Upgraded to work with Yices release 2.4.1. Note that earlier versions of Yices
+         are *not* supported.
+
+       * Boolector: Upgraded to work with new Boolector release 2.0.7. Note that earlier versions
+         of Boolector are *not* supported.
+     
+       * MathSAT: Upgraded to work with latest release 5.3.7. Note that earlier versions of MathSAT
+         are *not* supported (due to a buffering issue in MathSAT itself.)
+     
+       * MathSAT: Enabled floating-point support in MathSAT.
+     
+  * New examples:
+
+       * Add Data.SBV.Examples.Puzzles.Birthday, which solves the Cheryl-Birthday problem that
+         went viral in April 2015. Turns out really easy to solve for SMT, but the formalization
+         of the problem is still interesting as an exercise in formal reasoning.
+
+       * Add Data.SBV.Examples.Puzzles.SendMoreMoney, which solves the classic send + more = money
+         problem. Really a trivial example, but included since it is pretty much the hello-world for
+         basic constraint solving.
+
+       * Add Data.SBV.Examples.Puzzles.Fish, which solves a typical logic puzzle; finding the unique
+         solution to a set of assertions made about a bunch of people, their pets, beverage choices,
+         etc. Not particularly interesting, but could be fun to play around with for modeling purposes.
+
+       * Add Data.SBV.Examples.BitPrecise.MultMask, which demonstrates the use of the bitvector
+         solver to an interesting bit-shuffling problem.
+
+  * Rework floating-point arithmetic, and add missing floating-point operations:
+
+      * fpRem            : remainder
+      * fpRoundToIntegral: truncating round 
+      * fpMin		 : min
+      * fpMax		 : max
+      * fpIsEqualObject	 : FP equality as object (i.e., NaN equals NaN, +0 does not equal -0, etc.)
+
+    This brings SBV up-to par with everything supported by the SMT-Lib FP theory.
+
+  * Add the IEEEFloatConvertable class, which provides conversions to/from Floats and other types. (i.e.,
+    value conversions from all other types to Floats and Doubles; and back.)
+
+  * Add SWord32/SWord64 to/from SFloat/SDouble conversions, as bit-pattern reinterpretation; using the
+    IEEE754 interchange format. The functions are: sWord32AsSFloat, sWord64AsSDouble, sFloatAsSWord32,
+    sDoubleAsSWord64. Note that the sWord32AsSFloat and sWord64ToSDouble are regular functions, but
+    sFloatToSWord32 and sDoubleToSWord64 are "relations", since NaN values are not uniquely convertable.
+
+  * Add 'sExtractBits', which takes a list of indices to extract bits from, essentially
+    equivalent to 'map sTestBit'.
+
+  * Rename a set of symbolic functions for consistency. Here are the old/new names:
+   
+     * sbvTestBit               --> sTestBit
+     * sbvPopCount              --> sPopCount
+     * sbvShiftLeft             --> sShiftLeft
+     * sbvShiftRight            --> sShiftRight
+     * sbvRotateLeft            --> sRotateLeft
+     * sbvRotateRight           --> sRotateRight
+     * sbvSignedShiftArithRight --> sSignedShiftArithRight
+
+  * Rename all FP recognizers to be in sync with FP operations. Here are the old/new names:
+
+     * isNormalFP       --> fpIsNormal       
+     * isSubnormalFP    --> fpIsSubnormal    
+     * isZeroFP         --> fpIsZero         
+     * isInfiniteFP     --> fpIsInfinite     
+     * isNaNFP          --> fpIsNaN          
+     * isNegativeFP     --> fpIsNegative     
+     * isPositiveFP     --> fpIsPositive     
+     * isNegativeZeroFP --> fpIsNegativeZero 
+     * isPositiveZeroFP --> fpIsPositiveZero 
+     * isPointFP        --> fpIsPoint        
+
+  * Lots of other work around floating-point, test cases, reorg, etc.
+
+  * Introduce shorter variants for rounding modes: sRNE, sRNA, sRTP, sRTN, sRTZ;
+    aliases for sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive,
+    sRoundTowardNegative, and sRoundTowardZero; respectively.
 
 ### Version 4.4, 2015-04-13
 

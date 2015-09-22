@@ -9,6 +9,7 @@
 -- Demonstrates uninterpreted sorts, together with axioms.
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE DeriveAnyClass     #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 
 module Data.SBV.Examples.Uninterpreted.Sort where
@@ -20,16 +21,7 @@ import Data.SBV
 -- in the backend SMT solver. Note the custom @deriving@ clause, which
 -- takes care of most of the boilerplate. The () field is needed so
 -- SBV will not translate it to an enumerated data-type
-data Q = Q () deriving (Eq, Ord, Data, Typeable, Read, Show)
-
--- | We need 'SymWord' and 'HasKind' instances, but default definitions
--- are always sufficient for uninterpreted sorts, so all we do is to
--- declare them as such. Note that, starting with GHC 7.6.1, we will
--- be able to simply derive these classes as well. (See <http://hackage.haskell.org/trac/ghc/ticket/5462>.)
-instance SymWord Q
-
--- | 'HasKind' instance is again straightforward, no specific implementation needed.
-instance HasKind Q
+data Q = Q () deriving (Eq, Ord, Data, Read, Show, SymWord, HasKind)
 
 -- | Declare an uninterpreted function that works over Q's
 f :: SBV Q -> SBV Q

@@ -10,7 +10,6 @@
 -----------------------------------------------------------------------------
 
 {-# OPTIONS_GHC -fno-warn-orphans   #-}
-{-# LANGUAGE CPP                    #-}
 {-# LANGUAGE TypeSynonymInstances   #-}
 {-# LANGUAGE BangPatterns           #-}
 {-# LANGUAGE PatternGuards          #-}
@@ -22,23 +21,23 @@
 
 module Data.SBV.BitVectors.Model (
     Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), SIntegral
-  , ite, iteLazy, sBranch, sAssert, sAssertCont, sbvTestBit, sbvPopCount, setBitTo
-  , sbvShiftLeft, sbvShiftRight, sbvRotateLeft, sbvRotateRight, sbvSignedShiftArithRight, (.^)
+  , ite, iteLazy, sTestBit, sExtractBits, sPopCount, setBitTo, sFromIntegral
+  , sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, (.^)
   , allEqual, allDifferent, inRange, sElem, oneIf, blastBE, blastLE, fullAdder, fullMultiplier
   , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
   , constrain, pConstrain, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
   , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, slet
-  , sIntegerToSReal, fpToSReal, sRealToSFloat, sRealToSDouble
-  , sWord32ToSFloat, sWord64ToSDouble, sFloatToSWord32, sDoubleToSWord64, blastSFloat, blastSDouble
-  , fusedMA, liftFPPredicate
+  , sIntegerToSReal, label
   , liftQRem, liftDMod, symbolicMergeWithKind
   , genLiteral, genFromCW, genMkSymVar
-  , reduceInPathCondition
+  , isSatisfiableInCurrentPath
   )
   where
 
-import Control.Monad   (when, liftM)
+import Control.Monad        (when, liftM)
+import Control.Monad.Reader (ask)
+import Control.Monad.Trans  (liftIO)
 
 import Data.Array      (Array, Ix, listArray, elems, bounds, rangeSize)
 import Data.Bits       (Bits(..))
@@ -46,12 +45,6 @@ import Data.Int        (Int8, Int16, Int32, Int64)
 import Data.List       (genericLength, genericIndex, genericTake, unzip4, unzip5, unzip6, unzip7, intercalate)
 import Data.Maybe      (fromMaybe)
 import Data.Word       (Word8, Word16, Word32, Word64)
-
-import Data.Binary.IEEE754 (wordToFloat, wordToDouble, floatToWord, doubleToWord)
-
-import qualified Data.Map as M
-
-import qualified Control.Exception as C
 
 import Test.QuickCheck                           (Testable(..), Arbitrary(..))
 import qualified Test.QuickCheck         as QC   (whenFail)
@@ -62,8 +55,8 @@ import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
 import Data.SBV.Utils.Boolean
 
-import Data.SBV.Provers.Prover (isSBranchFeasibleInState, isConditionSatisfiable, isVacuous, prove, defaultSMTCfg)
-import Data.SBV.SMT.SMT (SafeResult(..), SatResult(..), ThmResult, getModelDictionary)
+import Data.SBV.Provers.Prover (isVacuous, prove, defaultSMTCfg, internalSATCheck)
+import Data.SBV.SMT.SMT        (ThmResult, SatResult(..))
 
 import Data.SBV.BitVectors.Symbolic
 import Data.SBV.BitVectors.Operations
@@ -72,11 +65,7 @@ import Data.SBV.BitVectors.Operations
 -- We should really use FiniteBitSize for SBV which would make things better. In the interim, just work
 -- around pesky warnings..
 ghcBitSize :: Bits a => a -> Int
-#if __GLASGOW_HASKELL__ >= 708
-ghcBitSize x = maybe (error "SBV.ghcBitSize: Unexpected non-finite usage!") id (bitSizeMaybe x)
-#else
-ghcBitSize = bitSize
-#endif
+ghcBitSize x = fromMaybe (error "SBV.ghcBitSize: Unexpected non-finite usage!") (bitSizeMaybe x)
 
 mkSymOpSC :: (SW -> SW -> Maybe SW) -> Op -> State -> Kind -> SW -> SW -> IO SW
 mkSymOpSC shortCut op st k a b = maybe (newExpr st k (SBVApp op [a, b])) return (shortCut a b)
@@ -107,6 +96,10 @@ genFromCW c                    = error $ "genFromCW: Unsupported non-integral va
 genMkSymVar :: (Random a, SymWord a) => Kind -> Maybe Quantifier -> Maybe String -> Symbolic (SBV a)
 genMkSymVar k mbq Nothing  = genVar_ mbq k
 genMkSymVar k mbq (Just s) = genVar  mbq k s
+
+-- | Base type of () allows simple construction for uninterpreted types.
+instance SymWord ()
+instance HasKind ()
 
 instance SymWord Bool where
   mkSymWord  = genMkSymVar KBool
@@ -304,105 +297,17 @@ sIntegerToSReal x
   | Just i <- unliteral x = literal $ fromInteger i
   | True                  = SBV (SVal KReal (Right (cache y)))
   where y st = do xsw <- sbvToSW st x
-                  newExpr st KReal (SBVApp (Uninterpreted "to_real") [xsw])
+                  newExpr st KReal (SBVApp (IntCast KUnbounded KReal) [xsw])
 
--- | Promote an SFloat/SDouble to an SReal
-fpToSReal :: (Real a, Floating a, SymWord a) => SBV a -> SReal
-fpToSReal x
-  | Just i <- unliteral x = literal $ fromRational $ toRational i
-  | True                  = SBV (SVal KReal (Right (cache y)))
-  where y st = do xsw <- sbvToSW st x
-                  newExpr st KReal (SBVApp (Uninterpreted "fp.to_real") [xsw])
-
--- | Promote (demote really) an SReal to an SFloat.
---
--- NB: This function doesn't work on concrete values at the Haskell
--- level since we have no easy way of honoring the rounding-mode given.
-sRealToSFloat :: SRoundingMode -> SReal -> SFloat
-sRealToSFloat rm x = SBV (SVal KFloat (Right (cache y)))
-  where y st = do swm <- sbvToSW st rm
-                  xsw <- sbvToSW st x
-                  newExpr st KFloat (SBVApp (FPRound "(_ to_fp 8 24)") [swm, xsw])
-
--- | Promote (demote really) an SReal to an SDouble.
---
--- NB: This function doesn't work on concrete values at the Haskell
--- level since we have no easy way of honoring the rounding-mode given.
-sRealToSDouble :: SRoundingMode -> SReal -> SFloat
-sRealToSDouble rm x = SBV (SVal KFloat (Right (cache y)))
-  where y st = do swm <- sbvToSW st rm
-                  xsw <- sbvToSW st x
-                  newExpr st KDouble (SBVApp (FPRound "(_ to_fp 11 53)") [swm, xsw])
-
--- | Reinterpret a 32-bit word as an 'SFloat'.
-sWord32ToSFloat :: SWord32 -> SFloat
-sWord32ToSFloat x
-    | Just w <- unliteral x = literal (wordToFloat w)
-    | True                  = SBV (SVal KFloat (Right (cache y)))
-   where y st = do xsw <- sbvToSW st x
-                   newExpr st KFloat (SBVApp (FPRound "(_ to_fp 8 24)") [xsw])
-
--- | Reinterpret a 64-bit word as an 'SDouble'. Note that this function does not
--- directly work on concrete values, since IEEE754 NaN values are not unique, and
--- thus do not directly map to SDouble
-sWord64ToSDouble :: SWord64 -> SDouble
-sWord64ToSDouble x
-    | Just w <- unliteral x = literal (wordToDouble w)
-    | True                  = SBV (SVal KDouble (Right (cache y)))
-   where y st = do xsw <- sbvToSW st x
-                   newExpr st KDouble (SBVApp (FPRound "(_ to_fp 11 53)") [xsw])
-
--- | Relationally assert the equivalence between an 'SFloat' and an 'SWord32', when the bit-pattern
--- is interpreted as either type. Useful when analyzing components of a floating point number. Note
--- that this cannot be written as a function, since IEEE754 NaN values are not unique. That is,
--- given a float, there isn't a unique sign/mantissa/exponent that we can match it to.
---
--- The use case would be code of the form:
---
--- @
---     do w <- free_
---        constrain $ sFloatToSWord32 f w
---        ...
--- @
---
--- At which point the variable @w@ can be used to access the bits of the float 'f'.
-sFloatToSWord32 :: SFloat -> SWord32 -> SBool
-sFloatToSWord32 fVal wVal
-  | Just f <- unliteral fVal, not (isNaN f) = wVal .== literal (floatToWord f)
-  | True                                    = result `is` fVal
- where result   = sWord32ToSFloat wVal
-       a `is` b = (checkNaN a &&& checkNaN b) ||| (a .== b)
-       checkNaN = liftFPPredicate "fp.isNaN" isNaN
-
--- | Relationally assert the equivalence between an 'SDouble' and an 'SWord64', when the bit-pattern
--- is interpreted as either type. See the comments for 'sFloatToSWord32' for details.
-sDoubleToSWord64 :: SDouble -> SWord64 -> SBool
-sDoubleToSWord64 fVal wVal
-  | Just f <- unliteral fVal, not (isNaN f) = wVal .== literal (doubleToWord f)
-  | True                                    = result `is` fVal
- where result   = sWord64ToSDouble wVal
-       a `is` b = (checkNaN a &&& checkNaN b) ||| (a .== b)
-       checkNaN = liftFPPredicate "fp.isNaN" isNaN
-
--- | Relationally extract the sign\/exponent\/mantissa of a single-precision float. Due to the
--- non-unique representation of NaN's, we have to do this function relationally, much like
--- 'sFloatToSWord32'.
-blastSFloat :: SFloat -> (SBool, [SBool], [SBool]) -> SBool
-blastSFloat fVal (s, expt, mant)
-  | length expt /= 8 || length mant /= 23  = error "SBV.blastSFloat: Need 8-bit expt and 23 bit mantissa"
-  | True                                   = sFloatToSWord32 fVal wVal
- where bits = s : expt ++ mant
-       wVal = sum [ite b (2^c) 0 | (b, c) <- zip bits (reverse [(0::Word32) .. 31])]
-
--- | Relationally extract the sign\/exponent\/mantissa of a double-precision float. Due to the
--- non-unique representation of NaN's, we have to do this function relationally, much like
--- 'sDoubleToSWord64'.
-blastSDouble :: SDouble -> (SBool, [SBool], [SBool]) -> SBool
-blastSDouble fVal (s, expt, mant)
-  | length expt /= 11 || length mant /= 52 = error "SBV.blastSDouble: Need 11-bit expt and 52 bit mantissa"
-  | True                                   = sDoubleToSWord64 fVal wVal
- where bits = s : expt ++ mant
-       wVal = sum [ite b (2^c) 0 | (b, c) <- zip bits (reverse [(0::Word64) .. 63])]
+-- | label: Label the result of an expression. This is essentially a no-op, but useful as it generates a comment in the generated C/SMT-Lib code.
+-- Note that if the argument is a constant, then the label is dropped completely, per the usual constant folding strategy.
+label :: (HasKind a, SymWord a) => String -> SBV a -> SBV a
+label m x
+   | Just _ <- unliteral x = x
+   | True                  = SBV $ SVal k $ Right $ cache r
+  where k    = kindOf x
+        r st = do xsw <- sbvToSW st x
+                  newExpr st k (SBVApp (Label m) [xsw])
 
 -- | Symbolic Equality. Note that we can't use Haskell's 'Eq' class since Haskell insists on returning Bool
 -- Comparing symbolic values will necessarily return a symbolic value.
@@ -573,13 +478,13 @@ instance Boolean SBool where
 
 -- | Returns (symbolic) true if all the elements of the given list are different.
 allDifferent :: EqSymbolic a => [a] -> SBool
-allDifferent (x:xs@(_:_)) = bAll (x ./=) xs &&& allDifferent xs
-allDifferent _            = true
+allDifferent []     = true
+allDifferent (x:xs) = bAll (x ./=) xs &&& allDifferent xs
 
 -- | Returns (symbolic) true if all the elements of the given list are the same.
 allEqual :: EqSymbolic a => [a] -> SBool
-allEqual (x:xs@(_:_))     = bAll (x .==) xs
-allEqual _                = true
+allEqual []     = true
+allEqual (x:xs) = bAll (x .==) xs
 
 -- | Returns (symbolic) true if the argument is in range
 inRange :: OrdSymbolic a => a -> (a, a) -> SBool
@@ -615,12 +520,15 @@ instance (Ord a, Num a, SymWord a) => Num (SBV a) where
   -- to the solver to avoid the can of worms. (Alternative would be to do an if-then-else here.)
   abs (SBV x) = SBV (svAbs x)
   signum a
-    | hasSign a = ite (a .<  z) (-i) (ite (a .== z) z i)
-    | True      = ite (a ./= z) i    z
+    -- NB. The following "carefully" tests the number for == 0, as Float/Double's NaN and +/-0
+    -- cases would cause trouble with explicit equality tests.
+    | hasSign a = ite (a .> z) i
+                $ ite (a .< z) (negate i) a
+    | True      = ite (a .> z) i a
     where z = genLiteral (kindOf a) (0::Integer)
           i = genLiteral (kindOf a) (1::Integer)
-  -- negate is tricky because on double/float -0 is different than 0; so we
-  -- just cannot rely on its default definition; which would be 0-0, which is not -0!
+  -- negate is tricky because on double/float -0 is different than 0; so we cannot
+  -- just rely on the default definition; which would be 0-0, which is not -0!
   negate (SBV x) = SBV (svUNeg x)
 
 -- | Symbolic exponentiation using bit blasting and repeated squaring.
@@ -633,8 +541,20 @@ b .^ e | isSigned e = error "(.^): exponentiation only works with unsigned expon
                                         (iterate (\x -> x*x) b)
 
 instance (SymWord a, Fractional a) => Fractional (SBV a) where
-  fromRational = literal . fromRational
-  SBV x / SBV y = SBV (svDivide x y)
+  fromRational  = literal . fromRational
+  SBV x / sy@(SBV y) | div0 = ite (sy .== 0) 0 res
+                     | True = res
+       where res  = SBV (svDivide x y)
+             -- Identify those kinds where we have a div-0 equals 0 exception
+             div0 = case kindOf sy of
+                      KFloat        -> False
+                      KDouble       -> False
+                      KReal         -> True
+                      -- Following two cases should not happen since these types should *not* be instances of Fractional
+                      k@KBounded{}  -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KUnbounded  -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KBool       -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KUserSort{} -> error $ "Unexpected Fractional case for: " ++ show k
 
 -- | Define Floating instance on SBV's; only for base types that are already floating; i.e., SFloat and SDouble
 -- Note that most of the fields are "undefined" for symbolic values, we add methods as they are supported by SMTLib.
@@ -643,7 +563,7 @@ instance (SymWord a, Fractional a, Floating a) => Floating (SBV a) where
     pi      = literal pi
     exp     = lift1FNS "exp"     exp
     log     = lift1FNS "log"     log
-    sqrt    = lift1F   sqrt      smtLibSquareRoot
+    sqrt    = lift1F   FP_Sqrt   sqrt
     sin     = lift1FNS "sin"     sin
     cos     = lift1FNS "cos"     cos
     tan     = lift1FNS "tan"     tan
@@ -659,36 +579,17 @@ instance (SymWord a, Fractional a, Floating a) => Floating (SBV a) where
     (**)    = lift2FNS "**"      (**)
     logBase = lift2FNS "logBase" logBase
 
--- | Lift an FP predicate as defined by SMT-Lib to the world of SFloat and SDoubles.
-liftFPPredicate :: (Floating a, SymWord a) => String -> (a -> Bool) -> SBV a -> SBool
-liftFPPredicate nm f a
-   | Just v <- unliteral a = literal $ f v
-   | True                  = SBV $ SVal KBool $ Right $ cache r
-   where r st = do swa <- sbvToSW st a
-                   newExpr st KBool (SBVApp (Uninterpreted nm) [swa])
-
--- | Fused-multiply add. @fusedMA a b c = a * b + c@, for double and floating point values.
--- Note that a 'fusedMA' call will *never* be concrete, even if all the arguments are constants; since
--- we cannot guarantee the precision requirements, which is the whole reason why 'fusedMA' exists in the
--- first place. (NB. 'fusedMA' only rounds once, even though it does two operations, and hence the extra
--- precision.)
-fusedMA :: (SymWord a, Floating a) => SBV a -> SBV a -> SBV a -> SBV a
-fusedMA a b c = SBV $ SVal k $ Right $ cache r
-  where k = kindOf a
-        r st = do swa <- sbvToSW st a
-                  swb <- sbvToSW st b
-                  swc <- sbvToSW st c
-                  newExpr st k (SBVApp smtLibFusedMA [swa, swb, swc])
-
--- | Lift a float/double unary function, using a corresponding function in SMT-lib. We piggy-back on the uninterpreted
--- function mechanism here, as it essentially is the same as introducing this as a new function.
-lift1F :: (SymWord a, Floating a) => (a -> a) -> Op -> SBV a -> SBV a
-lift1F f smtOp sv
-  | Just v <- unliteral sv = literal $ f v
-  | True                   = SBV $ SVal k $ Right $ cache c
-  where k = kindOf sv
-        c st = do swa <- sbvToSW st sv
-                  newExpr st k (SBVApp smtOp [swa])
+-- | Lift a 1 arg FP-op, using sRNE default
+lift1F :: (SymWord a, Floating a) => FPOp -> (a -> a) -> SBV a -> SBV a
+lift1F w op a
+  | Just v <- unliteral a
+  = literal $ op v
+  | True
+  = SBV $ SVal k $ Right $ cache r
+  where k    = kindOf a
+        r st = do swa  <- sbvToSW st a
+                  swm  <- sbvToSW st sRNE
+                  newExpr st k (SBVApp (IEEEFP w) [swm, swa])
 
 -- | Lift a float/double unary function, only over constants
 lift1FNS :: (SymWord a, Floating a) => String -> (a -> a) -> SBV a -> SBV a
@@ -706,36 +607,42 @@ lift2FNS nm f sv1 sv2
 -- NB. In the optimizations below, use of -1 is valid as
 -- -1 has all bits set to True for both signed and unsigned values
 instance (Num a, Bits a, SymWord a) => Bits (SBV a) where
-  SBV x .&. SBV y = SBV (svAnd x y)
-  SBV x .|. SBV y = SBV (svOr x y)
-  SBV x `xor` SBV y = SBV (svXOr x y)
+  SBV x .&. SBV y    = SBV (svAnd x y)
+  SBV x .|. SBV y    = SBV (svOr x y)
+  SBV x `xor` SBV y  = SBV (svXOr x y)
   complement (SBV x) = SBV (svNot x)
-  bitSize  x = intSizeOf x
-#if __GLASGOW_HASKELL__ >= 708
-  bitSizeMaybe x = Just $ intSizeOf x
-#endif
-  isSigned x = hasSign x
-  bit i      = 1 `shiftL` i
-  setBit        x i = x .|. genLiteral (kindOf x) (bit i :: Integer)
-  clearBit      x i = x .&. genLiteral (kindOf x) (complement (bit i) :: Integer)
-  complementBit x i = x `xor` genLiteral (kindOf x) (bit i :: Integer)
-  shiftL  (SBV x) i = SBV (svShl x i)
-  shiftR  (SBV x) i = SBV (svShr x i)
-  rotateL (SBV x) i = SBV (svRol x i)
-  rotateR (SBV x) i = SBV (svRor x i)
+  bitSize  x         = intSizeOf x
+  bitSizeMaybe x     = Just $ intSizeOf x
+  isSigned x         = hasSign x
+  bit i              = 1 `shiftL` i
+  setBit        x i  = x .|. genLiteral (kindOf x) (bit i :: Integer)
+  clearBit      x i  = x .&. genLiteral (kindOf x) (complement (bit i) :: Integer)
+  complementBit x i  = x `xor` genLiteral (kindOf x) (bit i :: Integer)
+  shiftL  (SBV x) i  = SBV (svShl x i)
+  shiftR  (SBV x) i  = SBV (svShr x i)
+  rotateL (SBV x) i  = SBV (svRol x i)
+  rotateR (SBV x) i  = SBV (svRor x i)
   -- NB. testBit is *not* implementable on non-concrete symbolic words
   x `testBit` i
-    | SBV (SVal _ (Left (CW _ (CWInteger n)))) <- x = testBit n i
-    | True                 = error $ "SBV.testBit: Called on symbolic value: " ++ show x ++ ". Use sbvTestBit instead."
+    | SBV (SVal _ (Left (CW _ (CWInteger n)))) <- x
+    = testBit n i
+    | True
+    = error $ "SBV.testBit: Called on symbolic value: " ++ show x ++ ". Use sTestBit instead."
   -- NB. popCount is *not* implementable on non-concrete symbolic words
   popCount x
-    | SBV (SVal _ (Left (CW (KBounded _ w) (CWInteger n)))) <- x = popCount (n .&. (bit w - 1))
-    | True                                                       = error $ "SBV.popCount: Called on symbolic value: " ++ show x ++ ". Use sbvPopCount instead."
+    | SBV (SVal _ (Left (CW (KBounded _ w) (CWInteger n)))) <- x
+    = popCount (n .&. (bit w - 1))
+    | True
+    = error $ "SBV.popCount: Called on symbolic value: " ++ show x ++ ". Use sPopCount instead."
 
 -- | Replacement for 'testBit'. Since 'testBit' requires a 'Bool' to be returned,
 -- we cannot implement it for symbolic words. Index 0 is the least-significant bit.
-sbvTestBit :: (Num a, Bits a, SymWord a) => SBV a -> Int -> SBool
-sbvTestBit (SBV x) i = SBV (svTestBit x i)
+sTestBit :: (Num a, Bits a, SymWord a) => SBV a -> Int -> SBool
+sTestBit (SBV x) i = SBV (svTestBit x i)
+
+-- | Variant of 'sTestBit', where we want to extract multiple bit positions.
+sExtractBits :: (Num a, Bits a, SymWord a) => SBV a -> [Int] -> [SBool]
+sExtractBits x = map (sTestBit x)
 
 -- | Replacement for 'popCount'. Since 'popCount' returns an 'Int', we cannot implement
 -- it for symbolic words. Here, we return an 'SWord8', which can overflow when used on
@@ -743,14 +650,14 @@ sbvTestBit (SBV x) i = SBV (svTestBit x i)
 -- that SBV supports, all other types are safe. Even with 'SInteger', this will only
 -- overflow if there are at least 256-bits set in the number, and the smallest such
 -- number is 2^256-1, which is a pretty darn big number to worry about for practical
--- purposes. In any case, we do not support 'sbvPopCount' for unbounded symbolic integers,
+-- purposes. In any case, we do not support 'sPopCount' for unbounded symbolic integers,
 -- as the only possible implementation wouldn't symbolically terminate. So the only overflow
 -- issue is with really-really large concrete 'SInteger' values.
-sbvPopCount :: (Num a, Bits a, SymWord a) => SBV a -> SWord8
-sbvPopCount x
-  | isReal x          = error "SBV.sbvPopCount: Called on a real value"
+sPopCount :: (Num a, Bits a, SymWord a) => SBV a -> SWord8
+sPopCount x
+  | isReal x          = error "SBV.sPopCount: Called on a real value" -- can't really happen due to types, but being overcautious
   | isConcrete x      = go 0 x
-  | not (isBounded x) = error "SBV.sbvPopCount: Called on an infinite precision symbolic value"
+  | not (isBounded x) = error "SBV.sPopCount: Called on an infinite precision symbolic value"
   | True              = sum [ite b 1 0 | b <- blastLE x]
   where -- concrete case
         go !c 0 = c
@@ -762,12 +669,27 @@ sbvPopCount x
 setBitTo :: (Num a, Bits a, SymWord a) => SBV a -> Int -> SBool -> SBV a
 setBitTo x i b = ite b (setBit x i) (clearBit x i)
 
+-- | Conversion between integral-symbolic values, akin to Haskell's fromIntegral
+sFromIntegral :: forall a b. (Integral a, HasKind a, Num a, Bits a, SymWord a, HasKind b, Num b, Bits b, SymWord b) => SBV a -> SBV b
+sFromIntegral x
+  | isReal x
+  = error "SBV.sFromIntegral: Called on a real value" -- can't really happen due to types, but being overcautious
+  | Just v <- unliteral x
+  = literal (fromIntegral v)
+  | True
+  = result
+  where result = SBV (SVal kTo (Right (cache y)))
+        kFrom  = kindOf x
+        kTo    = kindOf (undefined :: b)
+        y st   = do xsw <- sbvToSW st x
+                    newExpr st kTo (SBVApp (IntCast kFrom kTo) [xsw])
+
 -- | Generalization of 'shiftL', when the shift-amount is symbolic. Since Haskell's
 -- 'shiftL' only takes an 'Int' as the shift amount, it cannot be used when we have
 -- a symbolic amount to shift with. The shift amount must be an unsigned quantity.
-sbvShiftLeft :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
-sbvShiftLeft x i
-  | isSigned i = error "sbvShiftLeft: shift amount should be unsigned"
+sShiftLeft :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
+sShiftLeft x i
+  | isSigned i = error "sShiftLeft: shift amount should be unsigned"
   | True       = select [x `shiftL` k | k <- [0 .. ghcBitSize x - 1]] z i
   where z = genLiteral (kindOf x) (0::Integer)
 
@@ -776,33 +698,33 @@ sbvShiftLeft x i
 -- a symbolic amount to shift with. The shift amount must be an unsigned quantity.
 --
 -- NB. If the shiftee is signed, then this is an arithmetic shift; otherwise it's logical,
--- following the usual Haskell convention. See 'sbvSignedShiftArithRight' for a variant
+-- following the usual Haskell convention. See 'sSignedShiftArithRight' for a variant
 -- that explicitly uses the msb as the sign bit, even for unsigned underlying types.
-sbvShiftRight :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
-sbvShiftRight x i
-  | isSigned i = error "sbvShiftRight: shift amount should be unsigned"
+sShiftRight :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
+sShiftRight x i
+  | isSigned i = error "sShiftRight: shift amount should be unsigned"
   | True       = select [x `shiftR` k | k <- [0 .. ghcBitSize x - 1]] z i
   where z = genLiteral (kindOf x) (0::Integer)
 
 -- | Arithmetic shift-right with a symbolic unsigned shift amount. This is equivalent
--- to 'sbvShiftRight' when the argument is signed. However, if the argument is unsigned,
+-- to 'sShiftRight' when the argument is signed. However, if the argument is unsigned,
 -- then it explicitly treats its msb as a sign-bit, and uses it as the bit that
 -- gets shifted in. Useful when using the underlying unsigned bit representation to implement
 -- custom signed operations. Note that there is no direct Haskell analogue of this function.
-sbvSignedShiftArithRight:: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
-sbvSignedShiftArithRight x i
-  | isSigned i = error "sbvSignedShiftArithRight: shift amount should be unsigned"
-  | isSigned x = sbvShiftRight x i
+sSignedShiftArithRight:: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
+sSignedShiftArithRight x i
+  | isSigned i = error "sSignedShiftArithRight: shift amount should be unsigned"
+  | isSigned x = sShiftRight x i
   | True       = ite (msb x)
-                     (complement (sbvShiftRight (complement x) i))
-                     (sbvShiftRight x i)
+                     (complement (sShiftRight (complement x) i))
+                     (sShiftRight x i)
 
 -- | Generalization of 'rotateL', when the shift-amount is symbolic. Since Haskell's
 -- 'rotateL' only takes an 'Int' as the shift amount, it cannot be used when we have
 -- a symbolic amount to shift with. The shift amount must be an unsigned quantity.
-sbvRotateLeft :: (SIntegral a, SIntegral b, SDivisible (SBV b)) => SBV a -> SBV b -> SBV a
-sbvRotateLeft x i
-  | isSigned i             = error "sbvRotateLeft: rotation amount should be unsigned"
+sRotateLeft :: (SIntegral a, SIntegral b, SDivisible (SBV b)) => SBV a -> SBV b -> SBV a
+sRotateLeft x i
+  | isSigned i             = error "sRotateLeft: rotation amount should be unsigned"
   | bit si <= toInteger sx = select [x `rotateL` k | k <- [0 .. bit si - 1]] z i         -- wrap-around not possible
   | True                   = select [x `rotateL` k | k <- [0 .. sx     - 1]] z (i `sRem` n)
     where sx = ghcBitSize x
@@ -813,9 +735,9 @@ sbvRotateLeft x i
 -- | Generalization of 'rotateR', when the shift-amount is symbolic. Since Haskell's
 -- 'rotateR' only takes an 'Int' as the shift amount, it cannot be used when we have
 -- a symbolic amount to shift with. The shift amount must be an unsigned quantity.
-sbvRotateRight :: (SIntegral a, SIntegral b, SDivisible (SBV b)) => SBV a -> SBV b -> SBV a
-sbvRotateRight x i
-  | isSigned i             = error "sbvRotateRight: rotation amount should be unsigned"
+sRotateRight :: (SIntegral a, SIntegral b, SDivisible (SBV b)) => SBV a -> SBV b -> SBV a
+sRotateRight x i
+  | isSigned i             = error "sRotateRight: rotation amount should be unsigned"
   | bit si <= toInteger sx = select [x `rotateR` k | k <- [0 .. bit si - 1]] z i         -- wrap-around not possible
   | True                   = select [x `rotateR` k | k <- [0 .. sx     - 1]] z (i `sRem` n)
     where sx = ghcBitSize x
@@ -857,7 +779,7 @@ blastLE :: (Num a, Bits a, SymWord a) => SBV a -> [SBool]
 blastLE x
  | isReal x          = error "SBV.blastLE: Called on a real value"
  | not (isBounded x) = error "SBV.blastLE: Called on an infinite precision value"
- | True              = map (sbvTestBit x) [0 .. intSizeOf x - 1]
+ | True              = map (sTestBit x) [0 .. intSizeOf x - 1]
 
 -- | Big-endian blasting of a word into its bits. Also see the 'FromBits' class.
 blastBE :: (Num a, Bits a, SymWord a) => SBV a -> [SBool]
@@ -865,14 +787,14 @@ blastBE = reverse . blastLE
 
 -- | Least significant bit of a word, always stored at index 0.
 lsb :: (Num a, Bits a, SymWord a) => SBV a -> SBool
-lsb x = sbvTestBit x 0
+lsb x = sTestBit x 0
 
 -- | Most significant bit of a word, always stored at the last position.
 msb :: (Num a, Bits a, SymWord a) => SBV a -> SBool
 msb x
  | isReal x          = error "SBV.msb: Called on a real value"
  | not (isBounded x) = error "SBV.msb: Called on an infinite precision value"
- | True              = sbvTestBit x (intSizeOf x - 1)
+ | True              = sTestBit x (intSizeOf x - 1)
 
 -- Enum instance. These instances are suitable for use with concrete values,
 -- and will be less useful for symbolic values around. Note that `fromEnum` requires
@@ -1074,7 +996,7 @@ liftQRem x y
                                    mkSymOp o st sgnsz sw1 sw2
         z = genLiteral (kindOf x) (0::Integer)
 
--- | Lift 'QMod' to symbolic words. Division by 0 is defined s.t. @x/0 = 0@; which
+-- | Lift 'DMod' to symbolic words. Division by 0 is defined s.t. @x/0 = 0@; which
 -- holds even when @x@ is @0@ itself. Essentially, this is conversion from quotRem
 -- (truncate to 0) to divMod (truncate towards negative infinity)
 liftDMod :: (SymWord a, Num a, SDivisible a, SDivisible (SBV a)) => SBV a -> SBV a -> (SBV a, SBV a)
@@ -1173,56 +1095,6 @@ iteLazy :: Mergeable a => SBool -> a -> a -> a
 iteLazy t a b
   | Just r <- unliteral t = if r then a else b
   | True                  = symbolicMerge False t a b
-
--- | Branch on a condition, much like 'ite'. The exception is that SBV will
--- check to make sure if the test condition is feasible by making an external
--- call to the SMT solver. Note that this can be expensive, thus we shall use
--- a time-out value ('sBranchTimeOut'). There might be zero, one, or two such
--- external calls per 'sBranch' call:
---
---    - If condition is statically known to be True/False: 0 calls
---           - In this case, we simply constant fold..
---
---    - If condition is determined to be unsatisfiable   : 1 call
---           - In this case, we know then-branch is infeasible, so just take the else-branch
---
---    - If condition is determined to be satisfable      : 2 calls
---           - In this case, we know then-branch is feasible, but we still have to check if the else-branch is
---
--- In summary, 'sBranch' calls can be expensive, but they can help with the so-called symbolic-termination
--- problem. See "Data.SBV.Examples.Misc.SBranch" for an example.
-sBranch :: Mergeable a => SBool -> a -> a -> a
-sBranch t a b
-  | Just r <- unliteral c = if r then a else b
-  | True                  = symbolicMerge False c a b
-  where c = reduceInPathCondition t
-
--- | Symbolic assert. Check that the given boolean condition is always true in the given path.
--- Otherwise symbolic simulation will stop with a run-time error.
-sAssert :: Mergeable a => String -> SBool -> a -> a
-sAssert msg = sAssertCont msg defCont
-  where defCont _   Nothing   = C.throw (SafeAlwaysFails  msg)
-        defCont cfg (Just md) = C.throw (SafeFailsInModel msg cfg (SMTModel (M.toList md) [] []))
-
--- | Symbolic assert with a programmable continuation. Check that the given boolean condition is always true in the given path.
--- Otherwise symbolic simulation will transfer the failing model to the given continuation. The
--- continuation takes the @SMTConfig@, and a possible model: If it receives @Nothing@, then it means that the condition
--- fails for all assignments to inputs. Otherwise, it'll receive @Just@ a dictionary that maps the
--- input variables to the appropriate @CW@ values that exhibit the failure. Note that the continuation
--- has no option but to display the result in some fashion and call error, due to its restricted type.
-sAssertCont :: Mergeable a => String -> (forall b. SMTConfig -> Maybe (M.Map String CW) -> b) -> SBool -> a -> a
-sAssertCont msg cont t a
-  | Just r <- unliteral t = if r then a else cont defaultSMTCfg Nothing
-  | True                  = symbolicMerge False cond a (die ["SBV.error: Internal-error, cannot happen: Reached false branch in checked s-Assert."])
-  where k     = kindOf t
-        cond  = SBV $ SVal k $ Right $ cache c
-        die m = error $ intercalate "\n" $ ("Assertion failure: " ++ show msg) : m
-        c st  = do let pc  = getPathCondition st
-                       chk = pc &&& bnot t
-                   mbModel <- isConditionSatisfiable st chk
-                   case mbModel of
-                     Just (r@(SatResult (Satisfiable cfg _))) -> cont cfg $ Just $ getModelDictionary r
-                     _                                        -> return trueSW
 
 -- | Merge two symbolic values, at kind @k@, possibly @force@'ing the branches to make
 -- sure they do not evaluate to the same result. This should only be used for internal purposes;
@@ -1656,25 +1528,6 @@ constrain c = addConstraint Nothing c (bnot c)
 pConstrain :: Double -> SBool -> Symbolic ()
 pConstrain t c = addConstraint (Just t) c (bnot c)
 
--- | Boolean symbolic reduction. See if we can reduce a boolean condition to true/false
--- using the path context information, by making external calls to the SMT solvers. Used in the
--- implementation of 'sBranch'.
-reduceInPathCondition :: SBool -> SBool
-reduceInPathCondition b
-  | isConcrete b = b -- No reduction is needed, already a concrete value
-  | True         = SBV $ SVal k $ Right $ cache c
-  where k    = kindOf b
-        c st = do -- Now that we know our boolean is not obviously true/false. Need to make an external
-                  -- call to the SMT solver to see if we can prove it is necessarily one of those
-                  let pc = getPathCondition st
-                  satTrue <- isSBranchFeasibleInState st "then" (pc &&& b)
-                  if not satTrue
-                     then return falseSW          -- condition is not satisfiable; so it must be necessarily False.
-                     else do satFalse <- isSBranchFeasibleInState st "else" (pc &&& bnot b)
-                             if not satFalse      -- negation of the condition is not satisfiable; so it must be necessarily True.
-                                then return trueSW
-                                else sbvToSW st b -- condition is not necessarily always True/False. So, keep symbolic.
-
 -- Quickcheck interface on symbolic-booleans..
 instance Testable SBool where
   property (SBV (SVal _ (Left b))) = property (cwToBool b)
@@ -1700,6 +1553,14 @@ instance Testable (Symbolic SBool) where
                   shN s = s ++ replicate (maxLen - length s) ' '
                   info (n, cw) = shN n ++ " = " ++ show cw
 
+-- Quickcheck interface on dynamically-typed values. A run-time check
+-- ensures that the value has boolean type.
+instance Testable (Symbolic SVal) where
+  property m = property $ do s <- m
+                             when (svKind s /= KBool) $
+                               error "Cannot quickcheck non-boolean value"
+                             return (SBV s :: SBool)
+
 -- | Explicit sharing combinator. The SBV library has internal caching/hash-consing mechanisms
 -- built in, based on Andy Gill's type-safe obervable sharing technique (see: <http://ittc.ku.edu/~andygill/paper.php?label=DSLExtract09>).
 -- However, there might be times where being explicit on the sharing can help, especially in experimental code. The 'slet' combinator
@@ -1712,6 +1573,23 @@ slet x f = SBV $ SVal k $ Right $ cache r
                     let xsbv = SBV $ SVal (kindOf x) (Right (cache (const (return xsw))))
                         res  = f xsbv
                     sbvToSW st res
+
+-- | Check if a boolean condition is satisfiable in the current state. This function can be useful in contexts where an
+-- interpreter implemented on top of SBV needs to decide if a particular stae (represented by the boolean) is reachable
+-- in the current if-then-else paths implied by the 'ite' calls.
+isSatisfiableInCurrentPath :: SBool -> Symbolic Bool
+isSatisfiableInCurrentPath cond = do
+       st <- ask
+       let cfg  = fromMaybe defaultSMTCfg (getSBranchRunConfig st)
+           msg  = when (verbose cfg) . putStrLn . ("** " ++)
+           pc   = getPathCondition st
+       check <- liftIO $ internalSATCheck cfg (pc &&& cond) st "isSatisfiableInCurrentPath: Checking satisfiability"
+       let res = case check of
+                   SatResult (Satisfiable{})   -> True
+                   SatResult (Unsatisfiable _) -> False
+                   _                           -> error $ "isSatisfiableInCurrentPath: Unexpected external result: " ++ show check
+       res `seq` liftIO $ msg $ "isSatisfiableInCurrentPath: Conclusion: " ++ if res then "Satisfiable" else "Unsatisfiable"
+       return res
 
 -- We use 'isVacuous' and 'prove' only for the "test" section in this file, and GHC complains about that. So, this shuts it up.
 __unused :: a

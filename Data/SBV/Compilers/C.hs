@@ -18,7 +18,7 @@ import Data.Char                      (isSpace)
 import Data.List                      (nub, intercalate)
 import Data.Maybe                     (isJust, isNothing, fromJust)
 import qualified Data.Foldable as F   (toList)
-import qualified Data.Set      as Set (member, toList)
+import qualified Data.Set      as Set (member, union, unions, empty, toList, singleton, fromList)
 import System.FilePath                (takeBaseName, replaceExtension)
 import System.Random
 import Text.PrettyPrint.HughesPJ
@@ -118,7 +118,7 @@ cgen cfg nm st sbvProg
                      xs -> vcat $ text "/* User given prototypes: */" : map text xs
         extDecls  = case cgDecls st of
                      [] -> empty
-                     xs -> vcat $ text "/* User given declarations: */" : map text xs ++ [text ""]
+                     xs -> vcat $ text "/* User given declarations: */" : map text xs
         flags    = cgLDFlags st
 
 -- | Pretty print a functions type. If there is only one output, we compile it
@@ -143,6 +143,11 @@ declSW :: Int -> SW -> Doc
 declSW w sw = text "const" <+> pad (showCType sw) <+> text (show sw)
   where pad s = text $ s ++ replicate (w - length s) ' '
 
+-- | Return the proper declaration and the result as a pair. No consts
+declSWNoConst :: Int -> SW -> (Doc, Doc)
+declSWNoConst w sw = (text "     " <+> pad (showCType sw), text (show sw))
+  where pad s = text $ s ++ replicate (w - length s) ' '
+
 -- | Renders as "s0", etc, or the corresponding constant
 showSW :: CgConfig -> [(SW, CW)] -> SW -> Doc
 showSW cfg consts sw
@@ -156,6 +161,7 @@ pprCWord :: HasKind a => Bool -> a -> Doc
 pprCWord cnst v = (if cnst then text "const" else empty) <+> text (showCType v)
 
 -- | Almost a "show", but map "SWord1" to "SBool"
+-- which is used for extracting one-bit words.
 showCType :: HasKind a => a -> String
 showCType i = case kindOf i of
                 KBounded False 1 -> "SBool"
@@ -183,15 +189,13 @@ specifier cfg sw = case kindOf sw of
         spec (True,  64) = text "%\"PRId64\"LL"
         spec (s, sz)     = die $ "Format specifier at type " ++ (if s then "SInt" else "SWord") ++ show sz
         specF :: CgSRealType -> Doc
-        specF CgFloat      = text "%f"
-        specF CgDouble     = text "%f"
+        specF CgFloat      = text "%.6g"    -- float.h: __FLT_DIG__
+        specF CgDouble     = text "%.15g"   -- float.h: __DBL_DIG__
         specF CgLongDouble = text "%Lf"
 
 -- | Make a constant value of the given type. We don't check for out of bounds here, as it should not be needed.
---   There are many options here, using binary, decimal, etc. We simply
---   8-bit or less constants using decimal; otherwise we use hex.
---   Note that this automatically takes care of the boolean (1-bit) value problem, since it
---   shows the result as an integer, which is OK as far as C is concerned.
+--   There are many options here, using binary, decimal, etc. We simply use decimal for values 8-bits or less,
+--   and hex otherwise.
 mkConst :: CgConfig -> CW -> Doc
 mkConst cfg  (CW KReal (CWAlgReal (AlgRational _ r))) = double (fromRational r :: Double) <> sRealSuffix (fromJust (cgReal cfg))
   where sRealSuffix CgFloat      = text "F"
@@ -199,8 +203,9 @@ mkConst cfg  (CW KReal (CWAlgReal (AlgRational _ r))) = double (fromRational r :
         sRealSuffix CgLongDouble = text "L"
 mkConst cfg (CW KUnbounded       (CWInteger i)) = showSizedConst i (True, fromJust (cgInteger cfg))
 mkConst _   (CW (KBounded sg sz) (CWInteger i)) = showSizedConst i (sg,   sz)
-mkConst _   (CW KFloat (CWFloat f))             = text $ showCFloat f
-mkConst _   (CW KDouble (CWDouble d))           = text $ showCDouble d
+mkConst _   (CW KBool            (CWInteger i)) = showSizedConst i (False, 1)
+mkConst _   (CW KFloat           (CWFloat f))   = text $ showCFloat f
+mkConst _   (CW KDouble          (CWDouble d))  = text $ showCDouble d
 mkConst _   cw                                  = die $ "mkConst: " ++ show cw
 
 showSizedConst :: Integer -> (Bool, Int) -> Doc
@@ -227,7 +232,7 @@ genMake ifdr fn dn ldFlags = foldr1 ($$) [l | (True, l) <- lns]
              , (True, text "# include any user-defined .mk file in the current directory.")
              , (True, text "-include *.mk")
              , (True, text "")
-             , (True, text "CC=gcc")
+             , (True, text "CC?=gcc")
              , (True, text "CCFLAGS?=-Wall -O3 -DNDEBUG -fomit-frame-pointer")
              , (ifld, text "LDFLAGS?=" <> text (unwords ldFlags))
              , (True, text "")
@@ -268,6 +273,7 @@ genHeader (ik, rk) fn sigs protos =
   $$ text "#include <inttypes.h>"
   $$ text "#include <stdint.h>"
   $$ text "#include <stdbool.h>"
+  $$ text "#include <string.h>"
   $$ text "#include <math.h>"
   $$ text ""
   $$ text "/* The boolean type */"
@@ -324,10 +330,6 @@ genDriver cfg randVals fn inps outs mbRet = [pre, header, body, post]
  where pre    =  text "/* Example driver program for" <+> nm <> text ". */"
               $$ text "/* Automatically generated by SBV. Edit as you see fit! */"
               $$ text ""
-              $$ text "#include <inttypes.h>"
-              $$ text "#include <stdint.h>"
-              $$ text "#include <stdbool.h>"
-              $$ text "#include <math.h>"
               $$ text "#include <stdio.h>"
        header =  text "#include" <+> doubleQuotes (nm <> text ".h")
               $$ text ""
@@ -414,13 +416,9 @@ genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _ _ (S
   = error "SBV->C: Cannot compile functions with existentially quantified variables."
   | True
   = [pre, header, post]
- where usorts = [s | KUserSort s _ <- Set.toList kindInfo]
+ where usorts = [s | KUserSort s _ <- Set.toList kindInfo, s /= "RoundingMode"] -- No support for any sorts other than RoundingMode!
        pre    =  text "/* File:" <+> doubleQuotes (nm <> text ".c") <> text ". Automatically generated by SBV. Do not edit! */"
               $$ text ""
-              $$ text "#include <inttypes.h>"
-              $$ text "#include <stdint.h>"
-              $$ text "#include <stdbool.h>"
-              $$ text "#include <math.h>"
        header = text "#include" <+> doubleQuotes (nm <> text ".h")
        post   = text ""
              $$ vcat (map codeSeg cgs)
@@ -428,10 +426,10 @@ genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _ _ (S
              $$ proto
              $$ text "{"
              $$ text ""
-             $$ nest 2 (   vcat (concatMap (genIO True) inVars)
+             $$ nest 2 (   vcat (concatMap (genIO True . (\v -> (isAlive v, v))) inVars)
                         $$ vcat (merge (map genTbl tbls) (map genAsgn assignments))
                         $$ sepIf (not (null assignments) || not (null tbls))
-                        $$ vcat (concatMap (genIO False) outVars)
+                        $$ vcat (concatMap (genIO False) (zip (repeat True) outVars))
                         $$ maybe empty mkRet mbRet
                        )
              $$ text "}"
@@ -441,7 +439,7 @@ genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _ _ (S
        codeSeg (fnm, ls) =  text "/* User specified custom code for" <+> doubleQuotes (text fnm) <+> text "*/"
                          $$ vcat (map text ls)
                          $$ text ""
-       typeWidth = getMax 0 [len (kindOf s) | (s, _) <- assignments]
+       typeWidth = getMax 0 $ [len (kindOf s) | (s, _) <- assignments] ++ [len (kindOf s) | (_, (s, _)) <- ins]
                 where len (KReal{})           = 5
                       len (KFloat{})          = 6 -- SFloat
                       len (KDouble{})         = 7 -- SDouble
@@ -455,10 +453,23 @@ genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _ _ (S
                       getMax m (x:xs) = getMax (m `max` x) xs
        consts = (falseSW, falseCW) : (trueSW, trueCW) : preConsts
        isConst s = isJust (lookup s consts)
-       genIO :: Bool -> (String, CgVal) -> [Doc]
-       genIO True  (cNm, CgAtomic sw) = [declSW typeWidth sw  <+> text "=" <+> text cNm <> semi]
-       genIO False (cNm, CgAtomic sw) = [text "*" <> text cNm <+> text "=" <+> showSW cfg consts sw <> semi]
-       genIO isInp (cNm, CgArray sws) = zipWith genElt sws [(0::Int)..]
+       -- TODO: The following is brittle. We should really have a function elsewhere
+       -- that walks the SBVExprs and collects the SWs together.
+       usedVariables = Set.unions (retSWs : map usedCgVal outVars ++ map usedAsgn assignments)
+         where retSWs = maybe Set.empty Set.singleton mbRet
+               usedCgVal (_, CgAtomic s)  = Set.singleton s
+               usedCgVal (_, CgArray ss)  = Set.fromList ss
+               usedAsgn  (_, SBVApp o ss) = Set.union (opSWs o) (Set.fromList ss)
+               opSWs (LkUp _ a b)             = Set.fromList [a, b]
+               opSWs (IEEEFP (FP_Cast _ _ s)) = Set.singleton s
+               opSWs _                        = Set.empty
+       isAlive :: (String, CgVal) -> Bool
+       isAlive (_, CgAtomic sw) = sw `Set.member` usedVariables
+       isAlive (_, _)           = True
+       genIO :: Bool -> (Bool, (String, CgVal)) -> [Doc]
+       genIO True  (alive, (cNm, CgAtomic sw)) = [declSW typeWidth sw  <+> text "=" <+> text cNm <> semi             | alive]
+       genIO False (alive, (cNm, CgAtomic sw)) = [text "*" <> text cNm <+> text "=" <+> showSW cfg consts sw <> semi | alive]
+       genIO isInp (_,     (cNm, CgArray sws)) = zipWith genElt sws [(0::Int)..]
          where genElt sw i
                  | isInp = declSW typeWidth sw <+> text "=" <+> text entry       <> semi
                  | True  = text entry          <+> text "=" <+> showSW cfg consts sw <> semi
@@ -473,7 +484,8 @@ genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _ _ (S
        getNodeId s@(SW _ (NodeId n)) | isConst s = -1
                                      | True      = n
        genAsgn :: (SW, SBVExpr) -> (Int, Doc)
-       genAsgn (sw, n) = (getNodeId sw, declSW typeWidth sw <+> text "=" <+> ppExpr cfg consts n <> semi)
+       genAsgn (sw, n) = (getNodeId sw, ppExpr cfg consts n (declSW typeWidth sw) (declSWNoConst typeWidth sw) <> semi)
+
        -- merge tables intermixed with assignments, paying attention to putting tables as
        -- early as possible.. Note that the assignment list (second argument) is sorted on its order
        merge :: [(Int, Doc)] -> [(Int, Doc)] -> [Doc]
@@ -483,31 +495,117 @@ genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _ _ (S
          | i < i'                                 = t : merge trest as
          | True                                   = a : merge ts arest
 
-ppExpr :: CgConfig -> [(SW, CW)] -> SBVExpr -> Doc
-ppExpr cfg consts (SBVApp op opArgs) = p op (map (showSW cfg consts) opArgs)
-  where rtc = cgRTC cfg
+handleIEEE :: FPOp -> [(SW, CW)] -> [(SW, Doc)] -> Doc -> Doc
+handleIEEE w consts as var = cvt w
+  where same f                   = (f, f)
+        named fnm dnm f          = (f fnm, f dnm)
+
+        castToUnsigned f to = parens (text "!isnan" <> parens a <+> text "&&" <+> text "signbit" <> parens a) <+> text "?" <+> cvt1 <+> text ":" <+> cvt2
+          where [a]  = map snd fpArgs
+                absA = text (if f == KFloat then "fabsf" else "fabs") <> parens a
+                cvt1 = parens (text "-" <+> parens (parens (text (show to)) <+> absA))
+                cvt2 =                      parens (parens (text (show to)) <+> a)
+
+        cvt (FP_Cast f to m)     = case checkRM (m `lookup` consts) of
+                                     Nothing          -> if f `elem` [KFloat, KDouble] && not (hasSign to)
+                                                         then castToUnsigned f to
+                                                         else cast $ \[a] -> parens (text (show to)) <+> a
+                                     Just (Left  msg) -> die msg
+                                     Just (Right msg) -> tbd msg
+        cvt (FP_Reinterpret f t) = case (f, t) of
+                                     (KBounded False 32, KFloat)  -> cast $ cpy "sizeof(SFloat)"
+                                     (KBounded False 64, KDouble) -> cast $ cpy "sizeof(SDouble)"
+                                     _                            -> die $ "Reinterpretation from : " ++ show f ++ " to " ++ show t
+                                    where cpy sz = \[a] -> let alhs = text "&" <> var
+                                                               arhs = text "&" <> a
+                                                           in text "memcpy" <> parens (fsep (punctuate comma [alhs, arhs, text sz]))
+        cvt FP_Abs               = dispatch $ named "fabsf" "fabs" $ \nm _ [a] -> text nm <> parens a
+        cvt FP_Neg               = dispatch $ same $ \_ [a] -> text "-" <> a
+        cvt FP_Add               = dispatch $ same $ \_ [a, b] -> a <+> text "+" <+> b
+        cvt FP_Sub               = dispatch $ same $ \_ [a, b] -> a <+> text "-" <+> b
+        cvt FP_Mul               = dispatch $ same $ \_ [a, b] -> a <+> text "*" <+> b
+        cvt FP_Div               = dispatch $ same $ \_ [a, b] -> a <+> text "/" <+> b
+        cvt FP_FMA               = dispatch $ named "fmaf"  "fma"  $ \nm _ [a, b, c] -> text nm <> parens (fsep (punctuate comma [a, b, c]))
+        cvt FP_Sqrt              = dispatch $ named "sqrtf" "sqrt" $ \nm _ [a]       -> text nm <> parens a
+        cvt FP_Rem               = dispatch $ named "fmodf" "fmod" $ \nm _ [a, b]    -> text nm <> parens (fsep (punctuate comma [a, b]))
+        cvt FP_RoundToIntegral   = dispatch $ named "rintf" "rint" $ \nm _ [a]       -> text nm <> parens a
+        cvt FP_Min               = dispatch $ named "fminf" "fmin" $ \nm k [a, b]    -> wrapMinMax k a b (text nm <> parens (fsep (punctuate comma [a, b])))
+        cvt FP_Max               = dispatch $ named "fmaxf" "fmax" $ \nm k [a, b]    -> wrapMinMax k a b (text nm <> parens (fsep (punctuate comma [a, b])))
+        cvt FP_ObjEqual          = let mkIte   x y z = x <+> text "?" <+> y <+> text ":" <+> z
+                                       chkNaN  x     = text "isnan"   <> parens x
+                                       signbit x     = text "signbit" <> parens x
+                                       eq      x y   = parens (x <+> text "==" <+> y)
+                                       eqZero  x     = eq x (text "0")
+                                       negZero x     = parens (signbit x <+> text "&&" <+> eqZero x)
+                                   in dispatch $ same $ \_ [a, b] -> mkIte (chkNaN a) (chkNaN b) (mkIte (negZero a) (negZero b) (mkIte (negZero b) (negZero a) (eq a b)))
+        cvt FP_IsNormal          = dispatch $ same $ \_ [a] -> text "isnormal" <> parens a
+        cvt FP_IsSubnormal       = dispatch $ same $ \_ [a] -> text "FP_SUBNORMAL == fpclassify" <> parens a
+        cvt FP_IsZero            = dispatch $ same $ \_ [a] -> text "FP_ZERO == fpclassify" <> parens a
+        cvt FP_IsInfinite        = dispatch $ same $ \_ [a] -> text "isinf" <> parens a
+        cvt FP_IsNaN             = dispatch $ same $ \_ [a] -> text "isnan" <> parens a
+        cvt FP_IsNegative        = dispatch $ same $ \_ [a] -> text "!isnan" <> parens a <+> text "&&" <+> text "signbit"  <> parens a
+        cvt FP_IsPositive        = dispatch $ same $ \_ [a] -> text "!isnan" <> parens a <+> text "&&" <+> text "!signbit" <> parens a
+
+        -- grab the rounding-mode, if present, and make sure it's RoundNearestTiesToEven. Otherwise skip.
+        fpArgs = case as of
+                   []            -> []
+                   ((m, _):args) -> case kindOf m of
+                                      KUserSort "RoundingMode" _ -> case checkRM (m `lookup` consts) of
+                                                                      Nothing          -> args
+                                                                      Just (Left  msg) -> die msg
+                                                                      Just (Right msg) -> tbd msg
+                                      _                          -> as
+
+        -- Check that the RM is RoundNearestTiesToEven.
+        -- If we start supporting other rounding-modes, this would be the point where we'd insert the rounding-mode set/reset code
+        -- instead of merely returning OK or not
+        checkRM (Just cv@(CW (KUserSort "RoundingMode" _) v)) =
+              case v of
+                CWUserSort (_, "RoundNearestTiesToEven") -> Nothing
+                CWUserSort (_, s)                        -> Just (Right $ "handleIEEE: Unsupported rounding-mode: " ++ show s ++ " for: " ++ show w)
+                _                                        -> Just (Left  $ "handleIEEE: Unexpected value for rounding-mode: " ++ show cv ++ " for: " ++ show w)
+        checkRM (Just cv) = Just (Left  $ "handleIEEE: Expected rounding-mode, but got: " ++ show cv ++ " for: " ++ show w)
+        checkRM Nothing   = Just (Right $ "handleIEEE: Non-constant rounding-mode for: " ++ show w)
+
+        pickOp _          []             = die $ "Cannot determine float/double kind for op: " ++ show w
+        pickOp (fOp, dOp) args@((a,_):_) = case kindOf a of
+                                             KFloat  -> fOp KFloat  (map snd args)
+                                             KDouble -> dOp KDouble (map snd args)
+                                             k       -> die $ "handleIEEE: Expected double/float args, but got: " ++ show k ++ " for: " ++ show w
+
+        dispatch (fOp, dOp) = pickOp (fOp, dOp) fpArgs
+        cast f              = f (map snd fpArgs)
+
+        -- In SMT-Lib, fpMin/fpMax return +0 when given +0/-0 as the two arguments. (In any order.)
+        -- In C, the second argument is returned. So, wrap around an if-then-else to avoid discrepancy:
+        wrapMinMax k a b s = parens cond <+> text "?" <+> zero <+> text ":" <+> s
+          where zero = text $ if k == KFloat then showCFloat 0 else showCDouble 0
+                cond =                   parens (text "FP_ZERO == fpclassify" <> parens a)                                      -- a is zero
+                       <+> text "&&" <+> parens (text "FP_ZERO == fpclassify" <> parens b)                                      -- b is zero
+                       <+> text "&&" <+> parens (text "signbit" <> parens a <+> text "!=" <+> text "signbit" <> parens b)       -- a and b differ in sign
+
+ppExpr :: CgConfig -> [(SW, CW)] -> SBVExpr -> Doc -> (Doc, Doc) -> Doc
+ppExpr cfg consts (SBVApp op opArgs) lhs (typ, var)
+  | doNotAssign op
+  = typ <+> var <> semi <+> rhs
+  | True
+  = lhs <+> text "=" <+> rhs
+  where doNotAssign (IEEEFP (FP_Reinterpret{})) = True   -- generates a memcpy instead; no simple assignment
+        doNotAssign _                           = False  -- generates simple assignment
+        rhs = p op (map (showSW cfg consts) opArgs)
+        rtc = cgRTC cfg
         cBinOps = [ (Plus, "+"),  (Times, "*"), (Minus, "-")
                   , (Equal, "=="), (NotEqual, "!="), (LessThan, "<"), (GreaterThan, ">"), (LessEq, "<="), (GreaterEq, ">=")
                   , (And, "&"), (Or, "|"), (XOr, "^")
                   ]
-        uninterpret "to_real" as
-          | [a] <- as            = text "(SReal)" <+> a
-        uninterpret "fp.sqrt" as = let f = case kindOf (head opArgs) of
-                                               KFloat  -> text "sqrtf"
-                                               KDouble -> text "sqrt"
-                                               k       -> die $ "squareRoot on unexpected kind: " ++ show k
-                                   in f <> parens (fsep (punctuate comma as))
-        uninterpret "fp.fma"  as = let f = case kindOf (head opArgs) of
-                                                KFloat  -> text "fmaf"
-                                                KDouble -> text "fma"
-                                                k       -> die $ "fusedMA on unexpected kind: " ++ show k
-                                   in f <> parens (fsep (punctuate comma as))
-        uninterpret s []         = text "/* Uninterpreted constant */" <+> text s
-        uninterpret s as         = text "/* Uninterpreted function */" <+> text s <> parens (fsep (punctuate comma as))
+        p :: Op -> [Doc] -> Doc
         p (ArrRead _)       _  = tbd "User specified arrays (ArrRead)"
         p (ArrEq _ _)       _  = tbd "User specified arrays (ArrEq)"
-        p (FPRound w)       _  = tbd $ "Floating point operations with custom rounding modes (" ++ w ++ ")"
-        p (Uninterpreted s) as = uninterpret s as
+        p (Label s)        [a] = a <+> text "/*" <+> text s <+> text "*/"
+        p (IEEEFP w)        as = handleIEEE w consts (zip opArgs as) var
+        p (IntCast _ to)   [a] = parens (text (show to)) <+> a
+        p (Uninterpreted s) [] = text "/* Uninterpreted constant */" <+> text s
+        p (Uninterpreted s) as = text "/* Uninterpreted function */" <+> text s <> parens (fsep (punctuate comma as))
         p (Extract i j) [a]    = extract i j (head opArgs) a
         p Join [a, b]          = join (let (s1 : s2 : _) = opArgs in (s1, s2, a, b))
         p (Rol i) [a]          = rotate True  i a (head opArgs)
@@ -546,18 +644,30 @@ ppExpr cfg consts (SBVApp op opArgs) = p op (map (showSW cfg consts) opArgs)
         -- Div/Rem should be careful on 0, in the SBV world x `div` 0 is 0, x `rem` 0 is x
         -- NB: Quot is supposed to truncate toward 0; Not clear to me if C guarantees this behavior.
         -- Brief googling suggests C99 does indeed truncate toward 0, but other C compilers might differ.
-        p Quot [a, b] = parens (b <+> text "== 0") <+> text "?" <+> text "0" <+> text ":" <+> parens (a <+> text "/" <+> b)
-        p Rem  [a, b] = parens (b <+> text "== 0") <+> text "?" <+>    a     <+> text ":" <+> parens (a <+> text "%" <+> b)
+        p Quot [a, b] = let k = kindOf (head opArgs)
+                            z = mkConst cfg $ mkConstCW k (0::Integer)
+                        in protectDiv0 k "/" z a b
+        p Rem  [a, b] = protectDiv0 (kindOf (head opArgs)) "%" a a b
         p UNeg [a]    = parens (text "-" <+> a)
         p Abs  [a]    = let f = case kindOf (head opArgs) of
                                   KFloat  -> text "fabsf"
                                   KDouble -> text "fabs"
                                   _       -> text "abs"
                         in f <> parens a
+        -- for And/Or, translate to boolean versions if on boolean kind
+        p And [a, b] | kindOf (head opArgs) == KBool = a <+> text "&&" <+> b
+        p Or  [a, b] | kindOf (head opArgs) == KBool = a <+> text "||" <+> b
         p o [a, b]
           | Just co <- lookup o cBinOps
           = a <+> text co <+> b
         p o args = die $ "Received operator " ++ show o ++ " applied to " ++ show args
+        -- Div0 needs to protect, but only when the arguments are not float/double. (Div by 0 for those are well defined to be Inf/NaN etc.)
+        protectDiv0 k divOp def a b = case k of
+                                        KFloat  -> res
+                                        KDouble -> res
+                                        _       -> wrap
+           where res  = a <+> text divOp <+> b
+                 wrap = parens (b <+> text "== 0") <+> text "?" <+> def <+> text ":" <+> parens res
         shift toLeft i a s
           | i < 0   = shift (not toLeft) (-i) a s
           | i == 0  = a
@@ -580,8 +690,8 @@ ppExpr cfg consts (SBVApp op opArgs) = p op (map (showSW cfg consts) opArgs)
                         _                           -> tbd $ "Rotation for unbounded quantity: " ++ show (toLeft, i, s)
           where (cop, cop') | toLeft = ("<<", ">>")
                             | True   = (">>", "<<")
-        -- TBD: below we only support the values that SBV actually currently generates.
-        -- we would need to add new ones if we generate others. (Check instances in Data/SBV/BitVectors/Splittable.hs).
+        -- TBD: below we only support the values for extract that are "easy" to implement. These should cover
+        -- almost all instances actually generated by SBV, however.
         extract hi lo i a  -- Isolate the bit-extraction case
           | hi == lo, KBounded _ sz <- kindOf i, hi < sz, hi >= 0
           = text "(SBool)" <+> parens (parens (a <+> text ">>" <+> int hi) <+> text "& 1")
@@ -592,7 +702,6 @@ ppExpr cfg consts (SBVApp op opArgs) = p op (map (showSW cfg consts) opArgs)
                               (15,  0, KBounded False 32) -> text "(SWord16)" <+> a
                               (15,  8, KBounded False 16) -> text "(SWord8)"  <+> parens (a <+> text ">> 8")
                               ( 7,  0, KBounded False 16) -> text "(SWord8)"  <+> a
-                              -- the followings are used by sign-conversions. (Check instances in Data/SBV/BitVectors/SignCast.hs).
                               (63,  0, KBounded False 64) -> text "(SInt64)"  <+> a
                               (63,  0, KBounded True  64) -> text "(SWord64)" <+> a
                               (31,  0, KBounded False 32) -> text "(SInt32)"  <+> a
@@ -664,11 +773,11 @@ genLibMake ifdr libName fs ldFlags = foldr1 ($$) [l | (True, l) <- lns]
              , (True,  text "# include any user-defined .mk file in the current directory.")
              , (True,  text "-include *.mk")
              , (True,  text "")
-             , (True,  text "CC=gcc")
+             , (True,  text "CC?=gcc")
              , (True,  text "CCFLAGS?=-Wall -O3 -DNDEBUG -fomit-frame-pointer")
              , (ifld,  text "LDFLAGS?=" <> text (unwords ldFlags))
-             , (True,  text "AR=ar")
-             , (True,  text "ARFLAGS=cr")
+             , (True,  text "AR?=ar")
+             , (True,  text "ARFLAGS?=cr")
              , (True,  text "")
              , (not ifdr,  text ("all: " ++ liba))
              , (ifdr,      text ("all: " ++ unwords [liba, libd]))
@@ -703,10 +812,6 @@ mergeDrivers libName inc ds = pre : concatMap mkDFun ds ++ [callDrivers (map fst
   where pre =  text "/* Example driver program for" <+> text libName <> text ". */"
             $$ text "/* Automatically generated by SBV. Edit as you see fit! */"
             $$ text ""
-            $$ text "#include <inttypes.h>"
-            $$ text "#include <stdint.h>"
-            $$ text "#include <stdbool.h>"
-            $$ text "#include <math.h>"
             $$ text "#include <stdio.h>"
             $$ inc
         mkDFun (f, [_pre, _header, body, _post]) = [header, body, post]
@@ -730,3 +835,5 @@ mergeDrivers libName inc ds = pre : concatMap mkDFun ds ++ [callDrivers (map fst
                  ptag = "printf(\"" ++ tag ++ "\\n\");"
                  lsep = replicate (length tag) '='
                  psep = "printf(\"" ++ lsep ++ "\\n\");"
+
+{-# ANN module ("HLint: ignore Redundant lambda" :: String) #-}

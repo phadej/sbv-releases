@@ -78,7 +78,7 @@ tbd :: String -> a
 tbd e = error $ "SBV.SMTLib2: Not-yet-supported: " ++ e
 
 -- | Translate a problem into an SMTLib2 script
-cvt :: RoundingMode               -- ^ User selected rounding mode to be used for floating point arithmetic
+cvt :: RoundingMode                 -- ^ User selected rounding mode to be used for floating point arithmetic
     -> Maybe Logic                  -- ^ SMT-Lib logic, if requested by the user
     -> SolverCapabilities           -- ^ capabilities of the current solver
     -> Set.Set Kind                 -- ^ kinds used
@@ -186,7 +186,8 @@ cvt rm smtLogic solverCaps kindInfo isSat comments inputs skolemInps consts tbls
           where mkConstTable (((t, _, _), _), _) = (t, "table" ++ show t)
                 mkSkTable    (((t, _, _), _), _) = (t, "table" ++ show t ++ forallArgs)
         asgns = F.toList asgnsSeq
-        mkLet (s, e) = "(let ((" ++ show s ++ " " ++ cvtExp rm skolemMap tableMap e ++ "))"
+        mkLet (s, SBVApp (Label m) [e]) = "(let ((" ++ show s ++ " " ++ cvtSW     skolemMap          e ++ ")) ; " ++ m
+        mkLet (s, e)                    = "(let ((" ++ show s ++ " " ++ cvtExp rm skolemMap tableMap e ++ "))"
         declConst useDefFun (s, c)
           | useDefFun = ["(define-fun "   ++ varT ++ " " ++ cvtCW rm c ++ ")"]
           | True      = [ "(declare-fun " ++ varT ++ ")"
@@ -396,14 +397,11 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                 mkCnst = cvtCW rm . mkConstCW (kindOf i)
                 le0  = "(" ++ less ++ " " ++ ssw i ++ " " ++ mkCnst 0 ++ ")"
                 gtl  = "(" ++ leq  ++ " " ++ mkCnst l ++ " " ++ ssw i ++ ")"
-        sh (SBVApp (ArrEq i j) []) = "(= array_" ++ show i ++ " array_" ++ show j ++")"
+        sh (SBVApp (IntCast f t) [a]) = handleIntCast f t (ssw a)
+        sh (SBVApp (ArrEq i j) [])  = "(= array_" ++ show i ++ " array_" ++ show j ++")"
         sh (SBVApp (ArrRead i) [a]) = "(select array_" ++ show i ++ " " ++ ssw a ++ ")"
         sh (SBVApp (Uninterpreted nm) [])   = nm
-        sh (SBVApp (Uninterpreted nm) args) = "(" ++ nm' ++ " " ++ unwords (map ssw args) ++ ")"
-          where -- slight hack needed here to take advantage of custom floating-point functions.. sigh.
-                fpSpecials = ["fp.sqrt", "fp.fma"]
-                nm' | (floatOp || doubleOp) && (nm `elem` fpSpecials) = addRM nm
-                    | True                                            = nm
+        sh (SBVApp (Uninterpreted nm) args) = "(" ++ nm ++ " " ++ unwords (map ssw args) ++ ")"
         sh (SBVApp (Extract i j) [a]) | ensureBV = "((_ extract " ++ show i ++ " " ++ show j ++ ") " ++ ssw a ++ ")"
         sh (SBVApp (Rol i) [a])
            | bvOp  = rot  ssw "rotate_left"  i a
@@ -435,8 +433,9 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                , (Not,  lift1B "not" "bvnot")
                                , (Join, lift2 "concat")
                                ]
-        sh (SBVApp (FPRound w) args)
-          = "(" ++ w ++ " " ++ unwords (map ssw args) ++ ")"
+        sh (SBVApp (Label _)                       [a]) = cvtSW skolemMap a  -- This won't be reached; but just in case!
+        sh (SBVApp (IEEEFP (FP_Cast kFrom kTo m)) args) = handleFPCast kFrom kTo (ssw m) (unwords (map ssw args))
+        sh (SBVApp (IEEEFP w                    ) args) = "(" ++ show w ++ " " ++ unwords (map ssw args) ++ ")"
         sh inp@(SBVApp op args)
           | intOp, Just f <- lookup op smtOpIntTable
           = f True (map ssw args)
@@ -508,6 +507,73 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                      , (GreaterEq,   unintComp ">=")
                                      ]
 
+-----------------------------------------------------------------------------------------------
+-- Casts supported by SMTLib. (From: http://smtlib.cs.uiowa.edu/theories/FloatingPoint.smt2)
+--   ; from another floating point sort
+--   ((_ to_fp eb sb) RoundingMode (_ FloatingPoint mb nb) (_ FloatingPoint eb sb))
+--
+--   ; from real
+--   ((_ to_fp eb sb) RoundingMode Real (_ FloatingPoint eb sb))
+--
+--   ; from signed machine integer, represented as a 2's complement bit vector
+--   ((_ to_fp eb sb) RoundingMode (_ BitVec m) (_ FloatingPoint eb sb))
+--
+--   ; from unsigned machine integer, represented as bit vector
+--   ((_ to_fp_unsigned eb sb) RoundingMode (_ BitVec m) (_ FloatingPoint eb sb))
+--
+--   ; to unsigned machine integer, represented as a bit vector
+--   ((_ fp.to_ubv m) RoundingMode (_ FloatingPoint eb sb) (_ BitVec m))
+--
+--   ; to signed machine integer, represented as a 2's complement bit vector
+--   ((_ fp.to_sbv m) RoundingMode (_ FloatingPoint eb sb) (_ BitVec m)) 
+--
+--   ; to real
+--   (fp.to_real (_ FloatingPoint eb sb) Real)
+-----------------------------------------------------------------------------------------------
+
+handleFPCast :: Kind -> Kind -> String -> String -> String
+handleFPCast kFrom kTo rm  input
+  | kFrom == kTo
+  = input
+  | True
+  = "(" ++ cast kFrom kTo input ++ ")"
+  where addRM a s = s ++ " " ++ rm ++ " " ++ a
+
+        absRM a s = "ite (fp.isNegative " ++ a ++ ") (" ++ cvt1 ++ ") (" ++ cvt2 ++ ")"
+          where cvt1 = "bvneg (" ++ s ++ " " ++ rm ++ " (fp.abs " ++ a ++ "))"
+                cvt2 =              s ++ " " ++ rm ++ " "         ++ a
+
+        -- To go and back from Ints, we detour through reals
+        cast KUnbounded         KFloat             a = "(_ to_fp 8 24) "  ++ rm ++ " (to_real " ++ a ++ ")"
+        cast KUnbounded         KDouble            a = "(_ to_fp 11 53) " ++ rm ++ " (to_real " ++ a ++ ")"
+        cast KFloat             KUnbounded         a = "to_int (fp.to_real " ++ a ++ ")"
+        cast KDouble            KUnbounded         a = "to_int (fp.to_real " ++ a ++ ")"
+
+        -- To float/double
+        cast (KBounded False _) KFloat             a = addRM a "(_ to_fp_unsigned 8 24)"
+        cast (KBounded False _) KDouble            a = addRM a "(_ to_fp_unsigned 11 53)"
+        cast (KBounded True  _) KFloat             a = addRM a "(_ to_fp 8 24)"
+        cast (KBounded True  _) KDouble            a = addRM a "(_ to_fp 11 53)"
+        cast KReal              KFloat             a = addRM a "(_ to_fp 8 24)"
+        cast KReal              KDouble            a = addRM a "(_ to_fp 11 53)"
+
+        -- Between floats
+        cast KFloat             KFloat             a = addRM a "(_ to_fp 8 24)"
+        cast KFloat             KDouble            a = addRM a "(_ to_fp 11 53)"
+        cast KDouble            KFloat             a = addRM a "(_ to_fp 8 24)"
+        cast KDouble            KDouble            a = addRM a "(_ to_fp 11 53)"
+
+        -- From float/double
+        cast KFloat             (KBounded False m) a = absRM a $ "(_ fp.to_ubv " ++ show m ++ ")"
+        cast KDouble            (KBounded False m) a = absRM a $ "(_ fp.to_ubv " ++ show m ++ ")"
+        cast KFloat             (KBounded True  m) a = addRM a $ "(_ fp.to_sbv " ++ show m ++ ")"
+        cast KDouble            (KBounded True  m) a = addRM a $ "(_ fp.to_sbv " ++ show m ++ ")"
+        cast KFloat             KReal              a = "fp.to_real" ++ " " ++ a
+        cast KDouble            KReal              a = "fp.to_real" ++ " " ++ a
+
+        -- Nothing else should come up:
+        cast f                  d                  _ = error $ "SBV.SMTLib2: Unexpected FPCast from: " ++ show f ++ " to " ++ show d
+
 rot :: (SW -> String) -> String -> Int -> SW -> String
 rot ssw o c x = "((_ " ++ o ++ " " ++ show c ++ ") " ++ ssw x ++ ")"
 
@@ -516,3 +582,50 @@ shft rm ssw oW oS c x = "(" ++ o ++ " " ++ ssw x ++ " " ++ cvtCW rm c' ++ ")"
    where s  = hasSign x
          c' = mkConstCW (kindOf x) c
          o  = if s then oS else oW
+
+-- Various integer casts
+handleIntCast :: Kind -> Kind -> String -> String
+handleIntCast kFrom kTo a
+  | kFrom == kTo
+  = a
+  | True
+  = case kFrom of
+      KBounded s m -> case kTo of
+                        KBounded _ n -> fromBV (if s then signExtend else zeroExtend) m n
+                        KUnbounded   -> b2i s m
+                        _            -> noCast
+
+      KUnbounded   -> case kTo of
+                        KReal        -> "(to_real " ++ a ++ ")"
+                        KBounded _ n -> i2b n
+                        _            -> noCast
+
+      _            -> noCast
+
+  where noCast  = error $ "SBV.SMTLib2: Unexpected integer cast from: " ++ show kFrom ++ " to " ++ show kTo
+
+        fromBV upConv m n
+         | n > m  = upConv  (n - m)
+         | m == n = a
+         | True   = extract (n - 1)
+
+        i2b n = "(let (" ++ reduced ++ ") (let (" ++ defs ++ ") " ++ body ++ "))"
+          where b i      = show (bit i :: Integer)
+                reduced  = "(__a (mod " ++ a ++ " " ++ b n ++ "))"
+                mkBit 0  = "(__a0 (ite (= (mod __a 2) 0) #b0 #b1))"
+                mkBit i  = "(__a" ++ show i ++ " (ite (= (mod (div __a " ++ b i ++ ") 2) 0) #b0 #b1))"
+                defs     = unwords (map mkBit [0 .. n - 1])
+                body     = foldr1 (\c r -> "(concat " ++ c ++ " " ++ r ++ ")") ["__a" ++ show i | i <- [n-1, n-2 .. 0]]
+
+        b2i s m
+          | s    = "(- " ++ val ++ " " ++ valIf (2^m) sign ++ ")"
+          | True = val
+          where valIf v b = "(ite (= " ++ b ++ " #b1) " ++ show (v::Integer) ++ " 0)"
+                getBit i  = "((_ extract " ++ show i ++ " " ++ show i ++ ") " ++ a ++ ")"
+                bitVal i  = valIf (2^i) (getBit i)
+                val       = "(+ " ++ unwords (map bitVal [0 .. m-1]) ++ ")"
+                sign      = getBit (m-1)
+
+        signExtend i = "((_ sign_extend " ++ show i ++  ") "  ++ a ++ ")"
+        zeroExtend i = "((_ zero_extend " ++ show i ++  ") "  ++ a ++ ")"
+        extract    i = "((_ extract "     ++ show i ++ " 0) " ++ a ++ ")"

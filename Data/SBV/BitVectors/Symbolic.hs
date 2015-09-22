@@ -19,26 +19,24 @@
 {-# LANGUAGE    DefaultSignatures          #-}
 {-# LANGUAGE    NamedFieldPuns             #-}
 {-# LANGUAGE    DeriveDataTypeable         #-}
-{-# LANGUAGE    CPP                        #-}
 {-# OPTIONS_GHC -fno-warn-orphans          #-}
 
 module Data.SBV.BitVectors.Symbolic
   ( NodeId(..)
   , SW(..), swKind, trueSW, falseSW
-  , Op(..), smtLibSquareRoot, smtLibFusedMA
+  , Op(..), FPOp(..)
   , Quantifier(..), needsExistentials
   , RoundingMode(..)
-  , SBVType(..), newUninterpreted, unintFnUIKind, addAxiom
+  , SBVType(..), newUninterpreted, addAxiom
   , SVal(..), svKind
   , svBitSize, svSigned
   , svMkSymVar
-  , ArrayContext(..), ArrayInfo, arrayUIKind
+  , ArrayContext(..), ArrayInfo
   , svToSW, svToSymSW, forceSWArg
   , SBVExpr(..), newExpr
   , Cached, cache, uncache
   , ArrayIndex, uncacheAI
   , NamedSymVar
-  , UnintKind(..)
   , getSValPathCondition, extendSValPathCondition
   , getTableIndex
   , SBVPgm(..), Symbolic, runSymbolic, runSymbolic', State
@@ -46,18 +44,14 @@ module Data.SBV.BitVectors.Symbolic
   , Logic(..), SMTLibLogic(..)
   , getTraceInfo, getConstraints
   , addSValConstraint
-  , SMTLibPgm(..), SMTLibVersion(..)
+  , SMTLibPgm(..), SMTLibVersion(..), smtLibVersionExtension
   , SolverCapabilities(..)
   , extractSymbolicSimulationState
-  , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..), getSBranchRunConfig
+  , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..), SMTEngine, getSBranchRunConfig
   , outputSVal
   , mkSValUserSort
   , SArr(..), readSArr, resetSArr, writeSArr, mergeSArr, newSArr, eqSArr
   ) where
-
-#if __GLASGOW_HASKELL__ < 710
-import Control.Applicative  (Applicative)
-#endif
 
 import Control.DeepSeq      (NFData(..))
 import Control.Monad        (when, unless)
@@ -69,14 +63,12 @@ import Data.List            (intercalate, sortBy)
 import Data.Maybe           (isJust, fromJust, fromMaybe)
 
 import qualified Data.Generics as G    (Data(..))
-import qualified Data.Typeable as T    (Typeable)
 import qualified Data.IntMap   as IMap (IntMap, empty, size, toAscList, lookup, insert, insertWith)
 import qualified Data.Map      as Map  (Map, empty, toList, size, insert, lookup)
 import qualified Data.Set      as Set  (Set, empty, toList, insert)
 import qualified Data.Foldable as F    (toList)
 import qualified Data.Sequence as S    (Seq, empty, (|>))
 
-import System.Exit           (ExitCode(..))
 import System.Mem.StableName
 import System.Random
 
@@ -113,35 +105,93 @@ trueSW :: SW
 trueSW  = SW KBool $ NodeId (-1)
 
 -- | Symbolic operations
-data Op = Plus | Times | Minus | UNeg | Abs
-        | Quot | Rem
-        | Equal | NotEqual
-        | LessThan | GreaterThan | LessEq | GreaterEq
+data Op = Plus
+        | Times
+        | Minus
+        | UNeg
+        | Abs
+        | Quot
+        | Rem
+        | Equal
+        | NotEqual
+        | LessThan
+        | GreaterThan
+        | LessEq
+        | GreaterEq
         | Ite
-        | And | Or  | XOr | Not
-        | Shl Int | Shr Int | Rol Int | Ror Int
-        | Extract Int Int -- Extract i j: extract bits i to j. Least significant bit is 0 (big-endian)
-        | Join  -- Concat two words to form a bigger one, in the order given
+        | And
+        | Or
+        | XOr
+        | Not
+        | Shl Int
+        | Shr Int
+        | Rol Int
+        | Ror Int
+        | Extract Int Int                       -- Extract i j: extract bits i to j. Least significant bit is 0 (big-endian)
+        | Join                                  -- Concat two words to form a bigger one, in the order given
         | LkUp (Int, Kind, Kind, Int) !SW !SW   -- (table-index, arg-type, res-type, length of the table) index out-of-bounds-value
-        | ArrEq   Int Int
+        | ArrEq   Int Int                       -- Array equality
         | ArrRead Int
+        | IntCast Kind Kind
         | Uninterpreted String
-        -- Floating point uops with custom rounding-modes
-        | FPRound String
+        | Label String                          -- Essentially no-op; useful for code generation to emit comments.
+        | IEEEFP FPOp                           -- Floating-point ops, categorized separately
         deriving (Eq, Ord)
 
--- | SMT-Lib's square-root over floats/doubles. We piggy back on to the uninterpreted function mechanism
--- to implement these; which is not a terrible idea; although the use of the constructor 'Uninterpreted'
--- might be confusing. This function will *not* be uninterpreted in reality, as QF_FP will define it. It's
--- a bit of a shame, but much easier to implement it this way.
-smtLibSquareRoot :: Op
-smtLibSquareRoot = Uninterpreted "fp.sqrt"
+-- | Floating point operations
+data FPOp = FP_Cast        Kind Kind SW   -- From-Kind, To-Kind, RoundingMode. This is "value" conversion
+          | FP_Reinterpret Kind Kind      -- From-Kind, To-Kind. This is bit-reinterpretation using IEEE-754 interchange format
+          | FP_Abs
+          | FP_Neg
+          | FP_Add
+          | FP_Sub
+          | FP_Mul
+          | FP_Div
+          | FP_FMA
+          | FP_Sqrt
+          | FP_Rem
+          | FP_RoundToIntegral
+          | FP_Min
+          | FP_Max
+          | FP_ObjEqual
+          | FP_IsNormal
+          | FP_IsSubnormal
+          | FP_IsZero
+          | FP_IsInfinite
+          | FP_IsNaN
+          | FP_IsNegative
+          | FP_IsPositive
+          deriving (Eq, Ord)
 
--- | SMT-Lib's fusedMA over floats/doubles. Similar to the 'smtLibSquareRoot'. Note that we cannot implement
--- this function in Haskell as precision loss would be inevitable. Maybe Haskell will eventually add this op
--- to the Num class.
-smtLibFusedMA :: Op
-smtLibFusedMA = Uninterpreted "fp.fma"
+-- | Note that the show instance maps to the SMTLib names. We need to make sure
+-- this mapping stays correct through SMTLib changes. The only exception
+-- is FP_Cast; where we handle different source/origins explicitly later on.
+instance Show FPOp where
+   show (FP_Cast f t r)      = "(FP_Cast: " ++ show f ++ " -> " ++ show t ++ "using RM [" ++ show r ++ "])"
+   show (FP_Reinterpret f t) = case (f, t) of
+                                  (KBounded False 32, KFloat)  -> "(_ to_fp 8 24)"
+                                  (KBounded False 64, KDouble) -> "(_ to_fp 11 53)"
+                                  _                            -> error $ "SBV.FP_Reinterpret: Unexpected conversion: " ++ show f ++ " to " ++ show t
+   show FP_Abs               = "fp.abs"
+   show FP_Neg               = "fp.neg"
+   show FP_Add               = "fp.add"
+   show FP_Sub               = "fp.sub"
+   show FP_Mul               = "fp.mul"
+   show FP_Div               = "fp.div"
+   show FP_FMA               = "fp.fma"
+   show FP_Sqrt              = "fp.sqrt"
+   show FP_Rem               = "fp.rem"
+   show FP_RoundToIntegral   = "fp.roundToIntegral"
+   show FP_Min               = "fp.min"
+   show FP_Max               = "fp.max"
+   show FP_ObjEqual          = "="
+   show FP_IsNormal          = "fp.isNormal"
+   show FP_IsSubnormal       = "fp.isSubnormal"
+   show FP_IsZero            = "fp.isZero"
+   show FP_IsInfinite        = "fp.isInfinite"
+   show FP_IsNaN             = "fp.isNaN"
+   show FP_IsNegative        = "fp.isNegative"
+   show FP_IsPositive        = "fp.isPositive"
 
 -- | Show instance for 'Op'. Note that this is largely for debugging purposes, not used
 -- for being read by any tool.
@@ -154,10 +204,12 @@ instance Show Op where
   show (LkUp (ti, at, rt, l) i e)
         = "lookup(" ++ tinfo ++ ", " ++ show i ++ ", " ++ show e ++ ")"
         where tinfo = "table" ++ show ti ++ "(" ++ show at ++ " -> " ++ show rt ++ ", " ++ show l ++ ")"
-  show (ArrEq i j)   = "array_" ++ show i ++ " == array_" ++ show j
-  show (ArrRead i)   = "select array_" ++ show i
+  show (ArrEq i j)       = "array_" ++ show i ++ " == array_" ++ show j
+  show (ArrRead i)       = "select array_" ++ show i
+  show (IntCast fr to)   = "cast_" ++ show fr ++ "_" ++ show to
   show (Uninterpreted i) = "[uninterpreted] " ++ i
-  show (FPRound w)       = w
+  show (Label s)         = "[label] " ++ s
+  show (IEEEFP w)        = show w
   show op
     | Just s <- op `lookup` syms = s
     | True                       = error "impossible happened; can't find op!"
@@ -184,10 +236,6 @@ needsExistentials = (EX `elem`)
 -- have just one entry in the list.
 newtype SBVType = SBVType [Kind]
              deriving (Eq, Ord)
-
--- | how many arguments does the type take?
-typeArity :: SBVType -> Int
-typeArity (SBVType xs) = length xs - 1
 
 instance Show SBVType where
   show (SBVType []) = error "SBV: internal error, empty SBVType"
@@ -221,11 +269,6 @@ newtype SBVPgm = SBVPgm {pgmAssignments :: S.Seq (SW, SBVExpr)}
 
 -- | 'NamedSymVar' pairs symbolic words and user given/automatically generated names
 type NamedSymVar = (SW, String)
-
--- | 'UnintKind' pairs array names and uninterpreted constants with their "kinds"
--- used mainly for printing counterexamples
-data UnintKind = UFun Int String | UArr Int String      -- in each case, arity and the aliasing name
- deriving Show
 
 -- | Result of running a symbolic computation
 data Result = Result (Set.Set Kind)                -- kinds used in the program
@@ -337,24 +380,10 @@ type CgMap     = Map.Map String [String]
 -- | Cached values, implementing sharing
 type Cache a   = IMap.IntMap [(StableName (State -> IO a), a)]
 
--- | Convert an SBV-type to the kind-of uninterpreted value it represents
-unintFnUIKind :: (String, SBVType) -> (String, UnintKind)
-unintFnUIKind (s, t) = (s, UFun (typeArity t) s)
-
--- | Convert an array value type to the kind-of uninterpreted value it represents
-arrayUIKind :: (Int, ArrayInfo) -> Maybe (String, UnintKind)
-arrayUIKind (i, (nm, _, ctx))
-  | external ctx = Just ("array_" ++ show i, UArr 1 nm) -- arrays are always 1-dimensional in the SMT-land. (Unless encoded explicitly)
-  | True         = Nothing
-  where external (ArrayFree{})   = True
-        external (ArrayReset{})  = False
-        external (ArrayMutate{}) = False
-        external (ArrayMerge{})  = False
-
 -- | Different means of running a symbolic piece of code
-data SBVRunMode = Proof (Bool, Maybe SMTConfig) -- ^ Symbolic simulation mode, for proof purposes. Bool is True if it's a sat instance. SMTConfig is used for 'sBranch' calls.
-                | CodeGen                       -- ^ Code generation mode
-                | Concrete StdGen               -- ^ Concrete simulation mode. The StdGen is for the pConstrain acceptance in cross runs
+data SBVRunMode = Proof (Bool, SMTConfig) -- ^ Fully Symbolic, proof mode.
+                | CodeGen                 -- ^ Code generation mode.
+                | Concrete StdGen         -- ^ Concrete simulation mode. The StdGen is for the pConstrain acceptance in cross runs.
 
 -- | Is this a concrete run? (i.e., quick-check or test-generation like)
 isConcreteMode :: SBVRunMode -> Bool
@@ -363,25 +392,25 @@ isConcreteMode (Proof{})    = False
 isConcreteMode CodeGen      = False
 
 -- | The state of the symbolic interpreter
-data State  = State { runMode       :: SBVRunMode
-                    , pathCond      :: SVal -- ^ kind KBool
-                    , rStdGen       :: IORef StdGen
-                    , rCInfo        :: IORef [(String, CW)]
-                    , rctr          :: IORef Int
-                    , rUsedKinds    :: IORef KindSet
-                    , rinps         :: IORef [(Quantifier, NamedSymVar)]
-                    , rConstraints  :: IORef [SW]
-                    , routs         :: IORef [SW]
-                    , rtblMap       :: IORef TableMap
-                    , spgm          :: IORef SBVPgm
-                    , rconstMap     :: IORef CnstMap
-                    , rexprMap      :: IORef ExprMap
-                    , rArrayMap     :: IORef ArrayMap
-                    , rUIMap        :: IORef UIMap
-                    , rCgMap        :: IORef CgMap
-                    , raxioms       :: IORef [(String, [String])]
-                    , rSWCache      :: IORef (Cache SW)
-                    , rAICache      :: IORef (Cache Int)
+data State  = State { runMode      :: SBVRunMode
+                    , pathCond     :: SVal                             -- ^ kind KBool
+                    , rStdGen      :: IORef StdGen
+                    , rCInfo       :: IORef [(String, CW)]
+                    , rctr         :: IORef Int
+                    , rUsedKinds   :: IORef KindSet
+                    , rinps        :: IORef [(Quantifier, NamedSymVar)]
+                    , rConstraints :: IORef [SW]
+                    , routs        :: IORef [SW]
+                    , rtblMap      :: IORef TableMap
+                    , spgm         :: IORef SBVPgm
+                    , rconstMap    :: IORef CnstMap
+                    , rexprMap     :: IORef ExprMap
+                    , rArrayMap    :: IORef ArrayMap
+                    , rUIMap       :: IORef UIMap
+                    , rCgMap       :: IORef CgMap
+                    , raxioms      :: IORef [(String, [String])]
+                    , rSWCache     :: IORef (Cache SW)
+                    , rAICache     :: IORef (Cache Int)
                     }
 
 -- | Get the current path condition
@@ -402,7 +431,7 @@ inProofMode s = case runMode s of
 -- | If in proof mode, get the underlying configuration (used for 'sBranch')
 getSBranchRunConfig :: State -> Maybe SMTConfig
 getSBranchRunConfig st = case runMode st of
-                           Proof (_, s)  -> s
+                           Proof (_, s)  -> Just s
                            _             -> Nothing
 
 -- | The "Symbolic" value. Either a constant (@Left@) or a symbolic
@@ -556,7 +585,7 @@ svMkSymVar mbQ k mbNm = do
         let q = case (mbQ, runMode st) of
                   (Just x,  _)                -> x   -- user given, just take it
                   (Nothing, Concrete{})       -> ALL -- concrete simulation, pick universal
-                  (Nothing, Proof (True, _))  -> EX  -- sat mode, pick existential
+                  (Nothing, Proof (True,  _)) -> EX  -- sat mode, pick existential
                   (Nothing, Proof (False, _)) -> ALL -- proof mode, pick universal
                   (Nothing, CodeGen)          -> ALL -- code generation, pick universal
         case runMode st of
@@ -580,10 +609,10 @@ mkSValUserSort k mbQ mbNm = do
         liftIO $ registerKind st k
         let q = case (mbQ, runMode st) of
                   (Just x,  _)                -> x
-                  (Nothing, Proof (True, _))  -> EX
+                  (Nothing, Proof (True,  _)) -> EX
                   (Nothing, Proof (False, _)) -> ALL
-                  (Nothing, Concrete{})       -> error $ "SBV: Uninterpreted sort " ++ sortName ++ " can not be used in concrete simulation mode."
                   (Nothing, CodeGen)          -> error $ "SBV: Uninterpreted sort " ++ sortName ++ " can not be used in code-generation mode."
+                  (Nothing, Concrete{})       -> error $ "SBV: Uninterpreted sort " ++ sortName ++ " can not be used in concrete simulation mode."
         ctr <- liftIO $ incCtr st
         let sw = SW k (NodeId ctr)
             nm = fromMaybe ('s':show ctr) mbNm
@@ -602,8 +631,8 @@ addAxiom nm ax = do
 
 -- | Run a symbolic computation in Proof mode and return a 'Result'. The boolean
 -- argument indicates if this is a sat instance or not.
-runSymbolic :: (Bool, Maybe SMTConfig) -> Symbolic a -> IO Result
-runSymbolic b c = snd `fmap` runSymbolic' (Proof b) c
+runSymbolic :: (Bool, SMTConfig) -> Symbolic a -> IO Result
+runSymbolic m c = snd `fmap` runSymbolic' (Proof m) c
 
 -- | Run a symbolic computation, and return a extra value paired up with the 'Result'
 runSymbolic' :: SBVRunMode -> Symbolic a -> IO (a, Result)
@@ -834,11 +863,15 @@ uncacheGen getCache (Cached f) st = do
                         r `seq` modifyIORef rCache (IMap.insertWith (++) h [(sn, r)])
                         return r
 
--- | Representation of SMTLib Program versions, currently we only know of versions 1 and 2.
--- (NB. Eventually, we should just drop SMTLib1.)
-data SMTLibVersion = SMTLib1
-                   | SMTLib2
-                   deriving Eq
+-- | Representation of SMTLib Program versions. As of June 2015, we're dropping support
+-- for SMTLib1, and supporting SMTLib2 only. We keep this data-type around in case
+-- SMTLib3 comes along and we want to support 2 and 3 simultaneously.
+data SMTLibVersion = SMTLib2
+                   deriving (Bounded, Enum, Eq, Show)
+
+-- | The extension associated with the version
+smtLibVersionExtension :: SMTLibVersion -> String
+smtLibVersionExtension SMTLib2 = "smt2"
 
 -- | Representation of an SMT-Lib program. In between pre and post goes the refuted models
 data SMTLibPgm = SMTLibPgm SMTLibVersion  ( [(String, SW)]          -- alias table
@@ -866,7 +899,6 @@ instance NFData SW            where rnf a = seq a ()
 instance NFData SBVExpr       where rnf a = seq a ()
 instance NFData Quantifier    where rnf a = seq a ()
 instance NFData SBVType       where rnf a = seq a ()
-instance NFData UnintKind     where rnf a = seq a ()
 instance NFData a => NFData (Cached a) where
   rnf (Cached f) = f `seq` ()
 instance NFData SVal where
@@ -882,7 +914,7 @@ instance NFData SMTResult where
   rnf (TimeOut _)         = ()
 
 instance NFData SMTModel where
-  rnf (SMTModel assocs unints uarrs) = rnf assocs `seq` rnf unints `seq` rnf uarrs `seq` ()
+  rnf (SMTModel assocs) = rnf assocs `seq` ()
 
 instance NFData SMTScript where
   rnf (SMTScript b m) = rnf b `seq` rnf m `seq` ()
@@ -954,7 +986,7 @@ data RoundingMode = RoundNearestTiesToEven  -- ^ Round to nearest representable 
                   | RoundTowardPositive     -- ^ Round towards positive infinity. (Also known as rounding-up or ceiling.)
                   | RoundTowardNegative     -- ^ Round towards negative infinity. (Also known as rounding-down or floor.)
                   | RoundTowardZero         -- ^ Round towards zero. (Also known as truncation.)
-                  deriving (Eq, Ord, G.Data, T.Typeable, Read, Show, Bounded, Enum)
+                  deriving (Eq, Ord, Show, Read, G.Data, Bounded, Enum)
 
 -- | Solver configuration. See also 'z3', 'yices', 'cvc4', 'boolector', 'mathSAT', etc. which are instantiations of this type for those solvers, with
 -- reasonable defaults. In particular, custom configuration can be created by varying those values. (Such as @z3{verbose=True}@.)
@@ -973,19 +1005,19 @@ data RoundingMode = RoundNearestTiesToEven  -- ^ Round to nearest representable 
 -- The 'printBase' field can be used to print numbers in base 2, 10, or 16. If base 2 or 16 is used, then floating-point values will
 -- be printed in their internal memory-layout format as well, which can come in handy for bit-precise analysis.
 data SMTConfig = SMTConfig {
-         verbose        :: Bool             -- ^ Debug mode
-       , timing         :: Bool             -- ^ Print timing information on how long different phases took (construction, solving, etc.)
-       , sBranchTimeOut :: Maybe Int        -- ^ How much time to give to the solver for each call of 'sBranch' check. (In seconds. Default: No limit.)
-       , timeOut        :: Maybe Int        -- ^ How much time to give to the solver. (In seconds. Default: No limit.)
-       , printBase      :: Int              -- ^ Print integral literals in this base (2, 10, and 16 are supported.)
-       , printRealPrec  :: Int              -- ^ Print algebraic real values with this precision. (SReal, default: 16)
-       , solverTweaks   :: [String]         -- ^ Additional lines of script to give to the solver (user specified)
-       , satCmd         :: String           -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
-       , smtFile        :: Maybe FilePath   -- ^ If Just, the generated SMT script will be put in this file (for debugging purposes mostly)
-       , useSMTLib2     :: Bool             -- ^ If True, we'll treat the solver as using SMTLib2 input format. Otherwise, SMTLib1
-       , solver         :: SMTSolver        -- ^ The actual SMT solver.
-       , roundingMode   :: RoundingMode     -- ^ Rounding mode to use for floating-point conversions
-       , useLogic       :: Maybe Logic      -- ^ If Nothing, pick automatically. Otherwise, either use the given one, or use the custom string.
+         verbose        :: Bool           -- ^ Debug mode
+       , timing         :: Bool           -- ^ Print timing information on how long different phases took (construction, solving, etc.)
+       , sBranchTimeOut :: Maybe Int      -- ^ How much time to give to the solver for each call of 'sBranch' check. (In seconds. Default: No limit.)
+       , timeOut        :: Maybe Int      -- ^ How much time to give to the solver. (In seconds. Default: No limit.)
+       , printBase      :: Int            -- ^ Print integral literals in this base (2, 10, and 16 are supported.)
+       , printRealPrec  :: Int            -- ^ Print algebraic real values with this precision. (SReal, default: 16)
+       , solverTweaks   :: [String]       -- ^ Additional lines of script to give to the solver (user specified)
+       , satCmd         :: String         -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
+       , smtFile        :: Maybe FilePath -- ^ If Just, the generated SMT script will be put in this file (for debugging purposes mostly)
+       , smtLibVersion  :: SMTLibVersion  -- ^ What version of SMT-lib we use for the tool
+       , solver         :: SMTSolver      -- ^ The actual SMT solver.
+       , roundingMode   :: RoundingMode   -- ^ Rounding mode to use for floating-point conversions
+       , useLogic       :: Maybe Logic    -- ^ If Nothing, pick automatically. Otherwise, either use the given one, or use the custom string.
        }
 
 instance Show SMTConfig where
@@ -994,8 +1026,6 @@ instance Show SMTConfig where
 -- | A model, as returned by a solver
 data SMTModel = SMTModel {
         modelAssocs    :: [(String, CW)]        -- ^ Mapping of symbolic values to constants.
-     ,  modelArrays    :: [(String, [String])]  -- ^ Arrays, very crude; only works with Yices.
-     ,  modelUninterps :: [(String, [String])]  -- ^ Uninterpreted funcs; very crude; only works with Yices.
      }
      deriving Show
 
@@ -1017,7 +1047,7 @@ data SMTScript = SMTScript {
         }
 
 -- | An SMT engine
-type SMTEngine = SMTConfig -> Bool -> [(Quantifier, NamedSymVar)] -> [(String, UnintKind)] -> [Either SW (SW, [SW])] -> String -> IO SMTResult
+type SMTEngine = SMTConfig -> Bool -> [(Quantifier, NamedSymVar)] -> [Either SW (SW, [SW])] -> String -> IO SMTResult
 
 -- | Solvers that SBV is aware of
 data Solver = Z3
@@ -1030,13 +1060,14 @@ data Solver = Z3
 
 -- | An SMT solver
 data SMTSolver = SMTSolver {
-         name           :: Solver               -- ^ The solver in use
-       , executable     :: String               -- ^ The path to its executable
-       , options        :: [String]             -- ^ Options to provide to the solver
-       , engine         :: SMTEngine            -- ^ The solver engine, responsible for interpreting solver output
-       , xformExitCode  :: ExitCode -> ExitCode -- ^ Should we re-interpret exit codes. Most solvers behave rationally, i.e., id will do. Some (like CVC4) don't.
-       , capabilities   :: SolverCapabilities   -- ^ Various capabilities of the solver
+         name           :: Solver             -- ^ The solver in use
+       , executable     :: String             -- ^ The path to its executable
+       , options        :: [String]           -- ^ Options to provide to the solver
+       , engine         :: SMTEngine          -- ^ The solver engine, responsible for interpreting solver output
+       , capabilities   :: SolverCapabilities -- ^ Various capabilities of the solver
        }
 
 instance Show SMTSolver where
    show = show . name
+
+{-# ANN type FPOp   ("HLint: ignore Use camelCase" :: String) #-}

@@ -10,7 +10,6 @@
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE DefaultSignatures   #-}
 
 module Data.SBV.SMT.SMT where
@@ -22,20 +21,23 @@ import Control.DeepSeq    (NFData(..))
 import Control.Monad      (when, zipWithM)
 import Data.Char          (isSpace)
 import Data.Int           (Int8, Int16, Int32, Int64)
-import Data.List          (intercalate, isPrefixOf, isInfixOf)
+import Data.Function      (on)
+import Data.List          (intercalate, isPrefixOf, isInfixOf, sortBy)
 import Data.Word          (Word8, Word16, Word32, Word64)
 import System.Directory   (findExecutable)
-import System.Process     (runInteractiveProcess, waitForProcess, terminateProcess)
+import System.Environment (getEnv)
 import System.Exit        (ExitCode(..))
 import System.IO          (hClose, hFlush, hPutStr, hGetContents, hGetLine)
+import System.Process     (runInteractiveProcess, waitForProcess, terminateProcess)
 
 import qualified Data.Map as M
-import Data.Typeable
 
 import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.PrettyNum
-import Data.SBV.Utils.Lib (joinArgs)
+import Data.SBV.BitVectors.Symbolic   (SMTEngine)
+import Data.SBV.SMT.SMTLib            (interpretSolverOutput, interpretSolverModelLine)
+import Data.SBV.Utils.Lib             (joinArgs, splitArgs)
 import Data.SBV.Utils.TDiff
 
 -- | Extract the final configuration from a result
@@ -88,22 +90,6 @@ instance Show AllSatResult where
               where ok = case c of
                            Satisfiable{} -> True
                            _             -> False
-
--- | The result of an 'sAssert' call
-data SafeResult = SafeNeverFails
-                | SafeAlwaysFails  String
-                | SafeFailsInModel String SMTConfig SMTModel
-                deriving Typeable
-
--- | The show instance for SafeResult. Note that this is for display purposes only,
--- user programs are likely to pattern match on the output and proceed accordingly.
-instance Show SafeResult where
-   show SafeNeverFails              = "No safety violations detected."
-   show (SafeAlwaysFails s)         = intercalate "\n" ["Assertion failure: " ++ show s, "*** Fails in all assignments to inputs"]
-   show (SafeFailsInModel s cfg md) = intercalate "\n" ["Assertion failure: " ++ show s, showModel cfg md]
-
--- | If a 'prove' or 'sat' call comes accross an 'sAssert' call that fails, they will throw a 'SafeResult' as an exception.
-instance C.Exception SafeResult
 
 -- | Instances of 'SatModel' can be automatically extracted from models returned by the
 -- solvers. The idea is that the sbv infrastructure provides a stream of 'CW''s (constant-words)
@@ -337,23 +323,20 @@ displayModels disp (AllSatResult (_, ms)) = do
 -- | Show an SMTResult; generic version
 showSMTResult :: String -> String -> String -> String -> String -> SMTResult -> String
 showSMTResult unsatMsg unkMsg unkMsgModel satMsg satMsgModel result = case result of
-  Unsatisfiable _                   -> unsatMsg
-  Satisfiable _ (SMTModel [] [] []) -> satMsg
-  Satisfiable _ m                   -> satMsgModel ++ showModel cfg m
-  Unknown _ (SMTModel [] [] [])     -> unkMsg
-  Unknown _ m                       -> unkMsgModel ++ showModel cfg m
-  ProofError _ []                   -> "*** An error occurred. No additional information available. Try running in verbose mode"
-  ProofError _ ls                   -> "*** An error occurred.\n" ++ intercalate "\n" (map ("***  " ++) ls)
-  TimeOut _                         -> "*** Timeout"
+  Unsatisfiable _             -> unsatMsg
+  Satisfiable _ (SMTModel []) -> satMsg
+  Satisfiable _ m             -> satMsgModel ++ showModel cfg m
+  Unknown     _ (SMTModel []) -> unkMsg
+  Unknown     _ m             -> unkMsgModel ++ showModel cfg m
+  ProofError  _ []            -> "*** An error occurred. No additional information available. Try running in verbose mode"
+  ProofError  _ ls            -> "*** An error occurred.\n" ++ intercalate "\n" (map ("***  " ++) ls)
+  TimeOut     _               -> "*** Timeout"
  where cfg = resultConfig result
 
 -- | Show a model in human readable form
 showModel :: SMTConfig -> SMTModel -> String
-showModel cfg m = intercalate "\n" (map shM assocs ++ concatMap shUI uninterps ++ concatMap shUA arrs)
-  where assocs     = modelAssocs m
-        uninterps  = modelUninterps m
-        arrs       = modelArrays m
-        shM (s, v) = "  " ++ s ++ " = " ++ shCW cfg v
+showModel cfg m = intercalate "\n" $ map shM $ modelAssocs m
+  where shM (s, v) = "  " ++ s ++ " = " ++ shCW cfg v
 
 -- | Show a constant value, in the user-specified base
 shCW :: SMTConfig -> CW -> String
@@ -389,7 +372,7 @@ pipeProcess cfg execName opts script cleanErrs = do
                         Left s                          -> return $ Left s
                         Right (ec, contents, allErrors) ->
                           let errors = dropWhile isSpace (cleanErrs allErrors)
-                          in case (null errors, xformExitCode (solver cfg) ec) of
+                          in case (null errors, ec) of
                                 (True, ExitSuccess)  -> return $ Right $ map clean (filter (not . null) (lines contents))
                                 (_, ec')             -> let errors' = if null errors
                                                                       then (if null (dropWhile isSpace contents)
@@ -411,6 +394,47 @@ pipeProcess cfg execName opts script cleanErrs = do
                                                                          ++ "\nGiving up.."
   where clean = reverse . dropWhile isSpace . reverse . dropWhile isSpace
         line  = replicate 78 '='
+
+-- | The standard-model that most SMT solvers should happily work with
+standardModel :: (Bool -> [(Quantifier, NamedSymVar)] -> [String] -> SMTModel, SW -> String -> [String])
+standardModel = (standardModelExtractor, standardValueExtractor)
+
+-- | Some solvers (Z3) require multiple calls for certain value extractions; as in multi-precision reals. Deal with that here
+standardValueExtractor :: SW -> String -> [String]
+standardValueExtractor _ l = [l]
+
+-- | A standard post-processor: Reading the lines of solver output and turning it into a model:
+standardModelExtractor :: Bool -> [(Quantifier, NamedSymVar)] -> [String] -> SMTModel
+standardModelExtractor isSat qinps solverLines = SMTModel { modelAssocs = map snd $ sortByNodeId $ concatMap (interpretSolverModelLine inps) solverLines }
+         where sortByNodeId :: [(Int, a)] -> [(Int, a)]
+               sortByNodeId = sortBy (compare `on` fst)
+               inps -- for "sat", display the prefix existentials. For completeness, we will drop
+                    -- only the trailing foralls. Exception: Don't drop anything if it's all a sequence of foralls
+                    | isSat = map snd $ if all (== ALL) (map fst qinps)
+                                        then qinps
+                                        else reverse $ dropWhile ((== ALL) . fst) $ reverse qinps
+                    -- for "proof", just display the prefix universals
+                    | True  = map snd $ takeWhile ((== ALL) . fst) qinps
+
+-- | A standard engine interface. Most solvers follow-suit here in how we "chat" to them..
+standardEngine :: String
+               -> String
+               -> ([String] -> Int -> [String])
+               -> (Bool -> [(Quantifier, NamedSymVar)] -> [String] -> SMTModel, SW -> String -> [String])
+               -> SMTEngine
+standardEngine envName envOptName addTimeOut (extractMap, extractValue) cfg isSat qinps skolemMap pgm = do
+    execName <-                    getEnv envName     `C.catch` (\(_ :: C.SomeException) -> return (executable (solver cfg)))
+    execOpts <- (splitArgs `fmap`  getEnv envOptName) `C.catch` (\(_ :: C.SomeException) -> return (options (solver cfg)))
+    let cfg'    = cfg {solver = (solver cfg) {executable = execName, options = maybe execOpts (addTimeOut execOpts) (timeOut cfg)}}
+        tweaks  = case solverTweaks cfg' of
+                    [] -> ""
+                    ts -> unlines $ "; --- user given solver tweaks ---" : ts ++ ["; --- end of user given tweaks ---"]
+        cont rm = intercalate "\n" $ concatMap extract skolemMap
+           where extract (Left s)        = extractValue s $ "(echo \"((" ++ show s ++ " " ++ mkSkolemZero rm (kindOf s) ++ "))\")"
+                 extract (Right (s, [])) = extractValue s $ "(get-value (" ++ show s ++ "))"
+                 extract (Right (s, ss)) = extractValue s $ "(get-value (" ++ show s ++ concat [' ' : mkSkolemZero rm (kindOf a) | a <- ss] ++ "))"
+        script = SMTScript {scriptBody = tweaks ++ pgm, scriptModel = Just (cont (roundingMode cfg))}
+    standardSolver cfg' script id (ProofError cfg') (interpretSolverOutput cfg' (extractMap isSat qinps))
 
 -- | A standard solver interface. If the solver is SMT-Lib compliant, then this function should suffice in
 -- communicating with it.

@@ -12,20 +12,19 @@
 
 {-# LANGUAGE Rank2Types    #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE CPP           #-}
 
 module TestSuite.Basics.ArithNoSolver(testSuite) where
 
 import Data.SBV
+import Data.SBV.Internals
+
+import Data.Maybe(fromJust, fromMaybe)
 
 import SBVTest
+import qualified Data.Binary.IEEE754 as DB (wordToFloat, wordToDouble)
 
 ghcBitSize :: Bits a => a -> Int
-#if __GLASGOW_HASKELL__ >= 708
-ghcBitSize x = maybe (error "SBV.ghcBitSize: Unexpected non-finite usage!") id (bitSizeMaybe x)
-#else
-ghcBitSize = bitSize
-#endif
+ghcBitSize x = fromMaybe (error "SBV.ghcBitSize: Unexpected non-finite usage!") (bitSizeMaybe x)
 
 -- Test suite
 testSuite :: SBVTestSuite
@@ -61,7 +60,7 @@ testSuite = mkTestSuite $ \_ -> test $
      ++ genIntTestS "rotateL"          rotateL
      ++ genIntTestS "rotateR"          rotateR
      ++ genBlasts
-     ++ genCasts
+     ++ genIntCasts
 
 genBinTest :: String -> (forall a. (Num a, Bits a) => a -> a -> a) -> [Test]
 genBinTest nm op = map mkTest $
@@ -154,56 +153,57 @@ genBlasts = map mkTest $
           ++ [(show x, fromBitsBE (blastBE x) .== x) | x <- si64s]
   where mkTest (x, r) = "blast-" ++ x ~: r `showsAs` "True"
 
-genCasts :: [Test]
-genCasts = map mkTest $
-            [(show x, unsignCast (signCast x) .== x) | x <- sw8s ]
-         ++ [(show x, unsignCast (signCast x) .== x) | x <- sw16s]
-         ++ [(show x, unsignCast (signCast x) .== x) | x <- sw32s]
-         ++ [(show x, unsignCast (signCast x) .== x) | x <- sw64s]
-         ++ [(show x, signCast (unsignCast x) .== x) | x <- si8s ]
-         ++ [(show x, signCast (unsignCast x) .== x) | x <- si16s]
-         ++ [(show x, signCast (unsignCast x) .== x) | x <- si8s ]
-         ++ [(show x, signCast (unsignCast x) .== x) | x <- si16s]
-         ++ [(show x, signCast (unsignCast x) .== x) | x <- si32s]
-         ++ [(show x, signCast (unsignCast x) .== x) | x <- si64s]
-         ++ [(show x, signCast x .== fromBitsLE (blastLE x))   | x <- sw8s ]
-         ++ [(show x, signCast x .== fromBitsLE (blastLE x))   | x <- sw16s]
-         ++ [(show x, signCast x .== fromBitsLE (blastLE x))   | x <- sw32s]
-         ++ [(show x, signCast x .== fromBitsLE (blastLE x))   | x <- sw64s]
-         ++ [(show x, unsignCast x .== fromBitsLE (blastLE x)) | x <- si8s ]
-         ++ [(show x, unsignCast x .== fromBitsLE (blastLE x)) | x <- si16s]
-         ++ [(show x, unsignCast x .== fromBitsLE (blastLE x)) | x <- si32s]
-         ++ [(show x, unsignCast x .== fromBitsLE (blastLE x)) | x <- si64s]
-  where mkTest (x, r) = "cast-" ++ x ~: r `showsAs` "True"
+genIntCasts :: [Test]
+genIntCasts = map mkTest $  cast w8s ++ cast w16s ++ cast w32s ++ cast w64s
+                         ++ cast i8s ++ cast i16s ++ cast i32s ++ cast i64s
+                         ++ cast iUBs
+   where mkTest (x, r) = "intCast-" ++ x ~: r `showsAs` "True"
+         lhs x = sFromIntegral (literal x)
+         rhs x = literal (fromIntegral x)
+         cast :: forall a. (Show a, Integral a, Bits a, SymWord a) => [a] -> [(String, SBool)]
+         cast xs = toWords xs ++ toInts xs
+         toWords xs =  [(show x, lhs x .== (rhs x :: SWord8 ))  | x <- xs]
+                    ++ [(show x, lhs x .== (rhs x :: SWord16))  | x <- xs]
+                    ++ [(show x, lhs x .== (rhs x :: SWord32))  | x <- xs]
+                    ++ [(show x, lhs x .== (rhs x :: SWord64))  | x <- xs]
+         toInts  xs =  [(show x, lhs x .== (rhs x :: SInt8 ))   | x <- xs]
+                    ++ [(show x, lhs x .== (rhs x :: SInt16))   | x <- xs]
+                    ++ [(show x, lhs x .== (rhs x :: SInt32))   | x <- xs]
+                    ++ [(show x, lhs x .== (rhs x :: SInt64))   | x <- xs]
+                    ++ [(show x, lhs x .== (rhs x :: SInteger)) | x <- xs]
 
 genQRems :: [Test]
 genQRems = map mkTest $
-        zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- w8s,  y <- w8s ]                 [x `sDivMod`  y | x <- sw8s,  y <- sw8s ]
-     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- w16s, y <- w16s]                 [x `sDivMod`  y | x <- sw16s, y <- sw16s]
-     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- w32s, y <- w32s]                 [x `sDivMod`  y | x <- sw32s, y <- sw32s]
-     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- w64s, y <- w64s]                 [x `sDivMod`  y | x <- sw64s, y <- sw64s]
-     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i8s,  y <- i8s , noOverflow x y] [x `sDivMod`  y | x <- si8s,  y <- si8s , noOverflow x y]
-     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i16s, y <- i16s, noOverflow x y] [x `sDivMod`  y | x <- si16s, y <- si16s, noOverflow x y]
-     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i32s, y <- i32s, noOverflow x y] [x `sDivMod`  y | x <- si32s, y <- si32s, noOverflow x y]
-     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- i64s, y <- i64s, noOverflow x y] [x `sDivMod`  y | x <- si64s, y <- si64s, noOverflow x y]
-     ++ zipWith pair [("divMod",  show x, show y, x `divMod'`  y) | x <- iUBs, y <- iUBs]                 [x `sDivMod`  y | x <- siUBs, y <- siUBs]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- w8s,  y <- w8s ]                 [x `sQuotRem` y | x <- sw8s,  y <- sw8s ]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- w16s, y <- w16s]                 [x `sQuotRem` y | x <- sw16s, y <- sw16s]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- w32s, y <- w32s]                 [x `sQuotRem` y | x <- sw32s, y <- sw32s]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- w64s, y <- w64s]                 [x `sQuotRem` y | x <- sw64s, y <- sw64s]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- i8s,  y <- i8s , noOverflow x y] [x `sQuotRem` y | x <- si8s,  y <- si8s , noOverflow x y]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- i16s, y <- i16s, noOverflow x y] [x `sQuotRem` y | x <- si16s, y <- si16s, noOverflow x y]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- i32s, y <- i32s, noOverflow x y] [x `sQuotRem` y | x <- si32s, y <- si32s, noOverflow x y]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- i64s, y <- i64s, noOverflow x y] [x `sQuotRem` y | x <- si64s, y <- si64s, noOverflow x y]
-     ++ zipWith pair [("quotRem", show x, show y, x `quotRem'` y) | x <- iUBs, y <- iUBs]                 [x `sQuotRem` y | x <- siUBs, y <- siUBs]
-  where divMod'  x y = if y == 0 then (0, x) else x `divMod`  y
-        quotRem' x y = if y == 0 then (0, x) else x `quotRem` y
-        pair (nm, x, y, (r1, r2)) (e1, e2)   = (nm, x, y, show (fromIntegral r1 `asTypeOf` e1, fromIntegral r2 `asTypeOf` e2) == show (e1, e2))
+        zipWith pair [("divMod",  show x, show y, x `divMod0`  y) | x <- w8s,  y <- w8s ] [x `sDivMod`  y | x <- sw8s,  y <- sw8s ]
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod0`  y) | x <- w16s, y <- w16s] [x `sDivMod`  y | x <- sw16s, y <- sw16s]
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod0`  y) | x <- w32s, y <- w32s] [x `sDivMod`  y | x <- sw32s, y <- sw32s]
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod0`  y) | x <- w64s, y <- w64s] [x `sDivMod`  y | x <- sw64s, y <- sw64s]
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod1`  y) | x <- i8s,  y <- i8s ] [x `sDivMod`  y | x <- si8s,  y <- si8s ]
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod1`  y) | x <- i16s, y <- i16s] [x `sDivMod`  y | x <- si16s, y <- si16s]
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod1`  y) | x <- i32s, y <- i32s] [x `sDivMod`  y | x <- si32s, y <- si32s]
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod1`  y) | x <- i64s, y <- i64s] [x `sDivMod`  y | x <- si64s, y <- si64s]
+     ++ zipWith pair [("divMod",  show x, show y, x `divMod0`  y) | x <- iUBs, y <- iUBs] [x `sDivMod`  y | x <- siUBs, y <- siUBs]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem0` y) | x <- w8s,  y <- w8s ] [x `sQuotRem` y | x <- sw8s,  y <- sw8s ]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem0` y) | x <- w16s, y <- w16s] [x `sQuotRem` y | x <- sw16s, y <- sw16s]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem0` y) | x <- w32s, y <- w32s] [x `sQuotRem` y | x <- sw32s, y <- sw32s]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem0` y) | x <- w64s, y <- w64s] [x `sQuotRem` y | x <- sw64s, y <- sw64s]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem1` y) | x <- i8s,  y <- i8s ] [x `sQuotRem` y | x <- si8s,  y <- si8s ]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem1` y) | x <- i16s, y <- i16s] [x `sQuotRem` y | x <- si16s, y <- si16s]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem1` y) | x <- i32s, y <- i32s] [x `sQuotRem` y | x <- si32s, y <- si32s]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem1` y) | x <- i64s, y <- i64s] [x `sQuotRem` y | x <- si64s, y <- si64s]
+     ++ zipWith pair [("quotRem", show x, show y, x `quotRem0` y) | x <- iUBs, y <- iUBs] [x `sQuotRem` y | x <- siUBs, y <- siUBs]
+  where pair (nm, x, y, (r1, r2)) (e1, e2)   = (nm, x, y, show (fromIntegral r1 `asTypeOf` e1, fromIntegral r2 `asTypeOf` e2) == show (e1, e2))
         mkTest (nm, x, y, s) = "arithCF-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: s `showsAs` "True"
-        -- Haskell's divMod and quotRem overflows if x == minBound and y == -1 for bounded signed types; so avoid that case
-        -- NB. There's a bug filed against this; so remove this when it gets fixed:
-        -- See: https://ghc.haskell.org/trac/ghc/ticket/8695
-        noOverflow x y = not (x == minBound && y == -1)
+        -- Haskell's divMod and quotRem differs from SBV's in two ways:
+        --     - when y is 0, Haskell throws an exception, SBV sets the result to 0; like in division
+        --     - Haskell overflows if x == minBound and y == -1 for bounded signed types; but SBV returns minBound, 0; which is more meaningful
+        -- NB. There was a ticket filed against the second anomaly above, See: https://ghc.haskell.org/trac/ghc/ticket/8695
+        -- But the Haskell folks decided not to fix it. Sigh..
+        overflow x y = x == minBound && y == -1
+        divMod0  x y = if y == 0       then (0, x) else x `divMod`   y
+        divMod1  x y = if overflow x y then (x, 0) else x `divMod0`  y
+        quotRem0 x y = if y == 0       then (0, x) else x `quotRem`  y
+        quotRem1 x y = if overflow x y then (x, 0) else x `quotRem0` y
 
 genReals :: [Test]
 genReals = map mkTest $
@@ -221,61 +221,183 @@ genReals = map mkTest $
         mkTest (nm, (x, y, s)) = "arithCF-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: s `showsAs` "True"
 
 genFloats :: [Test]
-genFloats = bTests ++ uTests
-  where bTests = map mkTest2 $
-                   map ("+",)  (zipWith pair  [(show x, show y, x +  y) | x <- fs, y <- fs        ] [x +   y | x <- sfs,  y <- sfs                       ])
-                ++ map ("-",)  (zipWith pair  [(show x, show y, x -  y) | x <- fs, y <- fs        ] [x -   y | x <- sfs,  y <- sfs                       ])
-                ++ map ("*",)  (zipWith pair  [(show x, show y, x *  y) | x <- fs, y <- fs        ] [x *   y | x <- sfs,  y <- sfs                       ])
-                ++ map ("<",)  (zipWith pairB [(     x,      y, x <  y) | x <- fs, y <- fs        ] [x .<  y | x <- sfs,  y <- sfs                       ])
-                ++ map ("<=",) (zipWith pairB [(     x,      y, x <= y) | x <- fs, y <- fs        ] [x .<= y | x <- sfs,  y <- sfs                       ])
-                ++ map (">",)  (zipWith pairB [(     x,      y, x >  y) | x <- fs, y <- fs        ] [x .>  y | x <- sfs,  y <- sfs                       ])
-                ++ map (">=",) (zipWith pairB [(     x,      y, x >= y) | x <- fs, y <- fs        ] [x .>= y | x <- sfs,  y <- sfs                       ])
-                ++ map ("==",) (zipWith pairB [(     x,      y, x == y) | x <- fs, y <- fs        ] [x .== y | x <- sfs,  y <- sfs                       ])
-                ++ map ("/=",) (zipWith pairN [(     x,      y, x /= y) | x <- fs, y <- fs        ] [x ./= y | x <- sfs,  y <- sfs                       ])
-                ++ map ("/",)  (zipWith pair  [(show x, show y, x /  y) | x <- fs, y <- fs, y /= 0] [x / y   | x <- sfs,  y <- sfs, unliteral y /= Just 0])
-                ++ map ("+",)  (zipWith pair  [(show x, show y, x +  y) | x <- ds, y <- ds        ] [x +   y | x <- sds,  y <- sds                       ])
-                ++ map ("-",)  (zipWith pair  [(show x, show y, x -  y) | x <- ds, y <- ds        ] [x -   y | x <- sds,  y <- sds                       ])
-                ++ map ("*",)  (zipWith pair  [(show x, show y, x *  y) | x <- ds, y <- ds        ] [x *   y | x <- sds,  y <- sds                       ])
-                ++ map ("<",)  (zipWith pairB [(     x,      y, x <  y) | x <- ds, y <- ds        ] [x .<  y | x <- sds,  y <- sds                       ])
-                ++ map ("<=",) (zipWith pairB [(     x,      y, x <= y) | x <- ds, y <- ds        ] [x .<= y | x <- sds,  y <- sds                       ])
-                ++ map (">",)  (zipWith pairB [(     x,      y, x >  y) | x <- ds, y <- ds        ] [x .>  y | x <- sds,  y <- sds                       ])
-                ++ map (">=",) (zipWith pairB [(     x,      y, x >= y) | x <- ds, y <- ds        ] [x .>= y | x <- sds,  y <- sds                       ])
-                ++ map ("==",) (zipWith pairB [(     x,      y, x == y) | x <- ds, y <- ds        ] [x .== y | x <- sds,  y <- sds                       ])
-                ++ map ("/=",) (zipWith pairN [(     x,      y, x /= y) | x <- ds, y <- ds        ] [x ./= y | x <- sds,  y <- sds                       ])
-                ++ map ("/",)  (zipWith pair  [(show x, show y, x /  y) | x <- ds, y <- ds, y /= 0] [x / y   | x <- sds,  y <- sds, unliteral y /= Just 0])
+genFloats = bTests ++ uTests ++ fpTests1 ++ fpTests2 ++ converts
+  where bTests = map mkTest2 $  floatRun2  "+"  (+)  (+)   comb
+                             ++ doubleRun2 "+"  (+)  (+)   comb
+
+                             ++ floatRun2  "-"  (-)  (-)   comb
+                             ++ doubleRun2 "-"  (-)  (-)   comb
+
+                             ++ floatRun2  "*"  (*)  (*)   comb
+                             ++ doubleRun2 "*"  (*)  (*)   comb
+
+                             ++ floatRun2  "/"  (/)  (/)   comb
+                             ++ doubleRun2 "/"  (/)  (/)   comb
+
+                             ++ floatRun2  "<"  (<)  (.<)  combB
+                             ++ doubleRun2 "<"  (<)  (.<)  combB
+
+                             ++ floatRun2  "<=" (<=) (.<=) combB
+                             ++ doubleRun2 "<=" (<=) (.<=) combB
+
+                             ++ floatRun2  ">"  (>)  (.>)  combB
+                             ++ doubleRun2 ">"  (>)  (.>)  combB
+
+                             ++ floatRun2  ">=" (>=) (.>=) combB
+                             ++ doubleRun2 ">=" (>=) (.>=) combB
+
+                             ++ floatRun2  "==" (==) (.==) combB
+                             ++ doubleRun2 "==" (==) (.==) combB
+
+                             ++ floatRun2  "/=" (/=) (./=) combN
+                             ++ doubleRun2 "/=" (/=) (./=) combN
+
+        fpTests1 = map mkTest1 $  floatRun1   "abs"               abs                abs               comb1
+                               ++ floatRun1   "fpAbs"             abs                fpAbs             comb1
+                               ++ doubleRun1  "abs"               abs                abs               comb1
+                               ++ doubleRun1  "fpAbs"             abs                fpAbs             comb1
+
+                               ++ floatRun1   "negate"            negate             negate            comb1
+                               ++ floatRun1   "fpNeg"             negate             fpNeg             comb1
+                               ++ doubleRun1  "negate"            negate             negate            comb1
+                               ++ doubleRun1  "fpNeg"             negate             fpNeg             comb1
+
+                               ++ floatRun1M  "fpSqrt"            sqrt               fpSqrt            comb1
+                               ++ doubleRun1M "fpSqrt"            sqrt               fpSqrt            comb1
+
+                               ++ floatRun1M  "fpRoundToIntegral" fpRoundToIntegralH fpRoundToIntegral comb1
+                               ++ doubleRun1M "fpRoundToIntegral" fpRoundToIntegralH fpRoundToIntegral comb1
+
+                               ++ floatRun1   "signum"            signum             signum            comb1
+                               ++ doubleRun1  "signum"            signum             signum            comb1
+
+        -- TODO. Can't possibly test fma, unless we FFI out to C. Leave it out for the time being
+        fpTests2 = map mkTest2 $  floatRun2M  "fpAdd"           (+)              fpAdd           comb
+                               ++ doubleRun2M "fpAdd"           (+)              fpAdd           comb
+
+                               ++ floatRun2M  "fpSub"           (-)              fpSub           comb
+                               ++ doubleRun2M "fpSub"           (-)              fpSub           comb
+
+                               ++ floatRun2M  "fpMul"           (*)              fpMul           comb
+                               ++ doubleRun2M "fpMul"           (*)              fpMul           comb
+
+                               ++ floatRun2M  "fpDiv"           (/)              fpDiv           comb
+                               ++ doubleRun2M "fpDiv"           (/)              fpDiv           comb
+
+                               ++ floatRun2   "fpMin"           fpMinH           fpMin           comb
+                               ++ doubleRun2  "fpMin"           fpMinH           fpMin           comb
+
+                               ++ floatRun2   "fpMax"           fpMaxH           fpMax           comb
+                               ++ doubleRun2  "fpMax"           fpMaxH           fpMax           comb
+
+                               ++ floatRun2   "fpRem"           fpRemH           fpRem           comb
+                               ++ doubleRun2  "fpRem"           fpRemH           fpRem           comb
+
+                               ++ floatRun2   "fpIsEqualObject" fpIsEqualObjectH fpIsEqualObject combE
+                               ++ doubleRun2  "fpIsEqualObject" fpIsEqualObjectH fpIsEqualObject combE
+
+        converts =  map cvtTest  [("toFP_Int8_ToFloat",     show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- i8s ]
+                 ++ map cvtTest  [("toFP_Int16_ToFloat",    show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- i16s]
+                 ++ map cvtTest  [("toFP_Int32_ToFloat",    show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- i32s]
+                 ++ map cvtTest  [("toFP_Int64_ToFloat",    show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- i64s]
+                 ++ map cvtTest  [("toFP_Word8_ToFloat",    show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- w8s ]
+                 ++ map cvtTest  [("toFP_Word16_ToFloat",   show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- w16s]
+                 ++ map cvtTest  [("toFP_Word32_ToFloat",   show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- w32s]
+                 ++ map cvtTest  [("toFP_Word64_ToFloat",   show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- w64s]
+                 ++ map cvtTest  [("toFP_Float_ToFloat",    show x, toSFloat  sRNE (literal x),                  literal x ) | x <- fs  ]
+                 ++ map cvtTest  [("toFP_Double_ToFloat",   show x, toSFloat  sRNE (literal x),           literal (fp2fp x)) | x <- ds  ]
+                 ++ map cvtTest  [("toFP_Integer_ToFloat",  show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- iUBs]
+                 ++ map cvtTest  [("toFP_Real_ToFloat",     show x, toSFloat  sRNE (literal x), fromRational (toRational x)) | x <- rs  ]
+
+                 ++ map cvtTest  [("toFP_Int8_ToDouble",    show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- i8s ]
+                 ++ map cvtTest  [("toFP_Int16_ToDouble",   show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- i16s]
+                 ++ map cvtTest  [("toFP_Int32_ToDouble",   show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- i32s]
+                 ++ map cvtTest  [("toFP_Int64_ToDouble",   show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- i64s]
+                 ++ map cvtTest  [("toFP_Word8_ToDouble",   show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- w8s ]
+                 ++ map cvtTest  [("toFP_Word16_ToDouble",  show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- w16s]
+                 ++ map cvtTest  [("toFP_Word32_ToDouble",  show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- w32s]
+                 ++ map cvtTest  [("toFP_Word64_ToDouble",  show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- w64s]
+                 ++ map cvtTest  [("toFP_Float_ToDouble",   show x, toSDouble sRNE (literal x),           literal (fp2fp x)) | x <- fs  ]
+                 ++ map cvtTest  [("toFP_Double_ToDouble",  show x, toSDouble sRNE (literal x),                   literal x) | x <- ds  ]
+                 ++ map cvtTest  [("toFP_Integer_ToDouble", show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- iUBs]
+                 ++ map cvtTest  [("toFP_Real_ToDouble",    show x, toSDouble sRNE (literal x), fromRational (toRational x)) | x <- rs  ]
+
+                 ++ map cvtTestI [("fromFP_Float_ToInt8",    show x, (fromSFloat sRNE :: SFloat -> SInt8)    (literal x), ((fromIntegral :: Integer -> SInt8)    . fpRound0) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToInt16",   show x, (fromSFloat sRNE :: SFloat -> SInt16)   (literal x), ((fromIntegral :: Integer -> SInt16)   . fpRound0) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToInt32",   show x, (fromSFloat sRNE :: SFloat -> SInt32)   (literal x), ((fromIntegral :: Integer -> SInt32)   . fpRound0) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToInt64",   show x, (fromSFloat sRNE :: SFloat -> SInt64)   (literal x), ((fromIntegral :: Integer -> SInt64)   . fpRound0) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToWord8",   show x, (fromSFloat sRNE :: SFloat -> SWord8)   (literal x), ((fromIntegral :: Integer -> SWord8)   . fpRound0) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToWord16",  show x, (fromSFloat sRNE :: SFloat -> SWord16)  (literal x), ((fromIntegral :: Integer -> SWord16)  . fpRound0) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToWord32",  show x, (fromSFloat sRNE :: SFloat -> SWord32)  (literal x), ((fromIntegral :: Integer -> SWord32)  . fpRound0) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToWord64",  show x, (fromSFloat sRNE :: SFloat -> SWord64)  (literal x), ((fromIntegral :: Integer -> SWord64)  . fpRound0) x) | x <- fs]
+                 ++ map cvtTest  [("fromFP_Float_ToFloat",   show x, (fromSFloat sRNE :: SFloat -> SFloat)   (literal x),                                            literal x) | x <- fs]
+                 ++ map cvtTest  [("fromFP_Float_ToDouble",  show x, (fromSFloat sRNE :: SFloat -> SDouble)  (literal x),                                 (literal .  fp2fp) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToInteger", show x, (fromSFloat sRNE :: SFloat -> SInteger) (literal x), ((fromIntegral :: Integer -> SInteger) . fpRound0) x) | x <- fs]
+                 ++ map cvtTestI [("fromFP_Float_ToReal",    show x, (fromSFloat sRNE :: SFloat -> SReal)    (literal x),                          (fromRational . fpRatio0) x) | x <- fs]
+
+                 ++ map cvtTestI [("fromFP_Double_ToInt8",    show x, (fromSDouble sRNE :: SDouble -> SInt8)    (literal x), ((fromIntegral :: Integer -> SInt8)    . fpRound0) x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToInt16",   show x, (fromSDouble sRNE :: SDouble -> SInt16)   (literal x), ((fromIntegral :: Integer -> SInt16)   . fpRound0) x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToInt32",   show x, (fromSDouble sRNE :: SDouble -> SInt32)   (literal x), ((fromIntegral :: Integer -> SInt32)   . fpRound0) x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToInt64",   show x, (fromSDouble sRNE :: SDouble -> SInt64)   (literal x), ((fromIntegral :: Integer -> SInt64)   . fpRound0) x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToWord8",   show x, (fromSDouble sRNE :: SDouble -> SWord8)   (literal x), ((fromIntegral :: Integer -> SWord8)   . fpRound0) x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToWord16",  show x, (fromSDouble sRNE :: SDouble -> SWord16)  (literal x), ((fromIntegral :: Integer -> SWord16)  . fpRound0) x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToWord32",  show x, (fromSDouble sRNE :: SDouble -> SWord32)  (literal x), ((fromIntegral :: Integer -> SWord32)  . fpRound0) x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToWord64",  show x, (fromSDouble sRNE :: SDouble -> SWord64)  (literal x), ((fromIntegral :: Integer -> SWord64)  . fpRound0) x) | x <- ds]
+                 ++ map cvtTest  [("fromFP_Double_ToFloat",   show x, (fromSDouble sRNE :: SDouble -> SFloat)   (literal x),                                (literal  .  fp2fp) x) | x <- ds]
+                 ++ map cvtTest  [("fromFP_Double_ToDouble",  show x, (fromSDouble sRNE :: SDouble -> SDouble)  (literal x),                                            literal x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToInteger", show x, (fromSDouble sRNE :: SDouble -> SInteger) (literal x), ((fromIntegral :: Integer -> SInteger) . fpRound0) x) | x <- ds]
+                 ++ map cvtTestI [("fromFP_Double_ToReal",    show x, (fromSDouble sRNE :: SDouble -> SReal)    (literal x),                          (fromRational . fpRatio0) x) | x <- ds]
+
+                 ++ map cvtTest  [("reinterp_Word32_Float",  show x, sWord32AsSFloat  (literal x), literal (DB.wordToFloat  x)) | x <- w32s]
+                 ++ map cvtTest  [("reinterp_Word64_Double", show x, sWord64AsSDouble (literal x), literal (DB.wordToDouble x)) | x <- w64s]
+
+                 ++ map cvtTestI [("reinterp_Float_Word32",  show x, sFloatAsSWord32  (sWord32AsSFloat  (literal x)) (literal x), literal true) | x <- w32s]
+                 ++ map cvtTestI [("reinterp_Double_Word64", show x, sDoubleAsSWord64 (sWord64AsSDouble (literal x)) (literal x), literal true) | x <- w64s]
+
+        floatRun1   nm f g cmb = map (nm,) [cmb (x,    f x,   extract (g                         (literal x)))             | x <- fs]
+        doubleRun1  nm f g cmb = map (nm,) [cmb (x,    f x,   extract (g                         (literal x)))             | x <- ds]
+        floatRun1M  nm f g cmb = map (nm,) [cmb (x,    f x,   extract (g sRNE (literal x)))                                | x <- fs]
+        doubleRun1M nm f g cmb = map (nm,) [cmb (x,    f x,   extract (g sRNE (literal x)))                                | x <- ds]
+        floatRun2   nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g                         (literal x) (literal y))) | x <- fs, y <- fs]
+        doubleRun2  nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g                         (literal x) (literal y))) | x <- ds, y <- ds]
+        floatRun2M  nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g sRNE (literal x) (literal y))) | x <- fs, y <- fs]
+        doubleRun2M nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g sRNE (literal x) (literal y))) | x <- ds, y <- ds]
         uTests = map mkTest1 $  concatMap (checkPred fs sfs) predicates
                              ++ concatMap (checkPred ds sds) predicates
-        pair (x, y, a) b = (x, y, same a (unliteral b))
-        same a (Just b) = (isNaN a &&& isNaN b) || (a == b)
-        same _ _        = False
-        pairB (x, y, a) b = (show x, show y, checkNaN f x y a (unliteral b)) where f v w = not (v || w)  -- Other comparison: Both should be False
-        pairN (x, y, a) b = (show x, show y, checkNaN f x y a (unliteral b)) where f v w =      v && w   -- /=: Both should be True
-        checkNaN f x y a (Just b)
+        extract :: SymWord a => SBV a -> a
+        extract = fromJust . unliteral
+        comb  (x, y, a, b) = (show x, show y, same a b)
+        combB (x, y, a, b) = (show x, show y, checkNaN f x y a b) where f v w = not (v || w)  -- All comparisons except /=: Both should be False if we have a NaN argument
+        combN (x, y, a, b) = (show x, show y, checkNaN f x y a b) where f v w =      v && w   -- /=: Both should be True
+        combE (x, y, a, b) = (show x, show y, a == b)
+        comb1 (x, a, b)    = (show x, same a b)
+        same a b = (isNaN a &&& isNaN b) || (a == b)
+        checkNaN f x y a b
           | isNaN x || isNaN y = f a b
           | True               = a == b
-        checkNaN _ _ _ _ _     = False
-        mkTest1 (nm, x, s)      = "arithCF-" ++ nm ++ "." ++ x ~: s `showsAs` "True"
+        cvtTest  (nm, x, a, b)  = "arithCF-" ++ nm ++ "." ++ x ~: same (extract a) (extract b) `showsAs` "True"
+        cvtTestI (nm, x, a, b)  = "arithCF-" ++ nm ++ "." ++ x ~: (a == b) `showsAs` "True"
+        mkTest1 (nm, (x, s))    = "arithCF-" ++ nm ++ "." ++ x ~: s `showsAs` "True"
         mkTest2 (nm, (x, y, s)) = "arithCF-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: s `showsAs` "True"
-        checkPred :: (Show a, RealFloat a, Floating a, SymWord a) => [a] -> [SBV a] -> (String, SBV a -> SBool, a -> Bool) -> [(String, String, Bool)]
+        checkPred :: (Show a, RealFloat a, Floating a, SymWord a) => [a] -> [SBV a] -> (String, SBV a -> SBool, a -> Bool) -> [(String, (String, Bool))]
         checkPred xs sxs (n, ps, p) = zipWith (chk n) (map (\x -> (x, p x)) xs) (map ps sxs)
           where chk nm (x, v) sv
                   -- Work around GHC bug, see issue #138
                   -- Remove the following line when fixed.
-                  | nm == "isPositiveZeroFP" && isNegativeZero x = (nm, show x, True)
-                  | True                                         = (nm, show x, Just v == unliteral sv)
-        predicates :: (RealFloat a, Floating a, SymWord a) => [(String, SBV a -> SBool, a -> Bool)]
-        predicates = [ ("isNormalFP",       isNormalFP,        isNormalized)
-                     , ("isSubnormalFP",    isSubnormalFP,     isDenormalized)
-                     , ("isZeroFP",         isZeroFP,          (== 0))
-                     , ("isInfiniteFP",     isInfiniteFP,      isInfinite)
-                     , ("isNaNFP",          isNaNFP,           isNaN)
-                     , ("isNegativeFP",     isNegativeFP,      \x -> x < 0  ||      isNegativeZero x)
-                     , ("isPositiveFP",     isPositiveFP,      \x -> x >= 0 && not (isNegativeZero x))
-                     , ("isNegativeZeroFP", isNegativeZeroFP,  isNegativeZero)
-                     , ("isPositiveZeroFP", isPositiveZeroFP,  \x -> x == 0 && not (isNegativeZero x))
-                     , ("isPointFP",        isPointFP,         \x -> not (isNaN x || isInfinite x))
+                  | nm == "fpIsPositiveZero" && isNegativeZero x = (nm, (show x, True))
+                  | True                                         = (nm, (show x, Just v == unliteral sv))
+        predicates :: IEEEFloating a => [(String, SBV a -> SBool, a -> Bool)]
+        predicates = [ ("fpIsNormal",       fpIsNormal,        fpIsNormalizedH)
+                     , ("fpIsSubnormal",    fpIsSubnormal,     isDenormalized)
+                     , ("fpIsZero",         fpIsZero,          (== 0))
+                     , ("fpIsInfinite",     fpIsInfinite,      isInfinite)
+                     , ("fpIsNaN",          fpIsNaN,           isNaN)
+                     , ("fpIsNegative",     fpIsNegative,      \x -> x < 0  ||      isNegativeZero x)
+                     , ("fpIsPositive",     fpIsPositive,      \x -> x >= 0 && not (isNegativeZero x))
+                     , ("fpIsNegativeZero", fpIsNegativeZero,  isNegativeZero)
+                     , ("fpIsPositiveZero", fpIsPositiveZero,  \x -> x == 0 && not (isNegativeZero x))
+                     , ("fpIsPoint",        fpIsPoint,         \x -> not (isNaN x || isInfinite x))
                      ]
-            where isNormalized x = not (isDenormalized x || isInfinite x || isNaN x)
 
 -- Concrete test data
 xsSigned, xsUnsigned :: (Num a, Enum a, Bounded a) => [a]
@@ -345,15 +467,15 @@ srs :: [SReal]
 srs = map literal rs
 
 fs :: [Float]
-fs = xs ++ map (* (-1)) xs
+fs = xs ++ map (* (-1)) (filter (not . isNaN) xs) -- -nan is the same as nan
  where xs = [nan, infinity, 0, 0.5, 0.68302244, 0.5268265, 0.10283524, 5.8336496e-2, 1.0e-45]
 
 sfs :: [SFloat]
 sfs = map literal fs
 
 ds :: [Double]
-ds = xs ++ map (* (-1)) xs
- where xs = [nan, infinity, 0, 0.5, 2.516632060108026e-2, 0.8601891300751106, 7.518897767550192e-2, 1.1656043286207285e-2, 1.0e-323]
+ds = xs ++ map (* (-1)) (filter (not . isNaN) xs) -- -nan is the same as nan
+ where xs = [nan, infinity, 0, 0.5, 2.516632060108026e-2, 0.8601891300751106, 7.518897767550192e-2, 1.1656043286207285e-2, 5.0e-324]
 
 sds :: [SDouble]
 sds = map literal ds

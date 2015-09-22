@@ -55,7 +55,7 @@ module Data.SBV.Dynamic
   , svRotateLeft, svRotateRight
   -- ** Conditionals: Mergeable values
   , svIte, svLazyIte, svSymbolicMerge
-  , svReduceInPathCondition
+  , svIsSatisfiableInCurrentPath
   -- * Uninterpreted sorts, constants, and functions
   , svUninterpreted
   -- * Properties, proofs, and satisfiability
@@ -68,7 +68,7 @@ module Data.SBV.Dynamic
   -- * Model extraction
 
   -- ** Inspecting proof results
-  , ThmResult(..), SatResult(..), AllSatResult(..), SMTResult(..), SafeResult(..)
+  , ThmResult(..), SatResult(..), AllSatResult(..), SMTResult(..)
 
   -- ** Programmable model extraction
   , genParse, getModel, getModelDictionary
@@ -121,50 +121,39 @@ import Data.SBV.Compilers.CodeGen
   , cgAddPrototype, cgAddDecl, cgAddLDFlags
   , cgIntegerSize, cgSRealType, CgSRealType(..)
   )
-import Data.SBV.Compilers.C
-  ( compileToC, compileToCLib )
-import Data.SBV.Provers.Prover
-  ( boolector, cvc4, yices, z3, mathSAT, abc, defaultSMTCfg )
-import Data.SBV.SMT.SMT
-  ( ThmResult(..), SatResult(..), AllSatResult(..), SafeResult(..), genParse )
-import Data.SBV.Tools.Optimize
-  ( OptimizeOpts(..) )
-import Data.SBV
-  ( sbvCurrentSolver, sbvCheckSolverInstallation, defaultSolverConfig, sbvAvailableSolvers )
+import Data.SBV.Compilers.C    (compileToC, compileToCLib)
+import Data.SBV.Provers.Prover (boolector, cvc4, yices, z3, mathSAT, abc, defaultSMTCfg)
+import Data.SBV.SMT.SMT        (ThmResult(..), SatResult(..), AllSatResult(..), genParse)
+import Data.SBV.Tools.Optimize (OptimizeOpts(..))
+import Data.SBV                (sbvCurrentSolver, sbvCheckSolverInstallation, defaultSolverConfig, sbvAvailableSolvers)
 
-import qualified Data.SBV as SBV
-  ( SBool, proveWithAll, proveWithAny, satWithAll, satWithAny, allSatWithAll, allSatWithAny )
-import qualified Data.SBV.BitVectors.Data as SBV
-  ( SBV(..) )
-import qualified Data.SBV.BitVectors.Model as SBV
-  ( reduceInPathCondition )
-import qualified Data.SBV.Provers.Prover as SBV
-  ( proveWith, satWith, compileToSMTLib, generateSMTBenchmarks )
-import qualified Data.SBV.SMT.SMT as SBV
-  ( Modelable(getModel, getModelDictionary) )
+import qualified Data.SBV                  as SBV (SBool, proveWithAll, proveWithAny, satWithAll, satWithAny, allSatWithAll, allSatWithAny)
+import qualified Data.SBV.BitVectors.Data  as SBV (SBV(..))
+import qualified Data.SBV.BitVectors.Model as SBV (isSatisfiableInCurrentPath)
+import qualified Data.SBV.Provers.Prover   as SBV (proveWith, satWith, compileToSMTLib, generateSMTBenchmarks)
+import qualified Data.SBV.SMT.SMT          as SBV (Modelable(getModel, getModelDictionary))
 
 -- | Reduce a condition (i.e., try to concretize it) under the given path
-svReduceInPathCondition :: SVal -> SVal
-svReduceInPathCondition t = c
-  where SBV.SBV c = SBV.reduceInPathCondition (SBV.SBV t)
+svIsSatisfiableInCurrentPath :: SVal -> Symbolic Bool
+svIsSatisfiableInCurrentPath = SBV.isSatisfiableInCurrentPath . toSBool
 
 toSBool :: SVal -> SBV.SBool
 toSBool = SBV.SBV
 
 -- | Compiles to SMT-Lib and returns the resulting program as a string. Useful for saving
 -- the result to a file for off-line analysis, for instance if you have an SMT solver that's not natively
--- supported out-of-the box by the SBV library. It takes two booleans:
+-- supported out-of-the box by the SBV library. It takes two arguments:
 --
---    * smtLib2: If 'True', will generate SMT-Lib2 output, otherwise SMT-Lib1 output
+--    * version: The SMTLib-version to produce. Note that we currently only support SMTLib2.
 --
 --    * isSat  : If 'True', will translate it as a SAT query, i.e., in the positive. If 'False', will
 --               translate as a PROVE query, i.e., it will negate the result. (In this case, the check-sat
 --               call to the SMT solver will produce UNSAT if the input is a theorem, as usual.)
-compileToSMTLib :: Bool   -- ^ If True, output SMT-Lib2, otherwise SMT-Lib1
-                -> Bool   -- ^ If True, translate directly, otherwise negate the goal. (Use True for SAT queries, False for PROVE queries.)
+compileToSMTLib :: SMTLibVersion   -- ^ If True, output SMT-Lib2, otherwise SMT-Lib1
+                -> Bool            -- ^ If True, translate directly, otherwise negate the goal. (Use True for SAT queries, False for PROVE queries.)
                 -> Symbolic SVal
                 -> IO String
-compileToSMTLib smtLib2 isSat s = SBV.compileToSMTLib smtLib2 isSat (fmap toSBool s)
+compileToSMTLib version isSat s = SBV.compileToSMTLib version isSat (fmap toSBool s)
 
 -- | Create both SMT-Lib1 and SMT-Lib2 benchmarks. The first argument is the basename of the file,
 -- SMT-Lib1 version will be written with suffix ".smt1" and SMT-Lib2 version will be written with

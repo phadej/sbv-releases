@@ -13,20 +13,19 @@
 
 {-# LANGUAGE Rank2Types    #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE CPP           #-}
 
 module TestSuite.Basics.ArithSolver(testSuite) where
 
+import Data.Maybe (fromMaybe, fromJust)
+import qualified Data.Binary.IEEE754 as DB (wordToFloat, wordToDouble)
+
 import Data.SBV
+import Data.SBV.Internals
 
 import SBVTest
 
 ghcBitSize :: Bits a => a -> Int
-#if __GLASGOW_HASKELL__ >= 708
-ghcBitSize x = maybe (error "SBV.ghcBitSize: Unexpected non-finite usage!") id (bitSizeMaybe x)
-#else
-ghcBitSize = bitSize
-#endif
+ghcBitSize x = fromMaybe (error "SBV.ghcBitSize: Unexpected non-finite usage!") (bitSizeMaybe x)
 
 -- Test suite
 testSuite :: SBVTestSuite
@@ -63,8 +62,7 @@ testSuite = mkTestSuite $ \_ -> test $
      ++ genIntTestS True   "rotateL"          rotateL
      ++ genIntTestS True   "rotateR"          rotateR
      ++ genBlasts
-     ++ genCasts
-
+     ++ genIntCasts
 
 genBinTest :: Bool -> String -> (forall a. (Num a, Bits a) => a -> a -> a) -> [Test]
 genBinTest unboundedOK nm op = map mkTest $  [(show x, show y, mkThm2 x y (x `op` y)) | x <- w8s,  y <- w8s ]
@@ -167,32 +165,25 @@ genBlasts = map mkTest $  [(show x, mkThm fromBitsLE blastLE x) | x <- w8s ]
                                      constrain $ a .== literal v
                                      return $ a .== from (to a)
 
-genCasts :: [Test]
-genCasts = map mkTest $  [(show x, mkThm unsignCast signCast x) | x <- w8s ]
-                      ++ [(show x, mkThm unsignCast signCast x) | x <- w16s]
-                      ++ [(show x, mkThm unsignCast signCast x) | x <- w32s]
-                      ++ [(show x, mkThm unsignCast signCast x) | x <- w64s]
-                      ++ [(show x, mkThm signCast unsignCast x) | x <- i8s ]
-                      ++ [(show x, mkThm signCast unsignCast x) | x <- i16s]
-                      ++ [(show x, mkThm signCast unsignCast x) | x <- i8s ]
-                      ++ [(show x, mkThm signCast unsignCast x) | x <- i16s]
-                      ++ [(show x, mkThm signCast unsignCast x) | x <- i32s]
-                      ++ [(show x, mkThm signCast unsignCast x) | x <- i64s]
-                      ++ [(show x, mkFEq signCast   (fromBitsLE . blastLE) x) | x <- w8s ]
-                      ++ [(show x, mkFEq signCast   (fromBitsLE . blastLE) x) | x <- w16s]
-                      ++ [(show x, mkFEq signCast   (fromBitsLE . blastLE) x) | x <- w32s]
-                      ++ [(show x, mkFEq signCast   (fromBitsLE . blastLE) x) | x <- w64s]
-                      ++ [(show x, mkFEq unsignCast (fromBitsLE . blastLE) x) | x <- i8s ]
-                      ++ [(show x, mkFEq unsignCast (fromBitsLE . blastLE) x) | x <- i16s]
-                      ++ [(show x, mkFEq unsignCast (fromBitsLE . blastLE) x) | x <- i32s]
-                      ++ [(show x, mkFEq unsignCast (fromBitsLE . blastLE) x) | x <- i64s]
-  where mkTest (x, t) = "genCasts.cast-" ++ x ~: assert t
-        mkThm from to v = isThm $ do a <- free "x"
-                                     constrain $ a .== literal v
-                                     return $ a .== from (to a)
-        mkFEq f g v = isThm $ do a <- free "x"
-                                 constrain $ a .== literal v
-                                 return $ f a .== g a
+genIntCasts :: [Test]
+genIntCasts = map mkTest $  cast w8s ++ cast w16s ++ cast w32s ++ cast w64s
+                         ++ cast i8s ++ cast i16s ++ cast i32s ++ cast i64s
+                         ++ cast iUBs
+   where mkTest (x, t) = "sIntCast-" ++ x ~: assert t
+         cast :: forall a. (Show a, Integral a, Bits a, SymWord a) => [a] -> [(String, IO Bool)]
+         cast xs = toWords xs ++ toInts xs
+         toWords xs =  [(show x, mkThm x (fromIntegral x :: Word8 ))  | x <- xs]
+                    ++ [(show x, mkThm x (fromIntegral x :: Word16))  | x <- xs]
+                    ++ [(show x, mkThm x (fromIntegral x :: Word32))  | x <- xs]
+                    ++ [(show x, mkThm x (fromIntegral x :: Word64))  | x <- xs]
+         toInts  xs =  [(show x, mkThm x (fromIntegral x :: Int8 ))   | x <- xs]
+                    ++ [(show x, mkThm x (fromIntegral x :: Int16))   | x <- xs]
+                    ++ [(show x, mkThm x (fromIntegral x :: Int32))   | x <- xs]
+                    ++ [(show x, mkThm x (fromIntegral x :: Int64))   | x <- xs]
+                    ++ [(show x, mkThm x (fromIntegral x :: Integer)) | x <- xs]
+         mkThm v res = isThm $ do a <- free "x"
+                                  constrain $ a .== literal v
+                                  return $ literal res .== sFromIntegral a
 
 genReals :: [Test]
 genReals = map mkTest $  [("+",  show x, show y, mkThm2 (+)   x y (x +  y)) | x <- rs, y <- rs        ]
@@ -217,68 +208,180 @@ genFloats = genIEEE754 "genFloats" fs
 genDoubles :: [Test]
 genDoubles = genIEEE754 "genDoubles" ds
 
-genIEEE754 :: (RealFloat a, Show a, SymWord a, Ord a, Floating a) => String -> [a] -> [Test]
-genIEEE754 origin vs = map tst1 uns ++ map tst2 bins ++ map tst1 preds
-  where uns =     [("abs",    show x,         mkThm1        abs      x   (abs x))    | x <- vs]
-               ++ [("negate", show x,         mkThm1        negate   x   (negate x)) | x <- vs]
-               ++ [("signum", show x,         mkThm1        signum   x   (signum x)) | x <- vs, not (isNaN x)]  -- TODO: Remove NaNs, skipping over NaN due to GHC bug. GitHub Issue #101.
-        bins =    [("+",      show x, show y, mkThm2        (+)      x y (x +  y))   | x <- vs, y <- vs        ]
-               ++ [("-",      show x, show y, mkThm2        (-)      x y (x -  y))   | x <- vs, y <- vs        ]
-               ++ [("*",      show x, show y, mkThm2        (*)      x y (x *  y))   | x <- vs, y <- vs        ]
-               ++ [("/",      show x, show y, mkThm2        (/)      x y (x /  y))   | x <- vs, y <- vs, y /= 0]
-               ++ [("<",      show x, show y, mkThm2C False (.<)     x y (x <  y))   | x <- vs, y <- vs        ]
-               ++ [("<=",     show x, show y, mkThm2C False (.<=)    x y (x <= y))   | x <- vs, y <- vs        ]
-               ++ [(">",      show x, show y, mkThm2C False (.>)     x y (x >  y))   | x <- vs, y <- vs        ]
-               ++ [(">=",     show x, show y, mkThm2C False (.>=)    x y (x >= y))   | x <- vs, y <- vs        ]
-               ++ [("==",     show x, show y, mkThm2C False (.==)    x y (x == y))   | x <- vs, y <- vs        ]
-               ++ [("/=",     show x, show y, mkThm2C True  (./=)    x y (x /= y))   | x <- vs, y <- vs        ]
+genIEEE754 :: (IEEEFloating a, Show a, Ord a) => String -> [a] -> [Test]
+genIEEE754 origin vs =  map tst1 [("fpCast_" ++ nm, x, y)    | (nm, x, y)    <- converts]
+                     ++ map tst1 [("pred_"   ++ nm, x, y)    | (nm, x, y)    <- preds]
+                     ++ map tst1 [("unary_"  ++ nm, x, y)    | (nm, x, y)    <- uns]
+                     ++ map tst2 [("binary_" ++ nm, x, y, r) | (nm, x, y, r) <- bins]
+  where uns =     [("abs",               show x, mkThm1 abs                   x  (abs x))                | x <- vs]
+               ++ [("negate",            show x, mkThm1 negate                x  (negate x))             | x <- vs]
+               ++ [("signum",            show x, mkThm1 signum                x  (signum x))             | x <- vs]
+               ++ [("fpAbs",             show x, mkThm1 fpAbs                 x  (abs x))                | x <- vs]
+               ++ [("fpNeg",             show x, mkThm1 fpNeg                 x  (negate x))             | x <- vs]
+               ++ [("fpSqrt",            show x, mkThm1 (m fpSqrt)            x  (sqrt   x))             | x <- vs]
+               ++ [("fpRoundToIntegral", show x, mkThm1 (m fpRoundToIntegral) x  (fpRoundToIntegralH x)) | x <- vs]
+
+        bins =    [("+",      show x,  show y, mkThm2        (+)       x y (x +  y))   | x <- vs, y <- vs]
+               ++ [("-",      show x,  show y, mkThm2        (-)       x y (x -  y))   | x <- vs, y <- vs]
+               ++ [("*",      show x,  show y, mkThm2        (*)       x y (x *  y))   | x <- vs, y <- vs]
+               ++ [("/",      show x,  show y, mkThm2        (/)       x y (x /  y))   | x <- vs, y <- vs]
+               ++ [("<",      show x,  show y, mkThm2C False (.<)      x y (x <  y))   | x <- vs, y <- vs]
+               ++ [("<=",     show x,  show y, mkThm2C False (.<=)     x y (x <= y))   | x <- vs, y <- vs]
+               ++ [(">",      show x,  show y, mkThm2C False (.>)      x y (x >  y))   | x <- vs, y <- vs]
+               ++ [(">=",     show x,  show y, mkThm2C False (.>=)     x y (x >= y))   | x <- vs, y <- vs]
+               ++ [("==",     show x,  show y, mkThm2C False (.==)     x y (x == y))   | x <- vs, y <- vs]
+               ++ [("/=",     show x,  show y, mkThm2C True  (./=)     x y (x /= y))   | x <- vs, y <- vs]
+               -- TODO. Can't possibly test fma, unless we FFI out to C. Leave it out for the time being
+               ++ [("fpAdd",           show x, show y, mkThm2  (m fpAdd)        x y ((+)              x y)) | x <- vs, y <- vs]
+               ++ [("fpSub",           show x, show y, mkThm2  (m fpSub)        x y ((-)              x y)) | x <- vs, y <- vs]
+               ++ [("fpMul",           show x, show y, mkThm2  (m fpMul)        x y ((*)              x y)) | x <- vs, y <- vs]
+               ++ [("fpDiv",           show x, show y, mkThm2  (m fpDiv)        x y ((/)              x y)) | x <- vs, y <- vs]
+               ++ [("fpMin",           show x, show y, mkThm2  fpMin            x y (fpMinH           x y)) | x <- vs, y <- vs]
+               ++ [("fpMax",           show x, show y, mkThm2  fpMax            x y (fpMaxH           x y)) | x <- vs, y <- vs]
+               ++ [("fpIsEqualObject", show x, show y, mkThm2P fpIsEqualObject  x y (fpIsEqualObjectH x y)) | x <- vs, y <- vs]
+               ++ [("fpRem",           show x, show y, mkThm2  fpRem            x y (fpRemH           x y)) | x <- vsFPRem, y <- vsFPRem]
+
+        -- TODO: For doubles fpRem takes too long, so we only do a subset
+        vsFPRem
+          | origin == "genDoubles" = [nan, infinity, 0, 0.5, -infinity, -0, -0.5]
+          | True                   = vs
+
+        converts =   [("toFP_Int8_ToFloat",     show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- i8s ]
+                 ++  [("toFP_Int16_ToFloat",    show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- i16s]
+                 ++  [("toFP_Int32_ToFloat",    show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- i32s]
+                 ++  [("toFP_Int64_ToFloat",    show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- i64s]
+                 ++  [("toFP_Word8_ToFloat",    show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- w8s ]
+                 ++  [("toFP_Word16_ToFloat",   show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- w16s]
+                 ++  [("toFP_Word32_ToFloat",   show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- w32s]
+                 ++  [("toFP_Word64_ToFloat",   show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- w64s]
+                 ++  [("toFP_Float_ToFloat",    show x, mkThm1 (m toSFloat) x                           x  ) | x <- fs  ]
+                 ++  [("toFP_Double_ToFloat",   show x, mkThm1 (m toSFloat) x (                   fp2fp x )) | x <- ds  ]
+                 ++  [("toFP_Integer_ToFloat",  show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- iUBs]
+                 ++  [("toFP_Real_ToFloat",     show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- rs  ]
+
+                 ++  [("toFP_Int8_ToDouble",    show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- i8s ]
+                 ++  [("toFP_Int16_ToDouble",   show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- i16s]
+                 ++  [("toFP_Int32_ToDouble",   show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- i32s]
+                 ++  [("toFP_Int64_ToDouble",   show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- i64s]
+                 ++  [("toFP_Word8_ToDouble",   show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- w8s ]
+                 ++  [("toFP_Word16_ToDouble",  show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- w16s]
+                 ++  [("toFP_Word32_ToDouble",  show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- w32s]
+                 ++  [("toFP_Word64_ToDouble",  show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- w64s]
+                 ++  [("toFP_Float_ToDouble",   show x, mkThm1 (m toSDouble) x (                   fp2fp x )) | x <- fs  ]
+                 ++  [("toFP_Double_ToDouble",  show x, mkThm1 (m toSDouble) x                           x )  | x <- ds  ]
+                 ++  [("toFP_Integer_ToDouble", show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- iUBs]
+                 ++  [("toFP_Real_ToDouble",    show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- rs  ]
+
+                 ++  [("fromFP_Float_ToInt8",    show x, mkThmC' (m fromSFloat :: SFloat -> SInt8)    x (((fromIntegral :: Integer -> Int8)    . fpRound0) x)) | x <- fs]
+                 ++  [("fromFP_Float_ToInt16",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt16)   x (((fromIntegral :: Integer -> Int16)   . fpRound0) x)) | x <- fs]
+                 ++  [("fromFP_Float_ToInt32",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt32)   x (((fromIntegral :: Integer -> Int32)   . fpRound0) x)) | x <- fs]
+                 ++  [("fromFP_Float_ToInt64",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt64)   x (((fromIntegral :: Integer -> Int64)   . fpRound0) x)) | x <- fs]
+                 ++  [("fromFP_Float_ToWord8",   show x, mkThmC' (m fromSFloat :: SFloat -> SWord8)   x (((fromIntegral :: Integer -> Word8)   . fpRound0) x)) | x <- fs]
+                 ++  [("fromFP_Float_ToWord16",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord16)  x (((fromIntegral :: Integer -> Word16)  . fpRound0) x)) | x <- fs]
+                 ++  [("fromFP_Float_ToWord32",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord32)  x (((fromIntegral :: Integer -> Word32)  . fpRound0) x)) | x <- fs]
+                 ++  [("fromFP_Float_ToWord64",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord64)  x (((fromIntegral :: Integer -> Word64)  . fpRound0) x)) | x <- fs]
+                 ++  [("fromFP_Float_ToFloat",   show x, mkThm1  (m fromSFloat :: SFloat -> SFloat)   x                                                    x ) | x <- fs]
+                 ++  [("fromFP_Float_ToDouble",  show x, mkThm1  (m fromSFloat :: SFloat -> SDouble)  x (                                           fp2fp  x)) | x <- fs]
+                 -- Neither Z3 nor MathSAT support Float->Integer/Float->Real conversion for the time being; so comment out.
+                 -- See GitHub issue: #191
+                 -- ++  [("fromFP_Float_ToInteger", show x, mkThmC' (m fromSFloat :: SFloat -> SInteger) x (((fromIntegral :: Integer -> Integer) . fpRound0) x)) | x <- fs]
+                 -- ++  [("fromFP_Float_ToReal",    show x, mkThmC' (m fromSFloat :: SFloat -> SReal)    x (                        (fromRational . fpRatio0) x)) | x <- fs]
+
+                 ++  [("fromFP_Double_ToInt8",    show x, mkThmC' (m fromSDouble :: SDouble -> SInt8)    x (((fromIntegral :: Integer -> Int8)    . fpRound0) x)) | x <- ds]
+                 ++  [("fromFP_Double_ToInt16",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt16)   x (((fromIntegral :: Integer -> Int16)   . fpRound0) x)) | x <- ds]
+                 ++  [("fromFP_Double_ToInt32",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt32)   x (((fromIntegral :: Integer -> Int32)   . fpRound0) x)) | x <- ds]
+                 ++  [("fromFP_Double_ToInt64",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt64)   x (((fromIntegral :: Integer -> Int64)   . fpRound0) x)) | x <- ds]
+                 ++  [("fromFP_Double_ToWord8",   show x, mkThmC' (m fromSDouble :: SDouble -> SWord8)   x (((fromIntegral :: Integer -> Word8)   . fpRound0) x)) | x <- ds]
+                 ++  [("fromFP_Double_ToWord16",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord16)  x (((fromIntegral :: Integer -> Word16)  . fpRound0) x)) | x <- ds]
+                 ++  [("fromFP_Double_ToWord32",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord32)  x (((fromIntegral :: Integer -> Word32)  . fpRound0) x)) | x <- ds]
+                 ++  [("fromFP_Double_ToWord64",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord64)  x (((fromIntegral :: Integer -> Word64)  . fpRound0) x)) | x <- ds]
+                 ++  [("fromFP_Double_ToFloat",   show x, mkThm1  (m fromSDouble :: SDouble -> SFloat)   x (                                            fp2fp x)) | x <- ds]
+                 ++  [("fromFP_Double_ToDouble",  show x, mkThm1  (m fromSDouble :: SDouble -> SDouble)  x                                                    x ) | x <- ds]
+                 -- Neither Z3 nor MathSAT support Float->Integer/Float->Real conversion for the time being; so comment out.
+                 -- See GitHub issue: #191
+                 -- ++  [("fromFP_Double_ToInteger", show x, mkThmC' (m fromSDouble :: SDouble -> SInteger) x (((fromIntegral :: Integer -> Integer) . fpRound0) x)) | x <- ds]
+                 -- ++  [("fromFP_Double_ToReal",    show x, mkThmC' (m fromSDouble :: SDouble -> SReal)    x (                        (fromRational . fpRatio0) x)) | x <- ds]
+
+                 ++  [("reinterp_Word32_Float",  show x, mkThmC sWord32AsSFloat  x (DB.wordToFloat  x)) | x <- w32s]
+                 ++  [("reinterp_Word64_Double", show x, mkThmC sWord64AsSDouble x (DB.wordToDouble x)) | x <- w64s]
+
+                 ++  [("reinterp_Float_Word32",  show x, mkIso sFloatAsSWord32  sWord32AsSFloat  x) | x <- w32s]
+                 ++  [("reinterp_Double_Word64", show x, mkIso sDoubleAsSWord64 sWord64AsSDouble x) | x <- w64s]
+
+        m f = f sRNE
+
         preds =   [(pn,       show x,         mkThmP        ps       x   (pc x))     | (pn, ps, pc) <- predicates, x <- vs
                                                                                      -- Work around GHC bug, see issue #138
                                                                                      -- Remove the following line when fixed.
-                                                                                     , not (pn == "isPositiveZeroFP" && isNegativeZero x)
+                                                                                     , not (pn == "fpIsPositiveZero" && isNegativeZero x)
                                                                                      ]
         tst2 (nm, x, y, t) = origin ++ ".arithmetic-" ++ nm ++ "." ++ x ++ "_" ++ y  ~: assert t
         tst1 (nm, x,    t) = origin ++ ".arithmetic-" ++ nm ++ "." ++ x              ~: assert t
+
         eqF v val
-          | isNaN          val        = constrain $ isNaNFP v
-          | isNegativeZero val        = constrain $ isNegativeZeroFP v
-          | val == 0                  = constrain $ isPositiveZeroFP v
-          | isInfinite val && val > 0 = constrain $ isInfiniteFP v &&& isPositiveFP v
-          | isInfinite val && val < 0 = constrain $ isInfiniteFP v &&& isNegativeFP v
+          | isNaN          val        = constrain $ fpIsNaN v
+          | isNegativeZero val        = constrain $ fpIsNegativeZero v
+          | val == 0                  = constrain $ fpIsPositiveZero v
+          | isInfinite val && val > 0 = constrain $ fpIsInfinite v &&& fpIsPositive v
+          | isInfinite val && val < 0 = constrain $ fpIsInfinite v &&& fpIsNegative v
           | True                      = constrain $ v .== literal val
-        mkThmP op x r = isThm $ do a <- free "x"
+
+        -- Quickly pick which solver to use. Currently z3 or mathSAT supports FP
+        fpProver :: SMTConfig
+        fpProver = z3 -- mathSAT
+
+        fpThm :: Provable a => a -> IO Bool
+        fpThm p = fromJust `fmap` isTheoremWith fpProver Nothing p
+
+        mkIso f g i = fpThm $ do a <- free "x"
+                                 constrain $ a .== literal i
+                                 return (f (g a) a :: SBool)
+
+        mkThmP op x r = fpThm $ do a <- free "x"
                                    eqF a x
                                    return $ literal r .== op a
-        mkThm1 op x r = isThm $ do a <- free "x"
+
+        mkThm2P op x y r = fpThm $ do [a, b] <- mapM free ["x", "y"]
+                                      eqF a x
+                                      eqF b y
+                                      return $ literal r .== a `op` b
+
+        mkThm1 op x r = fpThm $ do a <- free "x"
                                    eqF a x
-                                   return $ if isNaN r
-                                            then isNaNFP (op a)
-                                            else literal r .== op a
-        mkThm2 op x y r = isThm $ do [a, b] <- mapM free ["x", "y"]
+                                   return $ literal r `fpIsEqualObject` op a
+
+        mkThmC op x r = fpThm $ do a <- free "x"
+                                   constrain $ a .== literal x
+                                   return $ literal r `fpIsEqualObject` op a
+
+        mkThmC' op x r = fpThm $ do a <- free "x"
+                                    eqF a x
+                                    return $ literal r .== op a
+
+        mkThm2 op x y r = fpThm $ do [a, b] <- mapM free ["x", "y"]
                                      eqF a x
                                      eqF b y
-                                     return $ if isNaN r
-                                              then isNaNFP (a `op` b)
-                                              else literal r .== a `op` b
-        mkThm2C neq op x y r = isThm $ do [a, b] <- mapM free ["x", "y"]
+                                     return $ literal r `fpIsEqualObject` (a `op` b)
+
+        mkThm2C neq op x y r = fpThm $ do [a, b] <- mapM free ["x", "y"]
                                           eqF a x
                                           eqF b y
                                           return $ if isNaN x || isNaN y
                                                    then (if neq then a `op` b else bnot (a `op` b))
                                                    else literal r .== a `op` b
-        predicates :: (RealFloat a, Floating a, SymWord a) => [(String, SBV a -> SBool, a -> Bool)]
-        predicates = [ ("isNormalFP",       isNormalFP,        isNormalized)
-                     , ("isSubnormalFP",    isSubnormalFP,     isDenormalized)
-                     , ("isZeroFP",         isZeroFP,          (== 0))
-                     , ("isInfiniteFP",     isInfiniteFP,      isInfinite)
-                     , ("isNaNFP",          isNaNFP,           isNaN)
-                     , ("isNegativeFP",     isNegativeFP,      \x -> x < 0  ||      isNegativeZero x)
-                     , ("isPositiveFP",     isPositiveFP,      \x -> x >= 0 && not (isNegativeZero x))
-                     , ("isNegativeZeroFP", isNegativeZeroFP,  isNegativeZero)
-                     , ("isPositiveZeroFP", isPositiveZeroFP,  \x -> x == 0 && not (isNegativeZero x))
-                     , ("isPointFP",        isPointFP,         \x -> not (isNaN x || isInfinite x))
+
+        predicates :: (IEEEFloating a) => [(String, SBV a -> SBool, a -> Bool)]
+        predicates = [ ("fpIsNormal",       fpIsNormal,        fpIsNormalizedH)
+                     , ("fpIsSubnormal",    fpIsSubnormal,     isDenormalized)
+                     , ("fpIsZero",         fpIsZero,          (== 0))
+                     , ("fpIsInfinite",     fpIsInfinite,      isInfinite)
+                     , ("fpIsNaN",          fpIsNaN,           isNaN)
+                     , ("fpIsNegative",     fpIsNegative,      \x -> x < 0  ||      isNegativeZero x)
+                     , ("fpIsPositive",     fpIsPositive,      \x -> x >= 0 && not (isNegativeZero x))
+                     , ("fpIsNegativeZero", fpIsNegativeZero,  isNegativeZero)
+                     , ("fpIsPositiveZero", fpIsPositiveZero,  \x -> x == 0 && not (isNegativeZero x))
+                     , ("fpIsPoint",        fpIsPoint,         \x -> not (isNaN x || isInfinite x))
                      ]
-           where isNormalized x = not (isDenormalized x || isInfinite x || isNaN x)
 
 genQRems :: [Test]
 genQRems = map mkTest $  [("divMod",  show x, show y, mkThm2 sDivMod  x y (x `divMod'`  y)) | x <- w8s,  y <- w8s ]
@@ -311,8 +414,8 @@ genQRems = map mkTest $  [("divMod",  show x, show y, mkThm2 sDivMod  x y (x `di
 
 -- Concrete test data
 xsSigned, xsUnsigned :: (Num a, Enum a, Bounded a) => [a]
-xsUnsigned = [minBound, 0, maxBound]
-xsSigned   = xsUnsigned ++ [-1, 1]
+xsUnsigned = [0, 1, maxBound - 1, maxBound]
+xsSigned   = xsUnsigned ++ [minBound, minBound + 1, -1]
 
 w8s :: [Word8]
 w8s = xsUnsigned
@@ -348,11 +451,11 @@ rs = [fromRational (i % d) | i <- is, d <- dens]
 
 -- Admittedly paltry test-cases for float/double
 fs :: [Float]
-fs = xs ++ map (* (-1)) xs
- where xs = [nan, infinity, 0, 0.5, 0.68302244, 0.5268265, 0.10283524, 5.8336496e-2, 1.0e-45]
+fs = xs ++ map (* (-1)) (filter (not . isNaN) xs) -- -nan is the same as nan
+   where xs = [nan, infinity, 0, 0.5, 0.68302244, 0.5268265, 0.10283524, 5.8336496e-2, 1.0e-45]
 
 ds :: [Double]
-ds = xs ++ map (* (-1)) xs
- where xs = [nan, infinity, 0, 0.5, 2.516632060108026e-2, 0.8601891300751106, 7.518897767550192e-2, 1.1656043286207285e-2, 1.0e-323]
+ds = xs ++ map (* (-1)) (filter (not . isNaN) xs) -- -nan is the same as nan
+  where xs = [nan, infinity, 0, 0.5, 2.516632060108026e-2, 0.8601891300751106, 5.0e-324]
 
 {-# ANN module ("HLint: ignore Reduce duplication" :: String) #-}

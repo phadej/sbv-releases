@@ -105,11 +105,7 @@
 -- get in touch if there is a solver you'd like to see included.
 ---------------------------------------------------------------------------------
 
-{-# LANGUAGE CPP                  #-}
 {-# LANGUAGE FlexibleInstances    #-}
-#if __GLASGOW_HASKELL__ < 710
-{-# LANGUAGE OverlappingInstances #-}
-#endif
 
 module Data.SBV (
   -- * Programming with symbolic values
@@ -128,18 +124,14 @@ module Data.SBV (
   , SInteger
   -- *** IEEE-floating point numbers
   -- $floatingPoints
-  , SFloat, SDouble, RoundingFloat(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity, fusedMA
+  , SFloat, SDouble, IEEEFloating(..), IEEEFloatConvertable(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity
   -- **** Rounding modes
-  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero
-  -- **** FP classifiers
-  , isNormalFP, isSubnormalFP, isZeroFP, isInfiniteFP, isNaNFP, isNegativeFP, isPositiveFP, isNegativeZeroFP, isPositiveZeroFP, isPointFP
-  -- **** Conversion to and from Word32, Word64
-  , sWord32ToSFloat, sWord64ToSDouble, sFloatToSWord32, sDoubleToSWord64
-  -- **** Blasting floats to sign, exponent, mantissa bits
-  , blastSFloat, blastSDouble
+  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero, sRNE, sRNA, sRTP, sRTN, sRTZ
+  -- **** Bit-pattern conversions
+  , sFloatAsSWord32, sWord32AsSFloat, sDoubleAsSWord64, sWord64AsSDouble, blastSFloat, blastSDouble
   -- *** Signed algebraic reals
   -- $algReals
-  , SReal, AlgReal, sIntegerToSReal, fpToSReal, sRealToSFloat, sRealToSDouble
+  , SReal, AlgReal, sIntegerToSReal
   -- ** Creating a symbolic variable
   -- $createSym
   , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble
@@ -154,7 +146,8 @@ module Data.SBV (
   , STree, readSTree, writeSTree, mkSTree
   -- ** Operations on symbolic values
   -- *** Word level
-  , sbvTestBit, sbvPopCount, sbvShiftLeft, sbvShiftRight, sbvRotateLeft, sbvRotateRight, sbvSignedShiftArithRight, setBitTo, oneIf, lsb, msb
+  , sTestBit, sExtractBits, sPopCount, sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, sFromIntegral, setBitTo, oneIf
+  , lsb, msb, label
   -- *** Predicates
   , allEqual, allDifferent, inRange, sElem
   -- *** Addition and Multiplication with high-bits
@@ -165,14 +158,10 @@ module Data.SBV (
   , blastBE, blastLE, FromBits(..)
   -- *** Splitting, joining, and extending
   , Splittable(..)
-  -- *** Sign-casting
-  , SignCast(..)
   -- ** Polynomial arithmetic and CRCs
   , Polynomial(..), crcBV, crc
   -- ** Conditionals: Mergeable values
-  , Mergeable(..), ite, iteLazy, sBranch
-  -- ** Conditional symbolic simulation
-  , sAssert, sAssertCont
+  , Mergeable(..), ite, iteLazy
   -- ** Symbolic equality
   , EqSymbolic(..)
   -- ** Symbolic ordering
@@ -187,6 +176,8 @@ module Data.SBV (
   , bAnd, bOr, bAny, bAll
   -- ** Pretty-printing and reading numbers in Hex & Binary
   , PrettyNum(..), readBin
+  -- * Checking satisfiability in path conditions
+  , isSatisfiableInCurrentPath
 
   -- * Uninterpreted sorts, constants, and functions
   -- $uninterpreted
@@ -214,10 +205,6 @@ module Data.SBV (
   -- ** Checking constraint vacuity
   , isVacuous, isVacuousWith
 
-  -- * Checking safety
-  -- $safeIntro
-  , safe, safeWith, SExecutable(..)
-
   -- * Proving properties using multiple solvers
   -- $multiIntro
   , proveWithAll, proveWithAny, satWithAll, satWithAny, allSatWithAll, allSatWithAny
@@ -235,7 +222,7 @@ module Data.SBV (
 
   -- ** Inspecting proof results
   -- $resultTypes
-  , ThmResult(..), SatResult(..), AllSatResult(..), SMTResult(..), SafeResult(..)
+  , ThmResult(..), SatResult(..), AllSatResult(..), SMTResult(..)
 
   -- ** Programmable model extraction
   -- $programmableExtraction
@@ -296,9 +283,8 @@ import System.IO.Unsafe         (unsafeInterleaveIO)             -- only used sa
 import Data.SBV.BitVectors.AlgReals
 import Data.SBV.BitVectors.Data
 import Data.SBV.BitVectors.Model
+import Data.SBV.BitVectors.Floating
 import Data.SBV.BitVectors.PrettyNum
-import Data.SBV.BitVectors.Rounding
-import Data.SBV.BitVectors.SignCast
 import Data.SBV.BitVectors.Splittable
 import Data.SBV.BitVectors.STree
 import Data.SBV.Compilers.C
@@ -316,51 +302,10 @@ import Data.Word
 
 -- | The currently active solver, obtained by importing "Data.SBV".
 -- To have other solvers /current/, import one of the bridge
--- modules "Data.SBV.Bridge.CVC4", "Data.SBV.Bridge.Yices", or
--- "Data.SBV.Bridge.Z3" directly.
+-- modules "Data.SBV.Bridge.ABC", "Data.SBV.Bridge.Boolector", "Data.SBV.Bridge.CVC4",
+-- "Data.SBV.Bridge.Yices", or "Data.SBV.Bridge.Z3" directly.
 sbvCurrentSolver :: SMTConfig
 sbvCurrentSolver = z3
-
--- | Is the floating-point number a normal value. (i.e., not denormalized.)
-isNormalFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isNormalFP = liftFPPredicate "fp.isNormal" isNormalized
-  where isNormalized x = not (isDenormalized x || isInfinite x || isNaN x)
-
--- | Is the floating-point number a subnormal value. (Also known as denormal.)
-isSubnormalFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isSubnormalFP = liftFPPredicate "fp.isSubnormal" isDenormalized
-
--- | Is the floating-point number 0? (Note that both +0 and -0 will satisfy this predicate.)
-isZeroFP :: (Floating a, SymWord a) => SBV a -> SBool
-isZeroFP = liftFPPredicate "fp.isZero" (== 0)
-
--- | Is the floating-point number infinity? (Note that both +oo and -oo will satisfy this predicate.)
-isInfiniteFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isInfiniteFP = liftFPPredicate "fp.isInfinite" isInfinite
-
--- | Is the floating-point number a NaN value?
-isNaNFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isNaNFP = liftFPPredicate "fp.isNaN" isNaN
-
--- | Is the floating-point number negative? Note that -0 satisfies this predicate but +0 does not.
-isNegativeFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isNegativeFP = liftFPPredicate "fp.isNegative" (\x -> x < 0 ||       isNegativeZero x)
-
--- | Is the floating-point number positive? Note that +0 satisfies this predicate but -0 does not.
-isPositiveFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isPositiveFP = liftFPPredicate "fp.isPositive" (\x -> x >= 0 && not (isNegativeZero x))
-
--- | Is the floating point number -0?
-isNegativeZeroFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isNegativeZeroFP x = isZeroFP x &&& isNegativeFP x
-
--- | Is the floating point number +0?
-isPositiveZeroFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isPositiveZeroFP x = isZeroFP x &&& isPositiveFP x
-
--- | Is the floating-point number a regular floating point, i.e., not NaN, nor +oo, nor -oo. Normals or denormals are allowed.
-isPointFP :: (RealFloat a, SymWord a) => SBV a -> SBool
-isPointFP x = bnot (isNaNFP x ||| isInfiniteFP x)
 
 -- | Form the symbolic conjunction of a given list of boolean conditions. Useful in expressing
 -- problems with constraints, like the following:
@@ -443,96 +388,45 @@ infix 4 ===
 class Equality a where
   (===) :: a -> a -> IO ThmResult
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, EqSymbolic z) => Equality (SBV a -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, EqSymbolic z) => Equality (SBV a -> z) where
   k === l = prove $ \a -> k a .== l a
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
-
- (SymWord a, SymWord b, EqSymbolic z) => Equality (SBV a -> SBV b -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, EqSymbolic z) => Equality (SBV a -> SBV b -> z) where
   k === l = prove $ \a b -> k a b .== l a b
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
-  {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, EqSymbolic z) => Equality ((SBV a, SBV b) -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, EqSymbolic z) => Equality ((SBV a, SBV b) -> z) where
   k === l = prove $ \a b -> k (a, b) .== l (a, b)
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> z) where
   k === l = prove $ \a b c -> k a b c .== l a b c
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c) -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c) -> z) where
   k === l = prove $ \a b c -> k (a, b, c) .== l (a, b, c)
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> z) where
   k === l = prove $ \a b c d -> k a b c d .== l a b c d
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d) -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d) -> z) where
   k === l = prove $ \a b c d -> k (a, b, c, d) .== l (a, b, c, d)
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> z) where
   k === l = prove $ \a b c d e -> k a b c d e .== l a b c d e
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e) -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e) -> z) where
   k === l = prove $ \a b c d e -> k (a, b, c, d, e) .== l (a, b, c, d, e)
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> z) where
   k === l = prove $ \a b c d e f -> k a b c d e f .== l a b c d e f
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
+instance {-# OVERLAPPABLE #-}
  (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f) -> z) where
   k === l = prove $ \a b c d e f -> k (a, b, c, d, e, f) .== l (a, b, c, d, e, f)
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
+instance {-# OVERLAPPABLE #-}
  (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> SBV g -> z) where
   k === l = prove $ \a b c d e f g -> k a b c d e f g .== l a b c d e f g
 
-instance
-#if __GLASGOW_HASKELL__ >= 710
- {-# OVERLAPPABLE #-}
-#endif
- (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> z) where
+instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> z) where
   k === l = prove $ \a b c d e f g -> k (a, b, c, d, e, f, g) .== l (a, b, c, d, e, f, g)
 
 -- Haddock section documentation
@@ -592,46 +486,6 @@ Note that the function 'sbvAvailableSolvers' will return all the installed solve
 used as the first argument to all these functions, if you simply want to try all available solvers on a machine.
 -}
 
-{- $safeIntro
-
-The 'sAssert' and 'sAssertCont' functions allow users to introduce invariants through-out their code to make sure
-certain properties hold at all times. This is another mechanism to provide further documentation/contract info
-into SBV code. The functions 'safe' and 'safeWith' can then be used to statically discharge these proof assumptions.
-If a violation is found, SBV will print a model showing which inputs lead to the invariant being violated.
-
-Here's a simple example. Let's assume we have a function that does subtraction, and requires it's
-first argument to be larger than the second:
-
->>> let sub x y = sAssert "sub: x >= y must hold!" (x .>= y) (x - y)
-
-Clearly, this function is not safe, as there's nothing that ensures us to pass a larger second argument.
-If we try to prove a theorem regarding sub, we'll get an exception:
-
->>> prove $ \x y -> sub x y .>= (0 :: SInt16)
-*** Exception: Assertion failure: "sub: x >= y must hold!"
-  s0 = -32768 :: Int16
-  s1 = -32767 :: Int16
-
-Of course, we can use, 'safe' to statically see if such a violation is possible before we attempt a proof:
-
->>> safe (sub :: SInt8 -> SInt8 -> SInt8)
-Assertion failure: "sub: x >= y must hold!"
-  s0 = -128 :: Int8
-  s1 = -127 :: Int8
-
-What happens if we make sure to arrange for this invariant? Consider this version:
-
->>> let safeSub x y = ite (x .>= y) (sub x y) (sub y x)
-
-Clearly, 'safeSub' must be safe. And indeed, SBV can prove that:
-
->>> safe (safeSub :: SInt8 -> SInt8 -> SInt8)
-No safety violations detected.
-
-Note how we used 'sub' and 'safeSub' polymorphically. We only need to monomorphise our types when a proof
-attempt is done, as we did in the 'safe' calls.
--}
-
 {- $optimizeIntro
 Symbolic optimization. A call of the form:
 
@@ -653,14 +507,26 @@ The function 'optimize' allows the user to give a custom comparison function.
 
 The 'OptimizeOpts' argument controls how the optimization is done. If 'Quantified' is used, then the SBV optimization engine satisfies the following predicate:
 
-   @exists xs. forall ys. valid xs && (valid ys ``implies`` (cost xs ``cmp`` cost ys))@
+   @exists xs. forall ys. valid xs && (valid ys \`implies\` (cost xs \`cmp\` cost ys))@
 
 Note that this may cause efficiency problems as it involves alternating quantifiers.
 If 'OptimizeOpts' is set to 'Iterative' 'True', then SBV will programmatically
 search for an optimal solution, by repeatedly calling the solver appropriately. (The boolean argument controls whether progress reports are given. Use
-'False' for quiet operation.) Note that the quantified and iterative versions are two different optimization approaches and may not necessarily yield the same
-results. In particular, the quantified version can find solutions where there is no global optimum value, while the iterative version would simply loop forever
-in such cases. On the other hand, the iterative version might be more suitable if the quantified version of the problem is too hard to deal with by the SMT solver.
+'False' for quiet operation.)
+
+=== Quantified vs Iterative
+
+Note that the quantified and iterative versions are two different optimization approaches and may not necessarily yield the same
+results. In particular, the quantified version can tell us no such solution exists if there is no global optimum value, while the iterative
+version might simply loop forever for such a problem. To wit, consider the example:
+
+   @ maximize Quantified head 1 (const true :: [SInteger] -> SBool) @
+
+which asks for the largest `SInteger` value. The SMT solver will happily answer back saying there is no such value with the 'Quantified' call, but the 'Iterative' variant
+will simply loop forever as it would search through an infinite chain of ascending 'SInteger' values.
+
+In practice, however, the iterative version is usually the more effective choice since alternating quantifiers are hard to deal with for many SMT-solvers and thus will
+likely result in an @unknown@ result. While the 'Iterative' variant can loop for a long time, one can simply use the boolean flag 'True' and see how the search is progressing.
 -}
 
 {- $modelExtraction
@@ -851,19 +717,10 @@ Users can introduce new uninterpreted sorts simply by defining a data-type in Ha
 following example demonstrates:
 
   @
-     data B = B () deriving (Eq, Ord, Data, Typeable, Read, Show)
-     instance SymWord  B
-     instance HasKind  B
-     instance SatModel B  -- required only if 'getModel' etc. is used.
+     data B = B () deriving (Eq, Ord, Show, Read, Data, SymWord, HasKind, SatModel)
   @
 
-(Note that you'll also need to use the language pragma @DeriveDataTypeable@, and import @Data.Generics@ for the above to work.) 
-
-Once GHC implements derivable user classes (<http://hackage.haskell.org/trac/ghc/ticket/5462>), we will be able to simplify this to:
-
-  @
-     data B = B () deriving (Eq, Ord, Data, Typeable, Read, Show, SymWord, HasKind)
-  @
+(Note that you'll also need to use the language pragmas @DeriveDataTypeable@, @DeriveAnyClass@, and import @Data.Generics@ for the above to work.) 
 
 This is all it takes to introduce 'B' as an uninterpreted sort in SBV, which makes the type @SBV B@ automagically become available as the type
 of symbolic values that ranges over 'B' values. Note that the @()@ argument is important to distinguish it from enumerations.
@@ -877,10 +734,7 @@ If the uninterpreted sort definition takes the form of an enumeration (i.e., a s
 translate that as just such a data-type to SMT-Lib, and will use the constructors as the inhabitants of the said sort. A simple example is:
 
   @
-    data X = A | B | C deriving (Eq, Ord, Data, Typeable, Read, Show)
-    instance SymWord X
-    instance HasKind X
-    instance SatModel X
+    data X = A | B | C deriving (Eq, Ord, Show, Read, Data, SymWord, HasKind, SatModel)
   @
 
 Now, the user can define

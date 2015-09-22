@@ -24,20 +24,20 @@ import Data.SBV
 -- * FP addition is not associative
 -----------------------------------------------------------------------------
 
--- | Prove that floating point addition is not associative. We have:
+-- | Prove that floating point addition is not associative. For illustration purposes,
+-- we will require one of the inputs to be a @NaN@. We have:
 --
--- >>> prove assocPlus
+-- >>> prove $ assocPlus (0/0)
 -- Falsifiable. Counter-example:
---   s0 = -9.62965e-35 :: Float
---   s1 = Infinity :: Float
---   s2 = -Infinity :: Float
+--   s0 = 0.0 :: Float
+--   s1 = 0.0 :: Float
 --
 -- Indeed:
 --
--- >>> let i = 1/0 :: Float
--- >>> (-9.62965e-35 + (i + (-i)))
+-- >>> let i = 0/0 :: Float
+-- >>> i + (0.0 + 0.0)
 -- NaN
--- >>> ((-9.62965e-35 + i) + (-i))
+-- >>> ((i + 0.0) + 0.0)
 -- NaN
 --
 -- But keep in mind that @NaN@ does not equal itself in the floating point world! We have:
@@ -48,7 +48,7 @@ assocPlus :: SFloat -> SFloat -> SFloat -> SBool
 assocPlus x y z = x + (y + z) .== (x + y) + z
 
 -- | Prove that addition is not associative, even if we ignore @NaN@/@Infinity@ values.
--- To do this, we use the predicate 'isPointFP', which is true of a floating point
+-- To do this, we use the predicate 'fpIsPoint', which is true of a floating point
 -- number ('SFloat' or 'SDouble') if it is neither @NaN@ nor @Infinity@. (That is, it's a
 -- representable point in the real-number line.)
 --
@@ -56,16 +56,16 @@ assocPlus x y z = x + (y + z) .== (x + y) + z
 --
 -- >>> assocPlusRegular
 -- Falsifiable. Counter-example:
---   x = -1.0491915e7 :: Float
---   y = 1967115.5 :: Float
---   z = 982003.94 :: Float
+--   x = -1.5991211e-2 :: Float
+--   y = 131071.99 :: Float
+--   z = -131069.99 :: Float
 --
 -- Indeed, we have:
 --
--- >>> ((-1.0491915e7) + (1967115.5 + 982003.94)) :: Float
--- -7542795.5
--- >>> (((-1.0491915e7) + 1967115.5) + 982003.94) :: Float
--- -7542796.0
+-- >>> ((-1.5991211e-2) + (131071.99 + (-131069.99))) :: Float
+-- 1.9840088
+-- >>> ((-1.5991211e-2) + 131071.99) + (-131069.99) :: Float
+-- 1.984375
 --
 -- Note the significant difference between two additions!
 assocPlusRegular :: IO ThmResult
@@ -73,8 +73,8 @@ assocPlusRegular = prove $ do [x, y, z] <- sFloats ["x", "y", "z"]
                               let lhs = x+(y+z)
                                   rhs = (x+y)+z
                               -- make sure we do not overflow at the intermediate points
-                              constrain $ isPointFP lhs
-                              constrain $ isPointFP rhs
+                              constrain $ fpIsPoint lhs
+                              constrain $ fpIsPoint rhs
                               return $ lhs .== rhs
 
 -----------------------------------------------------------------------------
@@ -87,23 +87,23 @@ assocPlusRegular = prove $ do [x, y, z] <- sFloats ["x", "y", "z"]
 --
 -- >>> nonZeroAddition
 -- Falsifiable. Counter-example:
---   a = -2.0 :: Float
---   b = -3.0e-45 :: Float
+--   a = 5.1705105e-26 :: Float
+--   b = -3.8518597e-34 :: Float
 --
 -- Indeed, we have:
 --
--- >>> (-2.0) + (-3.0e-45) == (-2.0 :: Float)
+-- >>> (5.1705105e-26 + (-3.8518597e-34)) == (5.1705105e-26 :: Float)
 -- True
 --
 -- But:
 --
--- >>> -3.0e-45 == (0::Float)
+-- >>> -3.8518597e-34 == (0::Float)
 -- False
 --
 nonZeroAddition :: IO ThmResult
 nonZeroAddition = prove $ do [a, b] <- sFloats ["a", "b"]
-                             constrain $ isPointFP a
-                             constrain $ isPointFP b
+                             constrain $ fpIsPoint a
+                             constrain $ fpIsPoint b
                              constrain $ a + b .== a
                              return $ b .== 0
 
@@ -118,17 +118,17 @@ nonZeroAddition = prove $ do [a, b] <- sFloats ["a", "b"]
 --
 -- >>> multInverse
 -- Falsifiable. Counter-example:
---   a = -2.0445642768532407e154 :: Double
+--   a = 1.1058928764217435e308 :: Double
 --
 -- Indeed, we have:
 --
--- >>> let a = -2.0445642768532407e154 :: Double
+-- >>> let a = 1.1058928764217435e308 :: Double
 -- >>> a * (1/a)
--- 0.9999999999999999
+-- 0.9999999999999998
 multInverse :: IO ThmResult
 multInverse = prove $ do a <- sDouble "a"
-                         constrain $ isPointFP a
-                         constrain $ isPointFP (1/a)
+                         constrain $ fpIsPoint a
+                         constrain $ fpIsPoint (1/a)
                          return $ a * (1/a) .== 1
 
 -----------------------------------------------------------------------------
@@ -145,22 +145,22 @@ multInverse = prove $ do a <- sDouble "a"
 --
 -- >>> roundingAdd
 -- Satisfiable. Model:
---   rm = RoundTowardPositive :: RoundingMode
---   x = 246080.08 :: Float
---   y = 16255.999 :: Float
+--   rm = RoundNearestTiesToAway :: RoundingMode
+--   x = 2.0644195e19 :: Float
+--   y = -2.1974389e18 :: Float
 --
 -- Unfortunately we can't directly validate this result at the Haskell level, as Haskell only supports
 -- 'RoundNearestTiesToEven'. We have:
 --
--- >>> (246080.08 + 16255.999) :: Float
--- 262336.06
+-- >>> (2.0644195e19 + (-2.1974389e18)) :: Float
+-- 1.8446757e19
 --
--- While we cannot directly see the result when the mode is 'RoundTowardPositive' in Haskell, we can use
+-- While we cannot directly see the result when the mode is 'RoundNearestTiesToAway' in Haskell, we can use
 -- SBV to provide us with that result thusly:
 --
--- >>> sat $ \z -> z .== fpAdd sRoundTowardPositive 246080.08 (16255.999::SFloat)
+-- >>> sat $ \z -> z .== fpAdd sRoundNearestTiesToAway 2.0644195e19 (-2.1974389e18 :: SFloat)
 -- Satisfiable. Model:
---   s0 = 262336.1 :: Float
+--   s0 = 1.8446755e19 :: Float
 --
 -- We can see why these two resuls are indeed different. To see why, one would have to convert the
 -- individual numbers to Float's, which would induce rounding-errors, add them up, and round-back;
@@ -175,6 +175,6 @@ roundingAdd = sat $ do m :: SRoundingMode <- free "rm"
                        y <- sFloat "y"
                        let lhs = fpAdd m x y
                        let rhs = x + y
-                       constrain $ isPointFP lhs
-                       constrain $ isPointFP rhs
+                       constrain $ fpIsPoint lhs
+                       constrain $ fpIsPoint rhs
                        return $ lhs ./= rhs
