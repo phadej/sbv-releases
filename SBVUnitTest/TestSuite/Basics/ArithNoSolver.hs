@@ -21,7 +21,7 @@ import Data.SBV.Internals
 import Data.Maybe(fromJust, fromMaybe)
 
 import SBVTest
-import qualified Data.Binary.IEEE754 as DB (wordToFloat, wordToDouble)
+import qualified Data.Binary.IEEE754 as DB (wordToFloat, wordToDouble, floatToWord, doubleToWord)
 
 ghcBitSize :: Bits a => a -> Int
 ghcBitSize x = fromMaybe (error "SBV.ghcBitSize: Unexpected non-finite usage!") (bitSizeMaybe x)
@@ -284,11 +284,11 @@ genFloats = bTests ++ uTests ++ fpTests1 ++ fpTests2 ++ converts
                                ++ floatRun2M  "fpDiv"           (/)              fpDiv           comb
                                ++ doubleRun2M "fpDiv"           (/)              fpDiv           comb
 
-                               ++ floatRun2   "fpMin"           fpMinH           fpMin           comb
-                               ++ doubleRun2  "fpMin"           fpMinH           fpMin           comb
+                               ++ floatRunMM  "fpMin"           fpMinH           fpMin           comb
+                               ++ doubleRunMM "fpMin"           fpMinH           fpMin           comb
 
-                               ++ floatRun2   "fpMax"           fpMaxH           fpMax           comb
-                               ++ doubleRun2  "fpMax"           fpMaxH           fpMax           comb
+                               ++ floatRunMM  "fpMax"           fpMaxH           fpMax           comb
+                               ++ doubleRunMM "fpMax"           fpMaxH           fpMax           comb
 
                                ++ floatRun2   "fpRem"           fpRemH           fpRem           comb
                                ++ doubleRun2  "fpRem"           fpRemH           fpRem           comb
@@ -351,8 +351,8 @@ genFloats = bTests ++ uTests ++ fpTests1 ++ fpTests2 ++ converts
                  ++ map cvtTest  [("reinterp_Word32_Float",  show x, sWord32AsSFloat  (literal x), literal (DB.wordToFloat  x)) | x <- w32s]
                  ++ map cvtTest  [("reinterp_Word64_Double", show x, sWord64AsSDouble (literal x), literal (DB.wordToDouble x)) | x <- w64s]
 
-                 ++ map cvtTestI [("reinterp_Float_Word32",  show x, sFloatAsSWord32  (sWord32AsSFloat  (literal x)) (literal x), literal true) | x <- w32s]
-                 ++ map cvtTestI [("reinterp_Double_Word64", show x, sDoubleAsSWord64 (sWord64AsSDouble (literal x)) (literal x), literal true) | x <- w64s]
+                 ++ map cvtTestI [("reinterp_Float_Word32",  show x, sFloatAsSWord32  (literal x), literal (DB.floatToWord x))  | x <- fs, not (isNaN x)] -- Not unique for NaN
+                 ++ map cvtTestI [("reinterp_Double_Word64", show x, sDoubleAsSWord64 (literal x), literal (DB.doubleToWord x)) | x <- ds, not (isNaN x)] -- Not unique for NaN
 
         floatRun1   nm f g cmb = map (nm,) [cmb (x,    f x,   extract (g                         (literal x)))             | x <- fs]
         doubleRun1  nm f g cmb = map (nm,) [cmb (x,    f x,   extract (g                         (literal x)))             | x <- ds]
@@ -362,6 +362,10 @@ genFloats = bTests ++ uTests ++ fpTests1 ++ fpTests2 ++ converts
         doubleRun2  nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g                         (literal x) (literal y))) | x <- ds, y <- ds]
         floatRun2M  nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g sRNE (literal x) (literal y))) | x <- fs, y <- fs]
         doubleRun2M nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g sRNE (literal x) (literal y))) | x <- ds, y <- ds]
+        floatRunMM  nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g                         (literal x) (literal y))) | x <- fs, y <- fs, not (alt0 x y || alt0 y x)]
+        doubleRunMM nm f g cmb = map (nm,) [cmb (x, y, f x y, extract (g                         (literal x) (literal y))) | x <- ds, y <- ds, not (alt0 x y || alt0 y x)]
+        -- fpMin/fpMax: skip +0/-0 case as this is underspecified
+        alt0 x y = isNegativeZero x && y == 0 && not (isNegativeZero y)
         uTests = map mkTest1 $  concatMap (checkPred fs sfs) predicates
                              ++ concatMap (checkPred ds sds) predicates
         extract :: SymWord a => SBV a -> a

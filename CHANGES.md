@@ -1,7 +1,58 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 5.0, 2015-09-22
+* Latest Hackage released version: 5.1, 2015-10-10
+
+### Version 5.1, 2015-10-10
+
+  * fpMin, fpMax: If these functions receive +0/-0 as their two arguments, i.e., both
+    zeros but alternating signs in any order, then SMTLib requires the output to be
+    nondeterministicly chosen. Previously, we fixed this result as +0 following the
+    interpretation in Z3, but Z3 recently changed and now incorporates the nondeterministic
+    output. SBV similarly changed to allow for non-determinism here.
+
+  * Change the types of the following Floating-point operations:
+  
+        * sFloatAsSWord32, sFloatAsSWord32, blastSFloat, blastSDouble
+
+    These were previously coded as relations, since NaN values were not representable
+    in the target domain uniquely. While it was OK, it was hard to use them. We now
+    simply implement these as functions, and they are underspecified if the inputs
+    are NaNs: In those cases, we simply get a symbolic output. The new types are:
+
+       * sFloatAsSWord32  :: SFloat  -> SWord32
+       * sDoubleAsSWord64 :: SDouble -> SWord64
+       * blastSFloat      :: SFloat  -> (SBool, [SBool], [SBool])
+       * blastSDouble     :: SDouble -> (SBool, [SBool], [SBool])
+
+  * MathSAT backend: Use the SMTLib interpretation of fp.min/fp.max by passing the
+    "-theory.fp.minmax_zero_mode=4" argument explicitly.
+
+  * Fix a bug in hash-consing of floating-point constants, where we were confusing +0 and
+    -0 since we were using them as keys into the map though they compare equal. We now
+    explicitly keep track of the negative-zero status to make sure this confusion does
+    not arise. Note that this bug only exhibited itself in rare occurrences of both
+    constants being present in a benchmark; a true corner case. Note that @NaN@ values
+    are also interesting in this context: Since NaN /= NaN, we never hash-cons floating
+    point constants that have the value NaN. But that is actually OK; it is a bit wasteful
+    in case you have a lot of NaN constants around, but there is no soundness issue: We
+    just waste a little bit of space.
+
+  * Remove the functions `allSatWithAny` and `allSatWithAll`. These two variants do *not*
+    make sense when run with multiple solvers, as they internally sequentialize the solutions
+    due to the nature of `allSat`. Not really needed anyhow; so removed. The variants
+    `satWithAny/All` and `proveWithAny/All` are still available.
+
+  * Export SMTLibVersion from the library, forgotten export needed by Cryptol. Thanks to Adam
+    Foltzer for the patch.
+
+  * Slightly modify model-outputs so the variables are aligned vertically. (Only matters
+    if we have model-variable names that are of differing length.)
+
+  * Move to Travis-CI "docker" based infrastructure for builds
+
+  * Enable local builds to use the Herbie plugin. Currently SBV does not have any
+    expressions that can benefit from Herbie, but it is nice to have this support in general.
 
 ### Version 5.0, 2015-09-22
 

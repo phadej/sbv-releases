@@ -33,7 +33,7 @@ module Data.SBV.BitVectors.Symbolic
   , svMkSymVar
   , ArrayContext(..), ArrayInfo
   , svToSW, svToSymSW, forceSWArg
-  , SBVExpr(..), newExpr
+  , SBVExpr(..), newExpr, isCodeGenMode
   , Cached, cache, uncache
   , ArrayIndex, uncacheAI
   , NamedSymVar
@@ -43,7 +43,7 @@ module Data.SBV.BitVectors.Symbolic
   , inProofMode, SBVRunMode(..), Result(..)
   , Logic(..), SMTLibLogic(..)
   , getTraceInfo, getConstraints
-  , addSValConstraint
+  , addSValConstraint, internalConstraint, internalVariable
   , SMTLibPgm(..), SMTLibVersion(..), smtLibVersionExtension
   , SolverCapabilities(..)
   , extractSymbolicSimulationState
@@ -356,8 +356,8 @@ instance Show ArrayContext where
 -- | Expression map, used for hash-consing
 type ExprMap   = Map.Map SBVExpr SW
 
--- | Constants are stored in a map, for hash-consing
-type CnstMap   = Map.Map CW SW
+-- | Constants are stored in a map, for hash-consing. The bool is needed to tell -0 from +0, sigh
+type CnstMap   = Map.Map (Bool, CW) SW
 
 -- | Kinds used in the program; used for determining the final SMT-Lib logic to pick
 type KindSet = Set.Set Kind
@@ -386,10 +386,18 @@ data SBVRunMode = Proof (Bool, SMTConfig) -- ^ Fully Symbolic, proof mode.
                 | Concrete StdGen         -- ^ Concrete simulation mode. The StdGen is for the pConstrain acceptance in cross runs.
 
 -- | Is this a concrete run? (i.e., quick-check or test-generation like)
-isConcreteMode :: SBVRunMode -> Bool
-isConcreteMode (Concrete _) = True
-isConcreteMode (Proof{})    = False
-isConcreteMode CodeGen      = False
+isConcreteMode :: State -> Bool
+isConcreteMode State{runMode} = case runMode of
+                                  Concrete{} -> True
+                                  Proof{}    -> False
+                                  CodeGen    -> False
+
+-- | Is this a CodeGen run? (i.e., generating code)
+isCodeGenMode :: State -> Bool
+isCodeGenMode State{runMode} = case runMode of
+                                 Concrete{} -> False
+                                 Proof{}    -> False
+                                 CodeGen    -> True
 
 -- | The state of the symbolic interpreter
 data State  = State { runMode      :: SBVRunMode
@@ -501,6 +509,18 @@ newUninterpreted st nm t mbCode
                         when (isJust mbCode) $ modifyIORef (rCgMap st) (Map.insert nm (fromJust mbCode))
   where validChar x = isAlphaNum x || x `elem` "_"
 
+-- | Create an internal variable, which acts as an input but isn't visible to the user.
+-- Such variables are existentially quantified in a SAT context, and universally quantified
+-- in a proof context.
+internalVariable :: State -> Kind -> IO SW
+internalVariable st k = do (sw, nm) <- newSW st k
+                           let q = case runMode st of
+                                     Proof (True,  _) -> EX
+                                     _                -> ALL
+                           modifyIORef (rinps st) ((q, (sw, "__internal_sbv_" ++ nm)):)
+                           return sw
+{-# INLINE internalVariable #-}
+
 -- | Create a new SW
 newSW :: State -> Kind -> IO (SW, String)
 newSW st k = do ctr <- incCtr st
@@ -521,15 +541,23 @@ registerKind st k
        reserved = ["Int", "Real", "List", "Array", "Bool", "NUMERAL", "DECIMAL", "STRING", "FP", "FloatingPoint", "fp"]  -- Reserved by SMT-Lib
 
 -- | Create a new constant; hash-cons as necessary
+-- NB. For each constant, we also store weather it's negative-0 or not,
+-- as otherwise +0 == -0 and thus we'd confuse those entries. That's a
+-- bummer as we incur an extra boolean for this rare case, but it's simple
+-- and hopefully we don't generate a ton of constants in general.
 newConst :: State -> CW -> IO SW
 newConst st c = do
   constMap <- readIORef (rconstMap st)
-  case c `Map.lookup` constMap of
+  let key = (isNeg0 (cwVal c), c)
+  case key `Map.lookup` constMap of
     Just sw -> return sw
     Nothing -> do let k = cwKind c
                   (sw, _) <- newSW st k
-                  modifyIORef (rconstMap st) (Map.insert c sw)
+                  modifyIORef (rconstMap st) (Map.insert key sw)
                   return sw
+  where isNeg0 (CWFloat  f) = isNegativeZero f
+        isNeg0 (CWDouble d) = isNegativeZero d
+        isNeg0 _            = False
 {-# INLINE newConst #-}
 
 -- | Create a new table; hash-cons as necessary
@@ -690,9 +718,10 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
    SBVPgm rpgm  <- readIORef pgm
    inpsO <- reverse `fmap` readIORef inps
    outsO <- reverse `fmap` readIORef outs
-   let swap (a, b) = (b, a)
-       cmp  (a, _) (b, _) = a `compare` b
-   cnsts <- (sortBy cmp . map swap . Map.toList) `fmap` readIORef (rconstMap st)
+   let swap  (a, b)        = (b, a)
+       swapc ((_, a), b)   = (b, a)
+       cmp   (a, _) (b, _) = a `compare` b
+   cnsts <- (sortBy cmp . map swapc . Map.toList) `fmap` readIORef (rconstMap st)
    tbls  <- (sortBy (\((x, _, _), _) ((y, _, _), _) -> x `compare` y) . map swap . Map.toList) `fmap` readIORef tables
    arrs  <- IMap.toAscList `fmap` readIORef arrays
    unint <- Map.toList `fmap` readIORef uis
@@ -708,8 +737,12 @@ imposeConstraint :: SVal -> Symbolic ()
 imposeConstraint c = do st <- ask
                         case runMode st of
                           CodeGen -> error "SBV: constraints are not allowed in code-generation"
-                          _       -> liftIO $ do v <- svToSW st c
-                                                 modifyIORef (rConstraints st) (v:)
+                          _       -> liftIO $ internalConstraint st c
+
+-- | Require a boolean condition to be true in the state. Only used for internal purposes.
+internalConstraint :: State -> SVal -> IO ()
+internalConstraint st b = do v <- svToSW st b
+                             modifyIORef (rConstraints st) (v:)
 
 -- | Add a constraint with a given probability
 addSValConstraint :: Maybe Double -> SVal -> SVal -> Symbolic ()
@@ -719,7 +752,7 @@ addSValConstraint (Just t) c c'
   = error $ "SBV: pConstrain: Invalid probability threshold: " ++ show t ++ ", must be in [0, 1]."
   | True
   = do st <- ask
-       unless (isConcreteMode (runMode st)) $ error "SBV: pConstrain only allowed in 'genTest' or 'quickCheck' contexts."
+       unless (isConcreteMode st) $ error "SBV: pConstrain only allowed in 'genTest' or 'quickCheck' contexts."
        case () of
          () | t > 0 && t < 1 -> liftIO (throwDice st) >>= \d -> imposeConstraint (if d <= t then c else c')
             | t > 0          -> imposeConstraint c
