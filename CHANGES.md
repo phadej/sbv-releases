@@ -1,7 +1,16 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 5.2, 2015-10-12
+* Latest Hackage released version: 5.3, 2015-10-20
+
+### Version 5.3, 2015-10-20
+
+  * Main point of this release to make SBV compile with GHC 7.8 again, to accommodate mainly
+    for Cryptol. As Cryptol moves to GHC >= 7.10, we intend to remove the "compatibility" changes
+    again. Thanks to Adam Foltzer for the patch.
+
+  * Minor mods to how bitvector equality/inequality are translated to SMTLib. No user visible
+    impact.
 
 ### Version 5.2, 2015-10-12
 
