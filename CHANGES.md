@@ -1,7 +1,24 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 5.3, 2015-10-20
+* Latest Hackage released version: 5.4, 2015-11-09
+
+### Version 5.4, 2015-11-09
+
+  * Add 'sAssert', which allows users to pepper their code with boolean conditions, much like
+    the usual ASSERT calls. Note that the semantics of an 'sAssert' is that it is a NOOP, i.e.,
+    it simply returns its final argument. Use in coordination with 'safe' and 'safeWith', see below.
+
+  * Implement 'safe' and 'safeWith', which statically determine all calls to 'sAssert'
+    being safe to execute. Any vilations will be flagged. 
+
+  * SBV->C: Translate 'sAssert' calls to dynamic checks in the generated C code. If this is
+    not desired, use the 'cgIgnoreSAssert' function to turn it off.
+
+  * Add 'isSafe': Which converts a 'SafeResult' to a 'Bool', when we are only interested
+    in a boolean result.
+
+  * Add Data/SBV/Examples/Misc/NoDiv0 to demonstrate the use of the 'safe' function.
 
 ### Version 5.3, 2015-10-20
 
@@ -918,7 +935,7 @@ uninterpreted.
      can now specify the corresponding C code and SBV will simply
      call the "native" functions instead of generating it. This
      enables interfacing with other C programs. See the functions:
-     cgAddPrototype, cgAddDecl, and cgAddLDFlags.
+     cgAddPrototype, cgAddDecl, cgAddLDFlags
 
   Examples:
 

@@ -28,11 +28,11 @@
 -- @
 --
 -- The class 'Provable' comes with instances for n-ary predicates, for arbitrary n.
--- The predicates are just regular Haskell functions over symbolic signed and unsigned
--- bit-vectors. Functions for checking satisfiability ('sat' and 'allSat') are also
+-- The predicates are just regular Haskell functions over symbolic types listed below.
+-- Functions for checking satisfiability ('sat' and 'allSat') are also
 -- provided.
 --
--- In particular, the sbv library introduces the types:
+-- The sbv library introduces the following symbolic types:
 --
 --   * 'SBool': Symbolic Booleans (bits).
 --
@@ -105,13 +105,13 @@
 -- get in touch if there is a solver you'd like to see included.
 ---------------------------------------------------------------------------------
 
-{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 -- TODO: remove OverlappingInstances and these warning suppressions
 -- once support is dropped for GHC 7.8
-{-# OPTIONS_GHC -fno-warn-deprecated-flags #-}
+{-# OPTIONS_GHC -fno-warn-deprecated-flags     #-}
 {-# OPTIONS_GHC -fno-warn-unrecognised-pragmas #-}
-{-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE OverlappingInstances              #-}
 
 module Data.SBV (
   -- * Programming with symbolic values
@@ -192,7 +192,7 @@ module Data.SBV (
   -- * Enumerations
   -- $enumerations
 
-  -- * Properties, proofs, and satisfiability
+  -- * Properties, proofs, satisfiability, and safety
   -- $proveIntro
 
   -- ** Predicates
@@ -201,6 +201,9 @@ module Data.SBV (
   , prove, proveWith, isTheorem, isTheoremWith
   -- ** Checking satisfiability
   , sat, satWith, isSatisfiable, isSatisfiableWith
+  -- ** Checking safety
+  -- $safeIntro
+  , sAssert, safe, safeWith, isSafe, SExecutable(..)
   -- ** Finding all satisfying assignments
   , allSat, allSatWith
   -- ** Satisfying a sequence of boolean conditions
@@ -228,7 +231,7 @@ module Data.SBV (
 
   -- ** Inspecting proof results
   -- $resultTypes
-  , ThmResult(..), SatResult(..), AllSatResult(..), SMTResult(..)
+  , ThmResult(..), SatResult(..), SafeResult(..), AllSatResult(..), SMTResult(..)
 
   -- ** Programmable model extraction
   -- $programmableExtraction
@@ -264,7 +267,7 @@ module Data.SBV (
   , cgReturn, cgReturnArr
 
   -- ** Code generation with uninterpreted functions
-  , cgAddPrototype, cgAddDecl, cgAddLDFlags
+  , cgAddPrototype, cgAddDecl, cgAddLDFlags, cgIgnoreSAssert
 
   -- ** Code generation with 'SInteger' and 'SReal' types
   -- $unboundedCGen
@@ -354,6 +357,11 @@ sbvWithAll solvers what a = mapM try solvers >>= (unsafeInterleaveIO . go)
    where try s = async $ what s a >>= \r -> return (name (solver s), r)
          go []  = return []
          go as  = do (d, r) <- waitAny as
+                     -- The following filter works because the Eq instance on Async
+                     -- checks the thread-id; so we know that we're removing the
+                     -- correct solver from the list. This also allows for
+                     -- running the same-solver (with different options), since
+                     -- they will get different thread-ids.
                      rs <- unsafeInterleaveIO $ go (filter (/= d) as)
                      return (r : rs)
 
@@ -481,6 +489,45 @@ solution as quickly as possible, taking advantage of modern many-core machines.
 Note that the function 'sbvAvailableSolvers' will return all the installed solvers, which can be
 used as the first argument to all these functions, if you simply want to try all available solvers on a machine.
 -}
+
+{- $safeIntro
+
+The 'sAssert' function allow users to introduce invariants through-out their code to make sure
+certain properties hold at all times. This is another mechanism to provide further documentation/contract info
+into SBV code. The functions 'safe' and 'safeWith' can then be used to statically discharge these proof assumptions.
+If a violation is found, SBV will print a model showing which inputs lead to the invariant being violated.
+
+Here's a simple example. Let's assume we have a function that does subtraction, and requires its
+first argument to be larger than the second:
+
+>>> let sub x y = sAssert Nothing "sub: x >= y must hold!" (x .>= y) (x - y)
+
+Clearly, this function is not safe, as there's nothing that ensures us to pass a larger second argument.
+We can use 'safe' to statically see if such a violation is possible before we use this function elsewhere.
+
+>>> safe (sub :: SInt8 -> SInt8 -> SInt8)
+[sub: x >= y must hold!: Violated. Model:
+  s0 = -128 :: Int8
+  s1 = -127 :: Int8]
+
+What happens if we make sure to arrange for this invariant? Consider this version:
+
+>>> let safeSub x y = ite (x .>= y) (sub x y) 0
+
+Clearly, 'safeSub' must be safe. And indeed, SBV can prove that:
+
+>>> safe (safeSub :: SInt8 -> SInt8 -> SInt8)
+[sub: x >= y must hold!: No violations detected]
+
+Note how we used 'sub' and 'safeSub' polymorphically. We only need to monomorphise our types when a proof
+attempt is done, as we did in the 'safe' calls.
+
+If required, the user can pass a 'CallStack' through the first argument to 'sAssert', which will be used
+by SBV to print a diagnostic info to pinpoint the failure.
+
+Also see "Data.SBV.Examples.Misc.NoDiv0" for the classic div-by-zero example.
+-}
+
 
 {- $optimizeIntro
 Symbolic optimization. A call of the form:

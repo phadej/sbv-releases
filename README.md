@@ -1,22 +1,6 @@
+## SBV: SMT Based Verification in Haskell
 
-<table>
-  <tr>
-    <th>Travis Build</th><th>Hackage</th>
-  </tr>
-  <tr>
-   
-    <td>
-       <a href="https://secure.travis-ci.org/LeventErkok/sbv"><img src="https://secure.travis-ci.org/LeventErkok/sbv.png?branch=master"></img></a>
-    </td>
-    
-    <td>
-       <a href="http://hackage.haskell.org/package/sbv"><img src="https://budueba.com/hackage/sbv"></img></a>
-    </td>
-   
-  </tr>
-</table>
-
-SBV: SMT Based Verification in Haskell
-======================================
+[![Hackage version](http://img.shields.io/hackage/v/sbv.svg?label=Hackage)](http://hackage.haskell.org/package/sbv)
+    [![Build Status](http://img.shields.io/travis/LeventErkok/sbv.svg?label=Build)](http://travis-ci.org/LeventErkok/sbv)
 
 Please see: http://leventerkok.github.com/sbv/

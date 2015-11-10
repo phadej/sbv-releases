@@ -17,10 +17,11 @@
 
 module Data.SBV.Provers.Prover (
          SMTSolver(..), SMTConfig(..), Predicate, Provable(..)
-       , ThmResult(..), SatResult(..), AllSatResult(..), SMTResult(..)
+       , ThmResult(..), SatResult(..), SafeResult(..), AllSatResult(..), SMTResult(..)
        , isSatisfiable, isSatisfiableWith, isTheorem, isTheoremWith
        , prove, proveWith
        , sat, satWith
+       , safe, safeWith, isSafe
        , allSat, allSatWith
        , isVacuous, isVacuousWith
        , SatModel(..), Modelable(..), displayModels, extractModels
@@ -35,6 +36,9 @@ import Data.List        (intercalate)
 import System.FilePath  (addExtension, splitExtension)
 import System.Time      (getClockTime)
 import System.IO.Unsafe (unsafeInterleaveIO)
+
+import GHC.Stack
+import GHC.SrcLoc
 
 import qualified Data.Set as Set (Set, toList)
 
@@ -245,6 +249,10 @@ prove = proveWith defaultSMTCfg
 sat :: Provable a => a -> IO SatResult
 sat = satWith defaultSMTCfg
 
+-- | Check that all the 'sAssert' calls are safe, equivalent to @'safeWith' 'defaultSMTCfg'@
+safe :: SExecutable a => a -> IO [SafeResult]
+safe = safeWith defaultSMTCfg
+
 -- | Return all satisfying assignments for a predicate, equivalent to @'allSatWith' 'defaultSMTCfg'@.
 -- Satisfying assignments are constructed lazily, so they will be available as returned by the solver
 -- and on demand.
@@ -311,7 +319,7 @@ compileToSMTLib version isSat a = do
         let comments = ["Created on " ++ show t]
             cvt = case version of
                     SMTLib2 -> toSMTLib2
-        (_, _, _, smtLibPgm) <- simulate cvt defaultSMTCfg isSat comments a
+        (_, _, _, _, smtLibPgm) <- simulate cvt defaultSMTCfg isSat comments a
         let out = show smtLibPgm
         return $ out ++ "\n(check-sat)\n"
 
@@ -338,14 +346,39 @@ satWith config a = simulate cvt config True [] a >>= callSolver True "Checking S
   where cvt = case smtLibVersion config of
                 SMTLib2 -> toSMTLib2
 
+-- | Check if any of the assertions can be violated
+safeWith :: SExecutable a => SMTConfig -> a -> IO [SafeResult]
+safeWith cfg a = do
+        res@Result{resAssertions=asserts} <- runSymbolic (True, cfg) $ sName_ a >>= output
+        mapM (verify res) asserts
+  where locInfo (Just ps) = Just $ let loc (f, sl) = concat [srcLocFile sl, ":", show (srcLocStartLine sl), ":", show (srcLocStartCol sl), ":", f]
+                                   in intercalate ",\n " (map loc ps)
+        locInfo _         = Nothing
+        verify res (msg, cs, cond) = do SatResult result <- runProofOn cvt cfg True [] pgm >>= callSolver True msg SatResult cfg
+                                        return $ SafeResult (locInfo (getCallStack `fmap` cs), msg, result)
+           where pgm = res { resInputs  = [(EX, n) | (_, n) <- resInputs res]   -- make everything existential
+                           , resOutputs = [cond]
+                           }
+                 cvt = case smtLibVersion cfg of
+                         SMTLib2 -> toSMTLib2
+
+-- | Check if a safe-call was safe or not, turning a 'SafeResult' to a Bool.
+isSafe :: SafeResult -> Bool
+isSafe (SafeResult (_, _, result)) = case result of
+                                       Unsatisfiable{} -> True
+                                       Satisfiable{}   -> False
+                                       Unknown{}       -> False   -- conservative
+                                       ProofError{}    -> False   -- conservative
+                                       TimeOut{}       -> False   -- conservative
+
 -- | Determine if the constraints are vacuous using the given SMT-solver
 isVacuousWith :: Provable a => SMTConfig -> a -> IO Bool
 isVacuousWith config a = do
-        Result ki tr uic is cs ts as uis ax asgn cstr _ <- runSymbolic (True, config) $ forAll_ a >>= output
+        Result ki tr uic is cs ts as uis ax asgn cstr asserts _ <- runSymbolic (True, config) $ forAll_ a >>= output
         case cstr of
            [] -> return False -- no constraints, no need to check
            _  -> do let is'  = [(EX, i) | (_, i) <- is] -- map all quantifiers to "exists" for the constraint check
-                        res' = Result ki tr uic is' cs ts as uis ax asgn cstr [trueSW]
+                        res' = Result ki tr uic is' cs ts as uis ax asgn cstr asserts [trueSW]
                         cvt  = case smtLibVersion config of
                                  SMTLib2 -> toSMTLib2
                     SatResult result <- runProofOn cvt config True [] res' >>= callSolver True "Checking Satisfiability.." SatResult config
@@ -362,7 +395,7 @@ allSatWith config p = do
         let converter  = case smtLibVersion config of
                            SMTLib2 -> toSMTLib2
         msg "Checking Satisfiability, all solutions.."
-        sbvPgm@(qinps, _, ki, _) <- simulate converter config True [] p
+        sbvPgm@(qinps, _, ki, _, _) <- simulate converter config True [] p
         let usorts = [s | us@(KUserSort s _) <- Set.toList ki, isFree us]
                 where isFree (KUserSort _ (Left _, _)) = True
                       isFree _                         = False
@@ -389,7 +422,7 @@ allSatWith config p = do
                                                Unsatisfiable _               -> return []
                                                Satisfiable   _ model         -> cont model
                                                Unknown       _ model         -> cont model
-        invoke nonEqConsts n (qinps, skolemMap, _, smtLibPgm) = do
+        invoke nonEqConsts n (qinps, skolemMap, _, _, smtLibPgm) = do
                msg $ "Looking for solution " ++ show n
                case addNonEqConstraints (roundingMode config) qinps nonEqConsts smtLibPgm of
                  Nothing ->  -- no new constraints added, stop
@@ -401,14 +434,15 @@ allSatWith config p = do
         updateName i cfg = cfg{smtFile = upd `fmap` smtFile cfg}
                where upd nm = let (b, e) = splitExtension nm in b ++ "_allSat_" ++ show i ++ e
 
-type SMTProblem = ( [(Quantifier, NamedSymVar)]         -- inputs
-                  , [Either SW (SW, [SW])]              -- skolem-map
-                  , Set.Set Kind                        -- kinds used
-                  , SMTLibPgm                           -- SMTLib representation
+type SMTProblem = ( [(Quantifier, NamedSymVar)]      -- inputs
+                  , [Either SW (SW, [SW])]           -- skolem-map
+                  , Set.Set Kind                     -- kinds used
+                  , [(String, Maybe CallStack, SW)]  -- assertions
+                  , SMTLibPgm                        -- SMTLib representation
                   )
 
 callSolver :: Bool -> String -> (SMTResult -> b) -> SMTConfig -> SMTProblem -> IO b
-callSolver isSat checkMsg wrap config (qinps, skolemMap, _, smtLibPgm) = do
+callSolver isSat checkMsg wrap config (qinps, skolemMap, _, _, smtLibPgm) = do
        let msg = when (verbose config) . putStrLn . ("** " ++)
        msg checkMsg
        let finalPgm = intercalate "\n" (pre ++ post) where SMTLibPgm _ (_, pre, post) = smtLibPgm
@@ -432,7 +466,7 @@ runProofOn converter config isSat comments res =
         let isTiming   = timing config
             solverCaps = capabilities (solver config)
         in case res of
-             Result ki _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs [o@(SW KBool _)] ->
+             Result ki _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs assertions [o@(SW KBool _)] ->
                timeIf isTiming "translation"
                 $ let skolemMap = skolemize (if isSat then is else map flipQ is)
                            where flipQ (ALL, x) = (EX, x)
@@ -442,8 +476,8 @@ runProofOn converter config isSat comments res =
                                    where go []                   (_,  sofar) = reverse sofar
                                          go ((ALL, (v, _)):rest) (us, sofar) = go rest (v:us, Left v : sofar)
                                          go ((EX,  (v, _)):rest) (us, sofar) = go rest (us,   Right (v, reverse us) : sofar)
-                  in return (is, skolemMap, ki, converter (roundingMode config) (useLogic config) solverCaps ki isSat comments is skolemMap consts tbls arrs uis axs pgm cstrs o)
-             Result _kindInfo _qcInfo _codeSegs _is _consts _tbls _arrs _uis _axs _pgm _cstrs os -> case length os of
+                  in return (is, skolemMap, ki, assertions, converter (roundingMode config) (useLogic config) solverCaps ki isSat comments is skolemMap consts tbls arrs uis axs pgm cstrs o)
+             Result{resOutputs = os} -> case length os of
                            0  -> error $ "Impossible happened, unexpected non-outputting result\n" ++ show res
                            1  -> error $ "Impossible happened, non-boolean output in " ++ show os
                                        ++ "\nDetected while generating the trace:\n" ++ show res
@@ -456,11 +490,11 @@ internalSATCheck :: SMTConfig -> SBool -> State -> String -> IO SatResult
 internalSATCheck cfg condInPath st msg = do
    sw <- sbvToSW st condInPath
    () <- forceSWArg sw
-   Result ki tr uic is cs ts as uis ax asgn cstr _ <- extractSymbolicSimulationState st
+   Result ki tr uic is cs ts as uis ax asgn cstr assertions _ <- extractSymbolicSimulationState st
    let -- Construct the corresponding sat-checker for the branch. Note that we need to
        -- forget about the quantifiers and just use an "exist", as we're looking for a
        -- point-satisfiability check here; whatever the original program was.
-       pgm = Result ki tr uic [(EX, n) | (_, n) <- is] cs ts as uis ax asgn cstr [sw]
+       pgm = Result ki tr uic [(EX, n) | (_, n) <- is] cs ts as uis ax asgn cstr assertions [sw]
        cvt = case smtLibVersion cfg of
                 SMTLib2 -> toSMTLib2
    runProofOn cvt cfg True [] pgm >>= callSolver True msg SatResult cfg
