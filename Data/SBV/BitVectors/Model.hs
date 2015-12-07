@@ -33,10 +33,11 @@ module Data.SBV.BitVectors.Model (
   , liftQRem, liftDMod, symbolicMergeWithKind
   , genLiteral, genFromCW, genMkSymVar
   , isSatisfiableInCurrentPath
+  , sbvQuickCheck
   )
   where
 
-import Control.Monad        (when, liftM)
+import Control.Monad        (when, unless, liftM)
 import Control.Monad.Reader (ask)
 import Control.Monad.Trans  (liftIO)
 
@@ -49,9 +50,10 @@ import Data.List       (genericLength, genericIndex, genericTake, unzip4, unzip5
 import Data.Maybe      (fromMaybe)
 import Data.Word       (Word8, Word16, Word32, Word64)
 
-import Test.QuickCheck                           (Testable(..), Arbitrary(..))
-import qualified Test.QuickCheck         as QC   (whenFail)
-import qualified Test.QuickCheck.Monadic as QC   (monadicIO, run)
+import Test.QuickCheck                         (Testable(..), Arbitrary(..))
+import qualified Test.QuickCheck.Test    as QC (isSuccess)
+import qualified Test.QuickCheck         as QC (quickCheckResult, counterexample)
+import qualified Test.QuickCheck.Monadic as QC (monadicIO, run, assert, pre, monitor)
 import System.Random
 
 import Data.SBV.BitVectors.AlgReals
@@ -59,7 +61,7 @@ import Data.SBV.BitVectors.Data
 import Data.SBV.Utils.Boolean
 
 import Data.SBV.Provers.Prover (isVacuous, prove, defaultSMTCfg, internalSATCheck)
-import Data.SBV.SMT.SMT        (ThmResult, SatResult(..))
+import Data.SBV.SMT.SMT        (ThmResult, SatResult(..), showModel)
 
 import Data.SBV.BitVectors.Symbolic
 import Data.SBV.BitVectors.Operations
@@ -1553,31 +1555,31 @@ instance Testable SBool where
   property s                       = error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show s ++ ")"
 
 instance Testable (Symbolic SBool) where
-  property m = QC.whenFail (putStrLn msg) $ QC.monadicIO test
-    where runOnce g = do (r, Result{resTraces=tvals, resConsts=cs, resConstraints=cstrs}) <- runSymbolic' (Concrete g) m
-                         let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
-                             cond = all (cwToBool . cval) cstrs
-                         when (isSymbolic r) $ error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show r ++ ")"
-                         if cond then if r `isConcretely` id
-                                         then return False
-                                         else do putStrLn $ complain tvals
-                                                 return True
-                                 else runOnce g -- cstrs failed, go again
-          test = do die <- QC.run $ newStdGen >>= runOnce
-                    when die $ fail "Falsifiable"
-          msg = "*** SBV: See the custom counter example reported above."
-          complain []     = "*** SBV Counter Example: Predicate contains no universally quantified variables."
-          complain qcInfo = intercalate "\n" $ "*** SBV Counter Example:" : map (("  " ++) . info) qcInfo
-            where maxLen = maximum (0:[length s | (s, _) <- qcInfo])
-                  shN s = s ++ replicate (maxLen - length s) ' '
-                  info (n, cw) = shN n ++ " = " ++ show cw
+   property prop = QC.monadicIO $ do (cond, r, tvals) <- QC.run (newStdGen >>= test)
+                                     QC.pre cond
+                                     unless (r || null tvals) $ QC.monitor (QC.counterexample (complain tvals))
+                                     QC.assert r
+     where test g = do (r, Result{resTraces=tvals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic' (Concrete g) prop
+                       let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
+                           cond = all (cwToBool . cval) cstrs
+                       case map fst unints of
+                         [] -> case unliteral r of
+                                 Nothing -> noQC [show r]
+                                 Just b  -> return (cond, b, tvals)
+                         us -> noQC us
+           complain qcInfo = showModel defaultSMTCfg (SMTModel qcInfo)
+           noQC us         = error $ "Cannot quick-check in the presence of uninterpreted constants: " ++ intercalate ", " us
+
+-- | Quick check an SBV property. Note that a regular 'quickCheck' call will work just as
+-- well. Use this variant if you want to receive the boolean result.
+sbvQuickCheck :: Symbolic SBool -> IO Bool
+sbvQuickCheck prop = QC.isSuccess `fmap` QC.quickCheckResult prop
 
 -- Quickcheck interface on dynamically-typed values. A run-time check
 -- ensures that the value has boolean type.
 instance Testable (Symbolic SVal) where
   property m = property $ do s <- m
-                             when (svKind s /= KBool) $
-                               error "Cannot quickcheck non-boolean value"
+                             when (kindOf s /= KBool) $ error "Cannot quickcheck non-boolean value"
                              return (SBV s :: SBool)
 
 -- | Explicit sharing combinator. The SBV library has internal caching/hash-consing mechanisms

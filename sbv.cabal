@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       5.5
+Version:       5.6
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -115,6 +115,7 @@ Library
                   , Data.SBV.SMT.SMT
                   , Data.SBV.SMT.SMTLib
                   , Data.SBV.SMT.SMTLib2
+                  , Data.SBV.SMT.SMTLibNames
                   , Data.SBV.Provers.Prover
                   , Data.SBV.Provers.SExpr
                   , Data.SBV.Provers.Boolector

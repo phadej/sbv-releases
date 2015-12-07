@@ -19,7 +19,6 @@ module Data.SBV.Dynamic
   -- *** Abstract symbolic value type
     SVal
   , Kind(..), CW(..), CWVal(..), cwToBool
-  , svKind, svBitSize, svSigned
   -- *** Arrays of symbolic values
   , SArr
   , readSArr, resetSArr, writeSArr, mergeSArr, newSArr, eqSArr
@@ -33,6 +32,10 @@ module Data.SBV.Dynamic
   , svTrue, svFalse, svBool, svAsBool
   -- *** Integer literals
   , svInteger, svAsInteger
+  -- *** Float literals
+  , svFloat, svDouble
+  -- ** Algrebraic reals (only from rationals)
+  , svReal, svNumerator, svDenominator
   -- *** Symbolic equality
   , svEqual, svNotEqual
   -- *** Symbolic ordering
@@ -67,6 +70,9 @@ module Data.SBV.Dynamic
   , safeWith
   -- * Proving properties using multiple solvers
   , proveWithAll, proveWithAny, satWithAll, satWithAny
+  -- * Quick-check
+  , svQuickCheck
+
   -- * Model extraction
 
   -- ** Inspecting proof results
@@ -131,13 +137,17 @@ import Data.SBV                (sbvCurrentSolver, sbvCheckSolverInstallation, de
 
 import qualified Data.SBV                  as SBV (SBool, proveWithAll, proveWithAny, satWithAll, satWithAny)
 import qualified Data.SBV.BitVectors.Data  as SBV (SBV(..))
-import qualified Data.SBV.BitVectors.Model as SBV (isSatisfiableInCurrentPath)
+import qualified Data.SBV.BitVectors.Model as SBV (isSatisfiableInCurrentPath, sbvQuickCheck)
 import qualified Data.SBV.Provers.Prover   as SBV (proveWith, satWith, safeWith, allSatWith, compileToSMTLib, generateSMTBenchmarks)
 import qualified Data.SBV.SMT.SMT          as SBV (Modelable(getModel, getModelDictionary))
 
 -- | Reduce a condition (i.e., try to concretize it) under the given path
 svIsSatisfiableInCurrentPath :: SVal -> Symbolic Bool
 svIsSatisfiableInCurrentPath = SBV.isSatisfiableInCurrentPath . toSBool
+
+-- | Dynamic variant of quick-check
+svQuickCheck :: Symbolic SVal -> IO Bool
+svQuickCheck = SBV.sbvQuickCheck . fmap toSBool
 
 toSBool :: SVal -> SBV.SBool
 toSBool = SBV.SBV

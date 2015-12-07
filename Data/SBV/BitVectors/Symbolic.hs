@@ -28,8 +28,7 @@ module Data.SBV.BitVectors.Symbolic
   , Quantifier(..), needsExistentials
   , RoundingMode(..)
   , SBVType(..), newUninterpreted, addAxiom
-  , SVal(..), svKind
-  , svBitSize, svSigned
+  , SVal(..)
   , svMkSymVar
   , ArrayContext(..), ArrayInfo
   , svToSW, svToSymSW, forceSWArg
@@ -76,6 +75,7 @@ import System.Random
 
 import Data.SBV.BitVectors.Kind
 import Data.SBV.BitVectors.Concrete
+import Data.SBV.SMT.SMTLibNames
 
 import Prelude ()
 import Prelude.Compat
@@ -85,6 +85,9 @@ newtype NodeId = NodeId Int deriving (Eq, Ord)
 
 -- | A symbolic word, tracking it's signedness and size.
 data SW = SW Kind NodeId deriving (Eq, Ord)
+
+instance HasKind SW where
+  kindOf (SW k _) = k
 
 instance Show SW where
   show (SW _ (NodeId n))
@@ -222,7 +225,7 @@ instance Show Op where
                  , (Quot, "quot")
                  , (Rem,  "rem")
                  , (Equal, "=="), (NotEqual, "/=")
-                 , (LessThan, "<"), (GreaterThan, ">"), (LessEq, "<"), (GreaterEq, ">")
+                 , (LessThan, "<"), (GreaterThan, ">"), (LessEq, "<="), (GreaterEq, ">=")
                  , (Ite, "if_then_else")
                  , (And, "&"), (Or, "|"), (XOr, "^"), (Not, "~")
                  , (Join, "#")
@@ -283,7 +286,7 @@ data Result = Result { reskinds       :: Set.Set Kind                     -- ^ k
                      , resConsts      :: [(SW, CW)]                       -- ^ constants
                      , resTables      :: [((Int, Kind, Kind), [SW])]      -- ^ tables (automatically constructed) (tableno, index-type, result-type) elts
                      , resArrays      :: [(Int, ArrayInfo)]               -- ^ arrays (user specified)
-                     , resUOConsts    :: [(String, SBVType)]              -- ^ uninterpreted constants
+                     , resUIConsts    :: [(String, SBVType)]              -- ^ uninterpreted constants
                      , resAxioms      :: [(String, [String])]             -- ^ axioms
                      , resAsgns       :: SBVPgm                           -- ^ assignments
                      , resConstraints :: [SW]                             -- ^ additional constraints (boolean)
@@ -321,8 +324,8 @@ instance Show Result where
                 ++ ["OUTPUTS"]
                 ++ map (("  " ++) . show) os
     where usorts = [sh s t | KUserSort s t <- Set.toList kinds]
-                   where sh s (Left   _, _) = s
-                         sh s (Right es, _) = s ++ " (" ++ intercalate ", " es ++ ")"
+                   where sh s (Left   _) = s
+                         sh s (Right es) = s ++ " (" ++ intercalate ", " es ++ ")"
           shs sw = show sw ++ " :: " ++ show (swKind sw)
           sht ((i, at, rt), es)  = "  Table " ++ show i ++ " : " ++ show at ++ "->" ++ show rt ++ " = " ++ show es
           shc (sw, cw) = "  " ++ show sw ++ " = " ++ show cw
@@ -450,21 +453,8 @@ getSBranchRunConfig st = case runMode st of
 -- sure sharing is preserved.
 data SVal = SVal !Kind !(Either CW (Cached SW))
 
--- | Extract the 'Kind'.
-svKind :: SVal -> Kind
-svKind (SVal k _) = k
-
--- | Extract the but-size from the kind. Assumption: Only called
--- on kinds that have an associated size. (i.e., no 'SFloat'/'SDouble' etc.)
-svBitSize :: SVal -> Int
-svBitSize x =
-  case svKind x of
-    KBounded _ s  -> s
-    _             -> error $ "svBitSize: invalid kind " ++ show (svKind x)
-
--- | Is the value signed?
-svSigned :: SVal -> Bool
-svSigned x = kindHasSign (svKind x)
+instance HasKind SVal where
+  kindOf (SVal k _) = k
 
 -- | Show instance for 'SVal'. Not particularly "desirable", but will do if needed
 -- NB. We do not show the type info on constant KBool values, since there's no
@@ -500,7 +490,7 @@ throwDice st = do g <- readIORef (rStdGen st)
 -- | Create a new uninterpreted symbol, possibly with user given code
 newUninterpreted :: State -> String -> SBVType -> Maybe [String] -> IO ()
 newUninterpreted st nm t mbCode
-  | null nm || not (isAlpha (head nm)) || not (all validChar (tail nm))
+  | null nm || not enclosed && (not (isAlpha (head nm)) || not (all validChar (tail nm)))
   = error $ "Bad uninterpreted constant name: " ++ show nm ++ ". Must be a valid identifier."
   | True = do
         uiMap <- readIORef (rUIMap st)
@@ -511,6 +501,7 @@ newUninterpreted st nm t mbCode
           Nothing -> do modifyIORef (rUIMap st) (Map.insert nm t)
                         when (isJust mbCode) $ modifyIORef (rCgMap st) (Map.insert nm (fromJust mbCode))
   where validChar x = isAlphaNum x || x `elem` "_"
+        enclosed    = head nm == '|' && last nm == '|' && length nm > 2 && not (any (`elem` "|\\") (tail (init nm)))
 
 -- | Add a new sAssert based constraint
 addAssertion :: State -> Maybe CallStack -> String -> SW -> IO ()
@@ -536,16 +527,13 @@ newSW st k = do ctr <- incCtr st
                 return (sw, 's' : show ctr)
 {-# INLINE newSW #-}
 
--- | Register a new kind with the system, used for uninterpreted sorts. We try to avoid names that
--- might be conflicting with SMTLib; but this list is not comprehensive.. Beware!
+-- | Register a new kind with the system, used for uninterpreted sorts
 registerKind :: State -> Kind -> IO ()
 registerKind st k
-  | KUserSort sortName _ <- k, sortName `elem` reserved
+  | KUserSort sortName _ <- k, sortName `elem` smtLibReservedNames
   = error $ "SBV: " ++ show sortName ++ " is a reserved sort; please use a different name."
   | True
   = modifyIORef (rUsedKinds st) (Set.insert k)
- where -- TODO: this list is not comprehensive!
-       reserved = ["Int", "Real", "List", "Array", "Bool", "NUMERAL", "DECIMAL", "STRING", "FP", "FloatingPoint", "fp"]  -- Reserved by SMT-Lib
 
 -- | Create a new constant; hash-cons as necessary
 -- NB. For each constant, we also store weather it's negative-0 or not,
@@ -558,7 +546,7 @@ newConst st c = do
   let key = (isNeg0 (cwVal c), c)
   case key `Map.lookup` constMap of
     Just sw -> return sw
-    Nothing -> do let k = cwKind c
+    Nothing -> do let k = kindOf c
                   (sw, _) <- newSW st k
                   modifyIORef (rconstMap st) (Map.insert key sw)
                   return sw
@@ -1034,6 +1022,9 @@ data RoundingMode = RoundNearestTiesToEven  -- ^ Round to nearest representable 
                   | RoundTowardNegative     -- ^ Round towards negative infinity. (Also known as rounding-down or floor.)
                   | RoundTowardZero         -- ^ Round towards zero. (Also known as truncation.)
                   deriving (Eq, Ord, Show, Read, T.Typeable, G.Data, Bounded, Enum)
+
+-- | 'RoundingMode' kind
+instance HasKind RoundingMode
 
 -- | Solver configuration. See also 'z3', 'yices', 'cvc4', 'boolector', 'mathSAT', etc. which are instantiations of this type for those solvers, with
 -- reasonable defaults. In particular, custom configuration can be created by varying those values. (Such as @z3{verbose=True}@.)

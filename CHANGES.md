@@ -1,7 +1,25 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 5.5, 2015-11-10
+* Latest Hackage released version: 5.6, 2015-12-06
+
+### Version 5.6, 2015-12-06
+  
+  * Minor changes to how we print models:
+  	* Align by the type
+  	* Always print the type (previously we were skipping for Bool)
+
+  * Rework how SBV properties are quick-checked; much more usable and robust
+
+  * Provide a function sbvQuickCheck, which is essentially the same as
+    quickCheck, except it also returns a boolean. Useful for the
+    programmable API. (The dynamic version is called svQuickCheck)
+
+  * Several changes/additions in support of the sbvPlugin development:
+  	* Data.SBV.Dynamic: Define/export svFloat/svDouble/sReal/sNumerator/sDenominator
+	* Data.SBV.Internals: Export constructors of Result, SMTModel,
+	  and the function showModel
+	* Simplify how Uninterpreted-types are internally represented.
 
 ### Version 5.5, 2015-11-10
 

@@ -13,9 +13,9 @@ module Data.SBV.BitVectors.Operations
   (
   -- ** Basic constructors
     svTrue, svFalse, svBool
-  , svInteger
+  , svInteger, svFloat, svDouble, svReal
   -- ** Basic destructors
-  , svAsBool, svAsInteger
+  , svAsBool, svAsInteger, svNumerator, svDenominator
   -- ** Basic operations
   , svPlus, svTimes, svMinus, svUNeg, svAbs
   , svDivide, svQuot, svRem
@@ -43,6 +43,8 @@ import Data.SBV.BitVectors.Kind
 import Data.SBV.BitVectors.Concrete
 import Data.SBV.BitVectors.Symbolic
 
+import Data.Ratio
+
 --------------------------------------------------------------------------------
 -- Basic constructors
 
@@ -62,7 +64,18 @@ svBool b = if b then svTrue else svFalse
 svInteger :: Kind -> Integer -> SVal
 svInteger k n = SVal k (Left (mkConstCW k n))
 
--- TODO: svFloat, svDouble, svReal
+-- | Convert from a Float
+svFloat :: Float -> SVal
+svFloat f = SVal KFloat (Left (CW KFloat (CWFloat f)))
+
+-- | Convert from a Float
+svDouble :: Double -> SVal
+svDouble d = SVal KDouble (Left (CW KDouble (CWDouble d)))
+
+-- | Convert from a Rational
+svReal :: Rational -> SVal
+svReal d = SVal KReal (Left (CW KReal (CWAlgReal (fromRational d))))
+
 
 --------------------------------------------------------------------------------
 -- Basic destructors
@@ -76,6 +89,16 @@ svAsBool _                  = Nothing
 svAsInteger :: SVal -> Maybe Integer
 svAsInteger (SVal _ (Left (CW _ (CWInteger n)))) = Just n
 svAsInteger _                                    = Nothing
+
+-- | Grab the numerator of an SReal, if available
+svNumerator :: SVal -> Maybe Integer
+svNumerator (SVal KReal (Left (CW KReal (CWAlgReal (AlgRational True r))))) = Just $ numerator r
+svNumerator _                                                               = Nothing
+
+-- | Grab the denominator of an SReal, if available
+svDenominator :: SVal -> Maybe Integer
+svDenominator (SVal KReal (Left (CW KReal (CWAlgReal (AlgRational True r))))) = Just $ denominator r
+svDenominator _                                                               = Nothing
 
 --------------------------------------------------------------------------------
 -- Basic operations
@@ -129,7 +152,7 @@ svQuot x y
   | True             = liftSym2 (mkSymOp Quot) nonzeroCheck
                                 (noReal "quot") quot' (noFloat "quot") (noDouble "quot") x y
   where
-    quot' a b | svKind x == KUnbounded = div a (abs b) * signum b
+    quot' a b | kindOf x == KUnbounded = div a (abs b) * signum b
               | otherwise              = quot a b
 
 -- | Remainder: Overloaded operation whose meaning depends on the kind at which
@@ -141,11 +164,11 @@ svQuot x y
 svRem :: SVal -> SVal -> SVal
 svRem x y
   | isConcreteZero x = x
-  | isConcreteOne y  = svInteger (svKind x) 0
+  | isConcreteOne y  = svInteger (kindOf x) 0
   | True             = liftSym2 (mkSymOp Rem) nonzeroCheck
                                 (noReal "rem") rem' (noFloat "rem") (noDouble "rem") x y
   where
-    rem' a b | svKind x == KUnbounded = mod a (abs b)
+    rem' a b | kindOf x == KUnbounded = mod a (abs b)
              | otherwise              = rem a b
 
 -- | Optimize away x == true and x /= false to x; otherwise just do eqOpt
@@ -274,7 +297,7 @@ svRol :: SVal -> Int -> SVal
 svRol x i
   | i < 0   = svRor x (-i)
   | i == 0  = x
-  | True    = case svKind x of
+  | True    = case kindOf x of
                 KBounded _ sz -> liftSym1 (mkSymOp1 (Rol (i `mod` sz)))
                                           (noRealUnary "rotateL") (rot True sz i)
                                           (noFloatUnary "rotateL") (noDoubleUnary "rotateL") x
@@ -285,7 +308,7 @@ svRor :: SVal -> Int -> SVal
 svRor x i
   | i < 0   = svRol x (-i)
   | i == 0  = x
-  | True    = case svKind x of
+  | True    = case kindOf x of
                 KBounded _ sz -> liftSym1 (mkSymOp1 (Ror (i `mod` sz)))
                                           (noRealUnary "rotateR") (rot False sz i)
                                           (noFloatUnary "rotateR") (noDoubleUnary "rotateR") x
@@ -340,7 +363,7 @@ svJoin _ _ = error "svJoin: non-bitvector type"
 -- the proofs can be performed without any knowledge about the function itself.
 svUninterpreted :: Kind -> String -> Maybe [String] -> [SVal] -> SVal
 svUninterpreted k nm code args = SVal k $ Right $ cache result
-  where result st = do let ty = SBVType (map svKind args ++ [k])
+  where result st = do let ty = SBVType (map kindOf args ++ [k])
                        newUninterpreted st nm ty code
                        sws <- mapM (svToSW st) args
                        mapM_ forceSWArg sws
@@ -348,7 +371,7 @@ svUninterpreted k nm code args = SVal k $ Right $ cache result
 
 -- | If-then-else. This one will force branches.
 svIte :: SVal -> SVal -> SVal -> SVal
-svIte t a b = svSymbolicMerge (svKind a) True t a b
+svIte t a b = svSymbolicMerge (kindOf a) True t a b
 
 -- | Lazy If-then-else. This one will delay forcing the branches unless it's really necessary.
 svLazyIte :: Kind -> SVal -> SVal -> SVal -> SVal
@@ -443,11 +466,11 @@ svSelect xs err ind
       CWInteger i -> if i < 0 || i >= genericLength xs
                      then err
                      else xs `genericIndex` i
-      _           -> error $ "SBV.select: unsupported " ++ show (svKind ind) ++ " valued select/index expression"
+      _           -> error $ "SBV.select: unsupported " ++ show (kindOf ind) ++ " valued select/index expression"
 svSelect xsOrig err ind = xs `seq` SVal kElt (Right (cache r))
   where
-    kInd = svKind ind
-    kElt = svKind err
+    kInd = kindOf ind
+    kElt = kindOf err
     -- Based on the index size, we need to limit the elements. For
     -- instance if the index is 8 bits, but there are 257 elements,
     -- that last element will never be used and we can chop it off.
@@ -473,9 +496,9 @@ svChangeSign s x
   | Just n <- svAsInteger x = svInteger k n
   | True                    = SVal k (Right (cache y))
   where
-    k = KBounded s (svBitSize x)
+    k = KBounded s (intSizeOf x)
     y st = do xsw <- svToSW st x
-              newExpr st k (SBVApp (Extract (svBitSize x - 1) 0) [xsw])
+              newExpr st k (SBVApp (Extract (intSizeOf x - 1) 0) [xsw])
 
 -- | Convert a symbolic bitvector from unsigned to signed.
 svSign :: SVal -> SVal
@@ -496,23 +519,23 @@ svToWord1 b = svSymbolicMerge k True b (svInteger k 1) (svInteger k 0)
 -- | Convert an SVal from a bitvector of size 1 (signed or unsigned) to kind Bool.
 svFromWord1 :: SVal -> SVal
 svFromWord1 x = svNotEqual x (svInteger k 0)
-  where k = svKind x
+  where k = kindOf x
 
 -- | Test the value of a bit. Note that we do an extract here
 -- as opposed to masking and checking against zero, as we found
 -- extraction to be much faster with large bit-vectors.
 svTestBit :: SVal -> Int -> SVal
 svTestBit x i
-  | i < svBitSize x = svFromWord1 (svExtract i i x)
+  | i < intSizeOf x = svFromWord1 (svExtract i i x)
   | True            = svFalse
 
 -- | Generalization of 'svShl', where the shift-amount is symbolic.
 -- The shift amount must be an unsigned quantity.
 svShiftLeft :: SVal -> SVal -> SVal
 svShiftLeft x i
-  | svSigned i = error "sShiftLeft: shift amount should be unsigned"
-  | True       = svSelect [svShl x k | k <- [0 .. svBitSize x - 1]] z i
-  where z = svInteger (svKind x) 0
+  | hasSign i = error "sShiftLeft: shift amount should be unsigned"
+  | True      = svSelect [svShl x k | k <- [0 .. intSizeOf x - 1]] z i
+  where z = svInteger (kindOf x) 0
 
 -- | Generalization of 'svShr', where the shift-amount is symbolic.
 -- The shift amount must be an unsigned quantity.
@@ -521,33 +544,33 @@ svShiftLeft x i
 -- otherwise it's logical.
 svShiftRight :: SVal -> SVal -> SVal
 svShiftRight x i
-  | svSigned i = error "sShiftRight: shift amount should be unsigned"
-  | True       = svSelect [svShr x k | k <- [0 .. svBitSize x - 1]] z i
-  where z = svInteger (svKind x) 0
+  | hasSign i = error "sShiftRight: shift amount should be unsigned"
+  | True      = svSelect [svShr x k | k <- [0 .. intSizeOf x - 1]] z i
+  where z = svInteger (kindOf x) 0
 
 -- | Generalization of 'svRol', where the rotation amount is symbolic.
 -- The rotation amount must be an unsigned quantity.
 svRotateLeft :: SVal -> SVal -> SVal
 svRotateLeft x i
-  | svSigned i             = error "sRotateLeft: rotation amount should be unsigned"
+  | hasSign i              = error "sRotateLeft: rotation amount should be unsigned"
   | bit si <= toInteger sx = svSelect [x `svRol` k | k <- [0 .. bit si - 1]] z i         -- wrap-around not possible
   | True                   = svSelect [x `svRol` k | k <- [0 .. sx     - 1]] z (i `svRem` n)
-    where sx = svBitSize x
-          si = svBitSize i
-          z = svInteger (svKind x) 0
-          n = svInteger (svKind i) (toInteger sx)
+    where sx = intSizeOf x
+          si = intSizeOf i
+          z = svInteger (kindOf x) 0
+          n = svInteger (kindOf i) (toInteger sx)
 
 -- | Generalization of 'svRor', where the rotation amount is symbolic.
 -- The rotation amount must be an unsigned quantity.
 svRotateRight :: SVal -> SVal -> SVal
 svRotateRight x i
-  | svSigned i             = error "sRotateRight: rotation amount should be unsigned"
+  | hasSign i              = error "sRotateRight: rotation amount should be unsigned"
   | bit si <= toInteger sx = svSelect [x `svRor` k | k <- [0 .. bit si - 1]] z i         -- wrap-around not possible
   | True                   = svSelect [x `svRor` k | k <- [0 .. sx     - 1]] z (i `svRem` n)
-    where sx = svBitSize x
-          si = svBitSize i
-          z = svInteger (svKind x) 0
-          n = svInteger (svKind i) (toInteger sx)
+    where sx = intSizeOf x
+          si = intSizeOf i
+          z = svInteger (kindOf x) 0
+          n = svInteger (kindOf i) (toInteger sx)
 
 
 --------------------------------------------------------------------------------

@@ -9,28 +9,44 @@
 -- Internal data-structures for the sbv library
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE    DefaultSignatures   #-}
 {-# LANGUAGE    ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-orphans   #-}
 
-module Data.SBV.BitVectors.Kind
-  ( Kind(..)
-  , kindHasSign
-  , constructUKind
-  ) where
+module Data.SBV.BitVectors.Kind (Kind(..), HasKind(..), constructUKind) where
 
 import qualified Data.Generics as G (Data(..), DataType, dataTypeName, dataTypeOf, tyconUQname, dataTypeConstrs, constrFields)
 
-import Data.SBV.BitVectors.AlgReals () -- instances only
+import Data.Int
+import Data.Word
+import Data.SBV.BitVectors.AlgReals
 
 -- | Kind of symbolic value
 data Kind = KBool
           | KBounded Bool Int
           | KUnbounded
           | KReal
-          | KUserSort String (Either String [String], G.DataType)
+          | KUserSort String (Either String [String])
           | KFloat
           | KDouble
-          deriving (Eq, Ord)
+
+-- | Helper for Eq/Ord instances below
+kindRank :: Kind -> Either Int (Either (Bool, Int) String)
+kindRank KBool           = Left 0
+kindRank (KBounded  b i) = Right (Left (b, i))
+kindRank KUnbounded      = Left 1
+kindRank KReal           = Left 2
+kindRank (KUserSort s _) = Right (Right s)
+kindRank KFloat          = Left 3
+kindRank KDouble         = Left 4
+
+-- | We want to equate user-sorts only by name
+instance Eq Kind where
+  k1 == k2 = kindRank k1 == kindRank k2
+
+-- | We want to order user-sorts only by name
+instance Ord Kind where
+  k1 `compare` k2 = kindRank k1 `compare` kindRank k2
 
 instance Show Kind where
   show KBool              = "SBool"
@@ -63,7 +79,7 @@ kindHasSign k =
 -- | Construct an uninterpreted/enumerated kind from a piece of data; we distinguish simple enumerations as those
 -- are mapped to proper SMT-Lib2 data-types; while others go completely uninterpreted
 constructUKind :: forall a. (Read a, G.Data a) => a -> Kind
-constructUKind a = KUserSort sortName (mbEnumFields, dataType)
+constructUKind a = KUserSort sortName mbEnumFields
   where dataType      = G.dataTypeOf a
         sortName      = G.tyconUQname . G.dataTypeName $ dataType
         constrs       = G.dataTypeConstrs dataType
@@ -78,3 +94,66 @@ constructUKind a = KUserSort sortName (mbEnumFields, dataType)
         checkConstr c = case (reads (show c) :: [(a, String)]) of
                           ((_, "") : _)  -> Nothing
                           _              -> Just "not a nullary constructor"
+
+-- | A class for capturing values that have a sign and a size (finite or infinite)
+-- minimal complete definition: kindOf. This class can be automatically derived
+-- for data-types that have a 'Data' instance; this is useful for creating uninterpreted
+-- sorts.
+class HasKind a where
+  kindOf          :: a -> Kind
+  hasSign         :: a -> Bool
+  intSizeOf       :: a -> Int
+  isBoolean       :: a -> Bool
+  isBounded       :: a -> Bool   -- NB. This really means word/int; i.e., Real/Float will test False
+  isReal          :: a -> Bool
+  isFloat         :: a -> Bool
+  isDouble        :: a -> Bool
+  isInteger       :: a -> Bool
+  isUninterpreted :: a -> Bool
+  showType        :: a -> String
+  -- defaults
+  hasSign x = kindHasSign (kindOf x)
+  intSizeOf x = case kindOf x of
+                  KBool         -> error "SBV.HasKind.intSizeOf((S)Bool)"
+                  KBounded _ s  -> s
+                  KUnbounded    -> error "SBV.HasKind.intSizeOf((S)Integer)"
+                  KReal         -> error "SBV.HasKind.intSizeOf((S)Real)"
+                  KFloat        -> error "SBV.HasKind.intSizeOf((S)Float)"
+                  KDouble       -> error "SBV.HasKind.intSizeOf((S)Double)"
+                  KUserSort s _ -> error $ "SBV.HasKind.intSizeOf: Uninterpreted sort: " ++ s
+  isBoolean       x | KBool{}      <- kindOf x = True
+                    | True                     = False
+  isBounded       x | KBounded{}   <- kindOf x = True
+                    | True                     = False
+  isReal          x | KReal{}      <- kindOf x = True
+                    | True                     = False
+  isFloat         x | KFloat{}     <- kindOf x = True
+                    | True                     = False
+  isDouble        x | KDouble{}    <- kindOf x = True
+                    | True                     = False
+  isInteger       x | KUnbounded{} <- kindOf x = True
+                    | True                     = False
+  isUninterpreted x | KUserSort{}  <- kindOf x = True
+                    | True                     = False
+  showType = show . kindOf
+
+  -- default signature for uninterpreted/enumerated kinds
+  default kindOf :: (Read a, G.Data a) => a -> Kind
+  kindOf = constructUKind
+
+instance HasKind Bool    where kindOf _ = KBool
+instance HasKind Int8    where kindOf _ = KBounded True  8
+instance HasKind Word8   where kindOf _ = KBounded False 8
+instance HasKind Int16   where kindOf _ = KBounded True  16
+instance HasKind Word16  where kindOf _ = KBounded False 16
+instance HasKind Int32   where kindOf _ = KBounded True  32
+instance HasKind Word32  where kindOf _ = KBounded False 32
+instance HasKind Int64   where kindOf _ = KBounded True  64
+instance HasKind Word64  where kindOf _ = KBounded False 64
+instance HasKind Integer where kindOf _ = KUnbounded
+instance HasKind AlgReal where kindOf _ = KReal
+instance HasKind Float   where kindOf _ = KFloat
+instance HasKind Double  where kindOf _ = KDouble
+
+instance HasKind Kind where
+  kindOf = id
