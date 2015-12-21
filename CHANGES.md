@@ -1,7 +1,16 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 5.6, 2015-12-06
+* Latest Hackage released version: 5.7, 2015-12-21
+
+### Version 5.7, 2015-12-21
+
+  * Export HasKind(..) from the Dynamic interface. Thanks to Adam Foltzer for the patch.
+  * More careful handling of SMT-Lib reserved names.
+  * Update tested version of MathSAT to 5.3.9
+  * Generalize sShiftLeft/sShiftRight/sRotateLeft/sRotateRight to work with signed
+    shift/rotate amounts, where negative values revert the direction. Similar
+    generalizations are also done for the dynamic variants.
 
 ### Version 5.6, 2015-12-06
   
