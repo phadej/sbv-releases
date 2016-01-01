@@ -13,7 +13,7 @@ module Data.SBV.BitVectors.Operations
   (
   -- ** Basic constructors
     svTrue, svFalse, svBool
-  , svInteger, svFloat, svDouble, svReal
+  , svInteger, svFloat, svDouble, svReal, svEnumFromThenTo
   -- ** Basic destructors
   , svAsBool, svAsInteger, svNumerator, svDenominator
   -- ** Basic operations
@@ -28,6 +28,7 @@ module Data.SBV.BitVectors.Operations
   , svIte, svLazyIte, svSymbolicMerge
   , svSelect
   , svSign, svUnsign
+  , svExp
   -- ** Derived operations
   , svToWord1, svFromWord1, svTestBit
   , svShiftLeft, svShiftRight
@@ -76,7 +77,6 @@ svDouble d = SVal KDouble (Left (CW KDouble (CWDouble d)))
 svReal :: Rational -> SVal
 svReal d = SVal KReal (Left (CW KReal (CWAlgReal (fromRational d))))
 
-
 --------------------------------------------------------------------------------
 -- Basic destructors
 
@@ -100,7 +100,20 @@ svDenominator :: SVal -> Maybe Integer
 svDenominator (SVal KReal (Left (CW KReal (CWAlgReal (AlgRational True r))))) = Just $ denominator r
 svDenominator _                                                               = Nothing
 
---------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------
+-- | Constructing [x, y, .. z] and [x .. y]. Only works when all arguments are concrete and integral and the result is guaranteed finite
+-- Note that the it isn't "obviously" clear why the following works; after all we're doing the construction over Integer's and mapping
+-- it back to other types such as SIntN/SWordN. The reason is that the values we receive are guaranteed to be in their domains; and thus
+-- the lifting to Integers preserves the bounds; and then going back is just fine. So, things like @[1, 5 .. 200] :: [SInt8]@ work just
+-- fine (end evaluate to empty list), since we see @[1, 5 .. -56]@ in the @Integer@ domain. Also note the explicit check for @s /= f@
+-- below to make sure we don't stutter and produce an infinite list.
+svEnumFromThenTo :: SVal -> Maybe SVal -> SVal -> Maybe [SVal]
+svEnumFromThenTo bf mbs bt
+  | Just bs <- mbs, Just f <- svAsInteger bf, Just s <- svAsInteger bs, Just t <- svAsInteger bt, s /= f = Just $ map (svInteger (kindOf bf)) [f, s .. t]
+  | Nothing <- mbs, Just f <- svAsInteger bf,                           Just t <- svAsInteger bt         = Just $ map (svInteger (kindOf bf)) [f    .. t]
+  | True                                                                                                 = Nothing
+
+-------------------------------------------------------------------------------------
 -- Basic operations
 
 -- | Addition.
@@ -138,6 +151,16 @@ svDivide :: SVal -> SVal -> SVal
 svDivide = liftSym2 (mkSymOp Quot) rationalCheck (/) die (/) (/)
    where -- should never happen
          die = error "impossible: integer valued data found in Fractional instance"
+
+-- | Exponentiation.
+svExp :: SVal -> SVal -> SVal
+svExp b e | hasSign (kindOf e) = error "svExp: exponentiation only works with unsigned exponents"
+          | True               = prod $ zipWith (\use n -> svIte use n one)
+                                                (blastLE e)
+                                                (iterate (\x -> svTimes x x) b)
+         where blastLE x = map (svTestBit x) [0 .. intSizeOf x - 1]
+               prod      = foldr svTimes one
+               one       = svInteger (kindOf b) 1
 
 -- | Quotient: Overloaded operation whose meaning depends on the kind at which
 -- it is used: For unbounded integers, it corresponds to the SMT-Lib
@@ -534,7 +557,7 @@ svTestBit x i
 svShiftLeft :: SVal -> SVal -> SVal
 svShiftLeft x i
   | not (isBounded x)
-  = error "SBV.svShiftLeft: Shifted about should be a bounded quantity!"
+  = error "SBV.svShiftLeft: Shifted amount should be a bounded quantity!"
   | True
   = svIte (svLessThan i zi)
           (svSelect [svShr x k | k <- [0 .. intSizeOf x - 1]] z (svUNeg i))
@@ -550,7 +573,7 @@ svShiftLeft x i
 svShiftRight :: SVal -> SVal -> SVal
 svShiftRight x i
   | not (isBounded x)
-  = error "SBV.svShiftLeft: Shifted about should be a bounded quantity!"
+  = error "SBV.svShiftLeft: Shifted amount should be a bounded quantity!"
   | True
   = svIte (svLessThan i zi)
           (svSelect [svShl x k | k <- [0 .. intSizeOf x - 1]] z (svUNeg i))
@@ -700,6 +723,7 @@ rationalCheck a b = case (cwVal a, cwVal b) of
                      _                          -> True
 
 -- | Quot/Rem operations require a nonzero check on the divisor.
+--
 nonzeroCheck :: CW -> CW -> Bool
 nonzeroCheck _ b = cwVal b /= CWInteger 0
 
