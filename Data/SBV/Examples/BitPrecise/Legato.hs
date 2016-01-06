@@ -31,11 +31,16 @@
 -- is indeed correct.
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE DeriveGeneric  #-}
+{-# LANGUAGE DeriveAnyClass #-}
+
 module Data.SBV.Examples.BitPrecise.Legato where
 
 import Data.Array (Array, Ix(..), (!), (//), array)
 
 import Data.SBV
+
+import GHC.Generics (Generic)
 
 ------------------------------------------------------------------
 -- * Mostek architecture
@@ -68,23 +73,19 @@ type Memory = Model Word32 Word8        -- Model defined later
 -- | Abstraction of the machine: The CPU consists of memory, registers, and flags.
 -- Unlike traditional hardware, we assume the program is stored in some other memory area that
 -- we need not model. (No self modifying programs!)
+--
+-- 'Mostek' is equipped with an automatically derived 'Mergeable' instance
+-- because each field is 'Mergeable'.
 data Mostek = Mostek { memory    :: Memory
                      , registers :: Registers
                      , flags     :: Flags
-                     }
+                     } deriving (Generic, Mergeable)
 
 -- | Given a machine state, compute a value out of it
 type Extract a = Mostek -> a
 
 -- | Programs are essentially state transformers (on the machine state)
 type Program = Mostek -> Mostek
-
--- | 'Mergeable' instance of 'Mostek' simply pushes the merging into record fields.
-instance Mergeable Mostek where
-  symbolicMerge f b m1 m2 = Mostek { memory    = symbolicMerge f b (memory m1)    (memory m2)
-                                   , registers = symbolicMerge f b (registers m1) (registers m2)
-                                   , flags     = symbolicMerge f b (flags m1)     (flags m2)
-                                   }
 
 ------------------------------------------------------------------
 -- * Low-level operations

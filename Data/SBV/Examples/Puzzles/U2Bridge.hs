@@ -11,6 +11,7 @@
 
 {-# LANGUAGE DeriveAnyClass       #-}
 {-# LANGUAGE DeriveDataTypeable   #-}
+{-# LANGUAGE DeriveGeneric        #-}
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
@@ -19,7 +20,9 @@ module Data.SBV.Examples.Puzzles.U2Bridge where
 import Control.Monad       (unless)
 import Control.Monad.State (State, runState, put, get, modify, evalState)
 
-import Data.Generics
+import Data.Generics (Data)
+import GHC.Generics (Generic)
+
 import Data.SBV
 
 -------------------------------------------------------------
@@ -68,13 +71,31 @@ here, there :: SLocation
 [here, there]  = map literal [Here, There]
 
 -- | The status of the puzzle after each move
+--
+-- This type is equipped with an automatically derived 'Mergeable' instance
+-- because each field is 'Mergeable'. A 'Generic' instance must also be derived
+-- for this to work, and the 'DeriveAnyClass' language extension must be
+-- enabled. The derived 'Mergeable' instance simply walks down the structure
+-- field by field and merges each one. An equivalent hand-written 'Mergeable'
+-- instance is provided in a comment below.
 data Status = Status { time   :: STime       -- ^ elapsed time
                      , flash  :: SLocation   -- ^ location of the flash
                      , lBono  :: SLocation   -- ^ location of Bono
                      , lEdge  :: SLocation   -- ^ location of Edge
                      , lAdam  :: SLocation   -- ^ location of Adam
                      , lLarry :: SLocation   -- ^ location of Larry
-                     }
+                     } deriving (Generic, Mergeable)
+
+-- The derived Mergeable instance is equivalent to the following:
+--
+-- instance Mergeable Status where
+--   symbolicMerge f t s1 s2 = Status { time   = symbolicMerge f t (time   s1) (time   s2)
+--                                    , flash  = symbolicMerge f t (flash  s1) (flash  s2)
+--                                    , lBono  = symbolicMerge f t (lBono  s1) (lBono  s2)
+--                                    , lEdge  = symbolicMerge f t (lEdge  s1) (lEdge  s2)
+--                                    , lAdam  = symbolicMerge f t (lAdam  s1) (lAdam  s2)
+--                                    , lLarry = symbolicMerge f t (lLarry s1) (lLarry s2)
+--                                    }
 
 -- | Start configuration, time elapsed is 0 and everybody is 'here'
 start :: Status
@@ -85,17 +106,6 @@ start = Status { time   = 0
                , lAdam  = here
                , lLarry = here
                }
-
--- | Mergeable instance for 'Status' simply walks down the structure fields and
--- merges them.
-instance Mergeable Status where
-  symbolicMerge f t s1 s2 = Status { time   = symbolicMerge f t (time   s1) (time   s2)
-                                   , flash  = symbolicMerge f t (flash  s1) (flash  s2)
-                                   , lBono  = symbolicMerge f t (lBono  s1) (lBono  s2)
-                                   , lEdge  = symbolicMerge f t (lEdge  s1) (lEdge  s2)
-                                   , lAdam  = symbolicMerge f t (lAdam  s1) (lAdam  s2)
-                                   , lLarry = symbolicMerge f t (lLarry s1) (lLarry s2)
-                                   }
 
 -- | A puzzle move is modeled as a state-transformer
 type Move a = State Status a

@@ -1,7 +1,26 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 5.8, 2016-01-01
+* Latest Hackage released version: 5.9, 2016-01-05
+
+### Version 5.9, 2016-01-05
+
+  * Default definition for 'symbolicMerge', which allows types that are
+    instances of 'Generic' to have an automatically derivable merge (i.e.,
+    ite) instance. Thanks to Christian Conkle for the patch.
+
+  * Add support for "non-model-vars," where we can now tell SBV not
+    to take into account certain variables from a model-building
+    perspective. This comes handy in doing an `allSat` calls where
+    there might be witness variables that we do not care the uniqueness
+    for. See "Data/SBV/Examples/Misc/Auxiliary.hs" for an example, and
+    the discussion in https://github.com/LeventErkok/sbv/issues/208 for
+    motivation.
+
+  * Yices interface: If Reals are used, then pick the logic QF_UFLRA, instead
+    of QF_AUFLIA. Unfortunately, logic selection remains tricky since the SMTLib
+    story for logic selection is rather messy. Other solvers are not impacted
+    by this change.
 
 ### Version 5.8, 2016-01-01
 

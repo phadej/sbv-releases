@@ -996,16 +996,16 @@ instance Show Logic where
 
 -- | Translation tricks needed for specific capabilities afforded by each solver
 data SolverCapabilities = SolverCapabilities {
-         capSolverName              :: String       -- ^ Name of the solver
-       , mbDefaultLogic             :: Maybe String -- ^ set-logic string to use in case not automatically determined (if any)
-       , supportsMacros             :: Bool         -- ^ Does the solver understand SMT-Lib2 macros?
-       , supportsProduceModels      :: Bool         -- ^ Does the solver understand produce-models option setting
-       , supportsQuantifiers        :: Bool         -- ^ Does the solver understand SMT-Lib2 style quantifiers?
-       , supportsUninterpretedSorts :: Bool         -- ^ Does the solver understand SMT-Lib2 style uninterpreted-sorts
-       , supportsUnboundedInts      :: Bool         -- ^ Does the solver support unbounded integers?
-       , supportsReals              :: Bool         -- ^ Does the solver support reals?
-       , supportsFloats             :: Bool         -- ^ Does the solver support single-precision floating point numbers?
-       , supportsDoubles            :: Bool         -- ^ Does the solver support double-precision floating point numbers?
+         capSolverName              :: String               -- ^ Name of the solver
+       , mbDefaultLogic             :: Bool -> Maybe String -- ^ set-logic string to use in case not automatically determined (if any). If Bool is True, then reals are present.
+       , supportsMacros             :: Bool                 -- ^ Does the solver understand SMT-Lib2 macros?
+       , supportsProduceModels      :: Bool                 -- ^ Does the solver understand produce-models option setting
+       , supportsQuantifiers        :: Bool                 -- ^ Does the solver understand SMT-Lib2 style quantifiers?
+       , supportsUninterpretedSorts :: Bool                 -- ^ Does the solver understand SMT-Lib2 style uninterpreted-sorts
+       , supportsUnboundedInts      :: Bool                 -- ^ Does the solver support unbounded integers?
+       , supportsReals              :: Bool                 -- ^ Does the solver support reals?
+       , supportsFloats             :: Bool                 -- ^ Does the solver support single-precision floating point numbers?
+       , supportsDoubles            :: Bool                 -- ^ Does the solver support double-precision floating point numbers?
        }
 
 -- | Rounding mode to be used for the IEEE floating-point operations.
@@ -1051,6 +1051,7 @@ data SMTConfig = SMTConfig {
        , printRealPrec  :: Int            -- ^ Print algebraic real values with this precision. (SReal, default: 16)
        , solverTweaks   :: [String]       -- ^ Additional lines of script to give to the solver (user specified)
        , satCmd         :: String         -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
+       , isNonModelVar  :: String -> Bool -- ^ When constructing a model, ignore variables whose name satisfy this predicate. (Default: (const False), i.e., don't ignore anything)
        , smtFile        :: Maybe FilePath -- ^ If Just, the generated SMT script will be put in this file (for debugging purposes mostly)
        , smtLibVersion  :: SMTLibVersion  -- ^ What version of SMT-lib we use for the tool
        , solver         :: SMTSolver      -- ^ The actual SMT solver.

@@ -18,6 +18,8 @@
 {-# LANGUAGE MultiParamTypeClasses  #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
 {-# LANGUAGE Rank2Types             #-}
+{-# LANGUAGE TypeOperators          #-}
+{-# LANGUAGE DefaultSignatures      #-}
 
 module Data.SBV.BitVectors.Model (
     Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), SIntegral
@@ -41,6 +43,8 @@ import Control.Monad        (when, unless, liftM)
 import Control.Monad.Reader (ask)
 import Control.Monad.Trans  (liftIO)
 
+import GHC.Generics (U1(..), M1(..), (:*:)(..), K1(..))
+import qualified GHC.Generics as G
 import GHC.Stack.Compat
 
 import Data.Array      (Array, Ix, listArray, elems, bounds, rangeSize)
@@ -1076,11 +1080,20 @@ instance (SymWord a, Arbitrary a) => Arbitrary (SBV a) where
 -- provides all basic types as instances of this class, so users only need
 -- to declare instances for custom data-types of their programs as needed.
 --
+-- A 'Mergeable' instance may be automatically derived for a custom data-type
+-- with a single constructor where the type of each field is an instance of
+-- 'Mergeable', such as a record of symbolic values. Users only need to add
+-- 'G.Generic' and 'Mergeable' to the @deriving@ clause for the data-type. See
+-- 'Data.SBV.Examples.Puzzles.U2Bridge.Status' for an example and an
+-- illustration of what the instance would look like if written by hand.
+--
 -- The function 'select' is a total-indexing function out of a list of choices
 -- with a default value, simulating array/list indexing. It's an n-way generalization
 -- of the 'ite' function.
 --
--- Minimal complete definition: 'symbolicMerge'
+-- Minimal complete definition: None, if the type is instance of 'Generic'. Otherwise
+-- 'symbolicMerge'. Note that most types subject to merging are likely to be
+-- trivial instances of 'Generic'.
 class Mergeable a where
    -- | Merge two values based on the condition. The first argument states
    -- whether we force the then-and-else branches before the merging, at the
@@ -1090,7 +1103,7 @@ class Mergeable a where
    symbolicMerge :: Bool -> SBool -> a -> a -> a
    -- | Total indexing operation. @select xs default index@ is intuitively
    -- the same as @xs !! index@, except it evaluates to @default@ if @index@
-   -- overflows
+   -- underflows/overflows.
    select :: (SymWord b, Num b) => [a] -> a -> SBV b -> a
    -- NB. Earlier implementation of select used the binary-search trick
    -- on the index to chop down the search space. While that is a good trick
@@ -1100,13 +1113,18 @@ class Mergeable a where
    -- list is really humongous, which is not very common in general. (Also,
    -- for the case when the list is bit-vectors, we use SMT tables anyhow.)
    select xs err ind
-    | isReal   ind = error "SBV.select: unsupported real valued select/index expression"
-    | isFloat  ind = error "SBV.select: unsupported float valued select/index expression"
-    | isDouble ind = error "SBV.select: unsupported double valued select/index expression"
+    | isReal   ind = bad "real"
+    | isFloat  ind = bad "float"
+    | isDouble ind = bad "double"
     | hasSign  ind = ite (ind .< 0) err (walk xs ind err)
     | True         =                     walk xs ind err
-    where walk []     _ acc = acc
+    where bad w = error $ "SBV.select: unsupported " ++ w ++ " valued select/index expression"
+          walk []     _ acc = acc
           walk (e:es) i acc = walk es (i-1) (ite (i .== 0) e acc)
+
+   -- Default implementation for 'symbolicMerge' if the type is 'Generic'
+   default symbolicMerge :: (G.Generic a, GMergeable (G.Rep a)) => Bool -> SBool -> a -> a -> a
+   symbolicMerge = symbolicMergeDefault
 
 
 -- | If-then-else. This is by definition 'symbolicMerge' with both
@@ -1269,6 +1287,38 @@ instance (Mergeable a, Mergeable b, Mergeable c, Mergeable d, Mergeable e, Merge
     where i a b = symbolicMerge f t a b
   select xs (err1, err2, err3, err4, err5, err6, err7) ind = (select as err1 ind, select bs err2 ind, select cs err3 ind, select ds err4 ind, select es err5 ind, select fs err6 ind, select gs err7 ind)
     where (as, bs, cs, ds, es, fs, gs) = unzip7 xs
+
+-- Arbitrary product types, using GHC.Generics
+--
+-- NB: Because of the way GHC.Generics works, the implementation of
+-- symbolicMerge' is recursive. The derived instance for @data T a = T a a a a@
+-- resembles that for (a, (a, (a, a))), not the flat 4-tuple (a, a, a, a). This
+-- difference should have no effect in practice. Note also that, unlike the
+-- hand-rolled tuple instances, the generic instance does not provide a custom
+-- 'select' implementation, and so does not benefit from the SMT-table
+-- implementation in the 'SBV a' instance.
+
+-- | Not exported. Symbolic merge using the generic representation provided by
+-- 'G.Generics'.
+symbolicMergeDefault :: (G.Generic a, GMergeable (G.Rep a)) => Bool -> SBool -> a -> a -> a
+symbolicMergeDefault force t x y = G.to $ symbolicMerge' force t (G.from x) (G.from y)
+
+-- | Not exported. Used only in 'symbolicMergeDefault'. Instances are provided for
+-- the generic representations of product types where each element is Mergeable.
+class GMergeable f where
+  symbolicMerge' :: Bool -> SBool -> f a -> f a -> f a
+
+instance GMergeable U1 where
+  symbolicMerge' _ _ _ _ = U1
+
+instance (Mergeable c) => GMergeable (K1 i c) where
+  symbolicMerge' force t (K1 x) (K1 y) = K1 $ symbolicMerge force t x y
+
+instance (GMergeable f) => GMergeable (M1 i c f) where
+  symbolicMerge' force t (M1 x) (M1 y) = M1 $ symbolicMerge' force t x y
+
+instance (GMergeable f, GMergeable g) => GMergeable (f :*: g) where
+  symbolicMerge' force t (x1 :*: y1) (x2 :*: y2) = symbolicMerge' force t x1 x2 :*: symbolicMerge' force t y1 y2
 
 -- Bounded instances
 instance (SymWord a, Bounded a) => Bounded (SBV a) where
