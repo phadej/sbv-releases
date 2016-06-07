@@ -16,9 +16,9 @@
 {-# LANGUAGE    ScopedTypeVariables        #-}
 {-# LANGUAGE    FlexibleInstances          #-}
 {-# LANGUAGE    PatternGuards              #-}
-{-# LANGUAGE    DefaultSignatures          #-}
 {-# LANGUAGE    NamedFieldPuns             #-}
 {-# LANGUAGE    DeriveDataTypeable         #-}
+{-# LANGUAGE    CPP                        #-}
 {-# OPTIONS_GHC -fno-warn-orphans          #-}
 
 module Data.SBV.BitVectors.Symbolic
@@ -63,7 +63,6 @@ import Data.Maybe           (isJust, fromJust, fromMaybe)
 import GHC.Stack.Compat
 
 import qualified Data.Generics as G    (Data(..))
-import qualified Data.Typeable as T    (Typeable)
 import qualified Data.IntMap   as IMap (IntMap, empty, size, toAscList, lookup, insert, insertWith)
 import qualified Data.Map      as Map  (Map, empty, toList, size, insert, lookup)
 import qualified Data.Set      as Set  (Set, empty, toList, insert)
@@ -343,7 +342,13 @@ instance Show Result where
                         | True     = ", aliasing " ++ show nm
           shui (nm, t) = "  [uninterpreted] " ++ nm ++ " :: " ++ show t
           shax (nm, ss) = "  -- user defined axiom: " ++ nm ++ "\n  " ++ intercalate "\n  " ss
-          shAssert (nm, stk, p) = "  -- assertion: " ++ nm ++ " " ++ maybe "[No location]" showCallStack stk ++ ": " ++ show p
+          shAssert (nm, stk, p) = "  -- assertion: " ++ nm ++ " " ++ maybe "[No location]"
+#if MIN_VERSION_base(4,9,0)
+                prettyCallStack
+#else
+                showCallStack
+#endif
+                stk ++ ": " ++ show p
 
 -- | The context of a symbolic array as created
 data ArrayContext = ArrayFree (Maybe SW)     -- ^ A new array, with potential initializer for each cell
@@ -368,7 +373,7 @@ type CnstMap   = Map.Map (Bool, CW) SW
 type KindSet = Set.Set Kind
 
 -- | Tables generated during a symbolic run
-type TableMap  = Map.Map [SW] (Int, Kind, Kind)
+type TableMap  = Map.Map (Kind, Kind, [SW]) Int
 
 -- | Representation for symbolic arrays
 type ArrayInfo = (String, (Kind, Kind), ArrayContext)
@@ -558,12 +563,13 @@ newConst st c = do
 -- | Create a new table; hash-cons as necessary
 getTableIndex :: State -> Kind -> Kind -> [SW] -> IO Int
 getTableIndex st at rt elts = do
+  let key = (at, rt, elts)
   tblMap <- readIORef (rtblMap st)
-  case elts `Map.lookup` tblMap of
-    Just (i, _, _)  -> return i
-    Nothing         -> do let i = Map.size tblMap
-                          modifyIORef (rtblMap st) (Map.insert elts (i, at, rt))
-                          return i
+  case key `Map.lookup` tblMap of
+    Just i -> return i
+    _      -> do let i = Map.size tblMap
+                 modifyIORef (rtblMap st) (Map.insert key i)
+                 return i
 
 -- | Create a new expression; hash-cons as necessary
 newExpr :: State -> Kind -> SBVExpr -> IO SW
@@ -715,11 +721,12 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
    SBVPgm rpgm  <- readIORef pgm
    inpsO <- reverse `fmap` readIORef inps
    outsO <- reverse `fmap` readIORef outs
-   let swap  (a, b)        = (b, a)
-       swapc ((_, a), b)   = (b, a)
-       cmp   (a, _) (b, _) = a `compare` b
+   let swap  (a, b)              = (b, a)
+       swapc ((_, a), b)         = (b, a)
+       cmp   (a, _) (b, _)       = a `compare` b
+       arrange (i, (at, rt, es)) = ((i, at, rt), es)
    cnsts <- (sortBy cmp . map swapc . Map.toList) `fmap` readIORef (rconstMap st)
-   tbls  <- (sortBy (\((x, _, _), _) ((y, _, _), _) -> x `compare` y) . map swap . Map.toList) `fmap` readIORef tables
+   tbls  <- (map arrange . sortBy cmp . map swap . Map.toList) `fmap` readIORef tables
    arrs  <- IMap.toAscList `fmap` readIORef arrays
    unint <- Map.toList `fmap` readIORef uis
    axs   <- reverse `fmap` readIORef axioms
@@ -908,8 +915,8 @@ smtLibVersionExtension SMTLib2 = "smt2"
 data SMTLibPgm = SMTLibPgm SMTLibVersion  ( [(String, SW)]  -- alias table
                                           , [String]        -- pre: declarations.
                                           , [String])       -- post: formula
-instance NFData SMTLibVersion where rnf a = seq a ()
-instance NFData SMTLibPgm     where rnf a = seq a ()
+instance NFData SMTLibVersion where rnf a                       = a `seq` ()
+instance NFData SMTLibPgm     where rnf (SMTLibPgm v (t, d, p)) = rnf v `seq` rnf t `seq` rnf d `seq` rnf p `seq` ()
 
 instance Show SMTLibPgm where
   show (SMTLibPgm _ (_, pre, post)) = intercalate "\n" $ pre ++ post
@@ -918,9 +925,14 @@ instance Show SMTLibPgm where
 instance NFData CW where
   rnf (CW x y) = x `seq` y `seq` ()
 
+#if MIN_VERSION_base(4,9,0)
+#else
 -- Can't really force this, but not a big deal
 instance NFData CallStack where
   rnf _ = ()
+#endif
+  
+
 
 instance NFData Result where
   rnf (Result kindInfo qcInfo cgs inps consts tbls arrs uis axs pgm cstr asserts outs)
@@ -928,18 +940,15 @@ instance NFData Result where
                        `seq` rnf consts `seq` rnf tbls    `seq` rnf arrs
                        `seq` rnf uis    `seq` rnf axs     `seq` rnf pgm
                        `seq` rnf cstr   `seq` rnf asserts `seq` rnf outs
-instance NFData Kind          where rnf a = seq a ()
-instance NFData ArrayContext  where rnf a = seq a ()
-instance NFData SW            where rnf a = seq a ()
-instance NFData SBVExpr       where rnf a = seq a ()
-instance NFData Quantifier    where rnf a = seq a ()
-instance NFData SBVType       where rnf a = seq a ()
-instance NFData a => NFData (Cached a) where
-  rnf (Cached f) = f `seq` ()
-instance NFData SVal where
-  rnf (SVal x y) = rnf x `seq` rnf y `seq` ()
-instance NFData SBVPgm        where rnf a = seq a ()
-
+instance NFData Kind         where rnf a          = seq a ()
+instance NFData ArrayContext where rnf a          = seq a ()
+instance NFData SW           where rnf a          = seq a ()
+instance NFData SBVExpr      where rnf a          = seq a ()
+instance NFData Quantifier   where rnf a          = seq a ()
+instance NFData SBVType      where rnf a          = seq a ()
+instance NFData SBVPgm       where rnf a          = seq a ()
+instance NFData (Cached a)   where rnf (Cached f) = f `seq` ()
+instance NFData SVal         where rnf (SVal x y) = rnf x `seq` rnf y `seq` ()
 
 instance NFData SMTResult where
   rnf (Unsatisfiable _)   = ()
@@ -1021,7 +1030,7 @@ data RoundingMode = RoundNearestTiesToEven  -- ^ Round to nearest representable 
                   | RoundTowardPositive     -- ^ Round towards positive infinity. (Also known as rounding-up or ceiling.)
                   | RoundTowardNegative     -- ^ Round towards negative infinity. (Also known as rounding-down or floor.)
                   | RoundTowardZero         -- ^ Round towards zero. (Also known as truncation.)
-                  deriving (Eq, Ord, Show, Read, T.Typeable, G.Data, Bounded, Enum)
+                  deriving (Eq, Ord, Show, Read, G.Data, Bounded, Enum)
 
 -- | 'RoundingMode' kind
 instance HasKind RoundingMode

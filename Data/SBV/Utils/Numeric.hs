@@ -12,13 +12,13 @@
 module Data.SBV.Utils.Numeric where
 
 -- | A variant of round; except defaulting to 0 when fed NaN or Infinity
-fpRound0 :: (RealFloat a, RealFrac a, Integral b) => a -> b
+fpRound0 :: (RealFloat a, Integral b) => a -> b
 fpRound0 x
  | isNaN x || isInfinite x = 0
  | True                    = round x
 
 -- | A variant of toRational; except defaulting to 0 when fed NaN or Infinity
-fpRatio0 :: (RealFloat a, RealFrac a) => a -> Rational
+fpRatio0 :: (RealFloat a) => a -> Rational
 fpRatio0 x
  | isNaN x || isInfinite x = 0
  | True                    = toRational x
@@ -76,8 +76,7 @@ fpRemH x y
         ry = toRational y
         rd = rx / ry
         d :: Integer
-        d | rd > 0 = floor   rd
-          | True   = ceiling rd
+        d = round rd
         -- If the result is 0, make sure we preserve the sign of x
         pSign r
           | r == 0 = if x < 0 || isNegativeZero x then -0.0 else 0.0

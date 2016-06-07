@@ -364,7 +364,7 @@ showModel cfg model
                  valWidth              = maximum $ 0 : [l | (_, (l, _)) <- svs]
         right p s = s ++ replicate p ' '
         left  p s = replicate p ' ' ++ s
-        vlength s = case dropWhile (/= ':') (reverse s) of
+        vlength s = case dropWhile (/= ':') (reverse (takeWhile (/= '\n') s)) of
                       (':':':':r) -> length (dropWhile isSpace r)
                       _           -> length s -- conservative
         valPart ""          = ""
@@ -543,7 +543,7 @@ runSolver cfg execPath opts script
                                                                  else return []
                                                          return $ Just (r, vals)
                              cleanUp response
-      executeSolver `C.onException`  terminateProcess pid
+      executeSolver `C.onException`  (terminateProcess pid >> waitForProcess pid)
 
 -- | In case the SMT-Lib solver returns a response over multiple lines, compress them so we have
 -- each S-Expression spanning only a single line. We'll ignore things line parentheses inside quotes

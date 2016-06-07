@@ -107,12 +107,6 @@
 
 {-# LANGUAGE FlexibleInstances #-}
 
--- TODO: remove OverlappingInstances and these warning suppressions
--- once support is dropped for GHC 7.8
-{-# OPTIONS_GHC -fno-warn-deprecated-flags     #-}
-{-# OPTIONS_GHC -fno-warn-unrecognised-pragmas #-}
-{-# LANGUAGE OverlappingInstances              #-}
-
 module Data.SBV (
   -- * Programming with symbolic values
   -- $progIntro
@@ -349,12 +343,12 @@ defaultSolverConfig ABC       = abc
 sbvAvailableSolvers :: IO [SMTConfig]
 sbvAvailableSolvers = filterM sbvCheckSolverInstallation (map defaultSolverConfig [minBound .. maxBound])
 
-sbvWithAny :: Provable a => [SMTConfig] -> (SMTConfig -> a -> IO b) -> a -> IO (Solver, b)
+sbvWithAny :: [SMTConfig] -> (SMTConfig -> a -> IO b) -> a -> IO (Solver, b)
 sbvWithAny []      _    _ = error "SBV.withAny: No solvers given!"
 sbvWithAny solvers what a = snd `fmap` (mapM try solvers >>= waitAnyCancel)
    where try s = async $ what s a >>= \r -> return (name (solver s), r)
 
-sbvWithAll :: Provable a => [SMTConfig] -> (SMTConfig -> a -> IO b) -> a -> IO [(Solver, b)]
+sbvWithAll :: [SMTConfig] -> (SMTConfig -> a -> IO b) -> a -> IO [(Solver, b)]
 sbvWithAll solvers what a = mapM try solvers >>= (unsafeInterleaveIO . go)
    where try s = async $ what s a >>= \r -> return (name (solver s), r)
          go []  = return []
