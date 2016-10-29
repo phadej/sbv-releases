@@ -83,7 +83,7 @@ import Prelude.Compat
 newtype NodeId = NodeId Int deriving (Eq, Ord)
 
 -- | A symbolic word, tracking it's signedness and size.
-data SW = SW Kind NodeId deriving (Eq, Ord)
+data SW = SW !Kind !NodeId deriving (Eq, Ord)
 
 instance HasKind SW where
   kindOf (SW k _) = k
@@ -139,7 +139,7 @@ data Op = Plus
         | LkUp (Int, Kind, Kind, Int) !SW !SW   -- (table-index, arg-type, res-type, length of the table) index out-of-bounds-value
         | ArrEq   Int Int                       -- Array equality
         | ArrRead Int
-        | IntCast Kind Kind
+        | KindCast Kind Kind
         | Uninterpreted String
         | Label String                          -- Essentially no-op; useful for code generation to emit comments.
         | IEEEFP FPOp                           -- Floating-point ops, categorized separately
@@ -174,7 +174,7 @@ data FPOp = FP_Cast        Kind Kind SW   -- From-Kind, To-Kind, RoundingMode. T
 -- this mapping stays correct through SMTLib changes. The only exception
 -- is FP_Cast; where we handle different source/origins explicitly later on.
 instance Show FPOp where
-   show (FP_Cast f t r)      = "(FP_Cast: " ++ show f ++ " -> " ++ show t ++ "using RM [" ++ show r ++ "])"
+   show (FP_Cast f t r)      = "(FP_Cast: " ++ show f ++ " -> " ++ show t ++ ", using RM [" ++ show r ++ "])"
    show (FP_Reinterpret f t) = case (f, t) of
                                   (KBounded False 32, KFloat)  -> "(_ to_fp 8 24)"
                                   (KBounded False 64, KDouble) -> "(_ to_fp 11 53)"
@@ -213,7 +213,7 @@ instance Show Op where
         where tinfo = "table" ++ show ti ++ "(" ++ show at ++ " -> " ++ show rt ++ ", " ++ show l ++ ")"
   show (ArrEq i j)       = "array_" ++ show i ++ " == array_" ++ show j
   show (ArrRead i)       = "select array_" ++ show i
-  show (IntCast fr to)   = "cast_" ++ show fr ++ "_" ++ show to
+  show (KindCast fr to)  = "cast_" ++ show fr ++ "_" ++ show to
   show (Uninterpreted i) = "[uninterpreted] " ++ i
   show (Label s)         = "[label] " ++ s
   show (IEEEFP w)        = show w

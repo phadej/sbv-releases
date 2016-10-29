@@ -34,7 +34,7 @@ module Data.SBV.Dynamic
   , svInteger, svAsInteger
   -- *** Float literals
   , svFloat, svDouble
-  -- ** Algrebraic reals (only from rationals)
+  -- *** Algebraic reals (only from rationals)
   , svReal, svNumerator, svDenominator
   -- *** Symbolic equality
   , svEqual, svNotEqual
@@ -53,6 +53,8 @@ module Data.SBV.Dynamic
   , svExtract, svJoin
   -- *** Sign-casting
   , svSign, svUnsign
+  -- *** Numeric conversions
+  , svFromIntegral
   -- *** Indexed lookups
   , svSelect
   -- *** Word-level operations

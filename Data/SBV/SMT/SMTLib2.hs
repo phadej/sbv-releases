@@ -238,9 +238,10 @@ genTableData rm skolemMap (_quantified, args) consts ((i, aknd, _), elts)
         t           = "table" ++ show i
         mkElt x k   = (isReady, (idx, ssw x))
           where idx = cvtCW rm (mkConstCW aknd k)
-                isReady = x `elem` consts
+                isReady = x `Set.member` constsSet
         topLevel (idx, v) = "(= (" ++ t ++ " " ++ idx ++ ") " ++ v ++ ")"
         nested   (idx, v) = "(= (" ++ t ++ args ++ " " ++ idx ++ ") " ++ v ++ ")"
+        constsSet = Set.fromList consts
 
 -- TODO: We currently do not support non-constant arrays when quantifiers are present, as
 -- we might have to skolemize those. Implement this properly.
@@ -395,7 +396,7 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                 mkCnst = cvtCW rm . mkConstCW (kindOf i)
                 le0  = "(" ++ less ++ " " ++ ssw i ++ " " ++ mkCnst 0 ++ ")"
                 gtl  = "(" ++ leq  ++ " " ++ mkCnst l ++ " " ++ ssw i ++ ")"
-        sh (SBVApp (IntCast f t) [a]) = handleIntCast f t (ssw a)
+        sh (SBVApp (KindCast f t) [a]) = handleKindCast f t (ssw a)
         sh (SBVApp (ArrEq i j) [])  = "(= array_" ++ show i ++ " array_" ++ show j ++")"
         sh (SBVApp (ArrRead i) [a]) = "(select array_" ++ show i ++ " " ++ ssw a ++ ")"
         sh (SBVApp (Uninterpreted nm) [])   = nm
@@ -581,9 +582,9 @@ shft rm ssw oW oS c x = "(" ++ o ++ " " ++ ssw x ++ " " ++ cvtCW rm c' ++ ")"
          c' = mkConstCW (kindOf x) c
          o  = if s then oS else oW
 
--- Various integer casts
-handleIntCast :: Kind -> Kind -> String -> String
-handleIntCast kFrom kTo a
+-- Various casts
+handleKindCast :: Kind -> Kind -> String -> String
+handleKindCast kFrom kTo a
   | kFrom == kTo
   = a
   | True
@@ -598,9 +599,13 @@ handleIntCast kFrom kTo a
                         KBounded _ n -> i2b n
                         _            -> noCast
 
+      KReal        -> case kTo of
+                        KUnbounded   -> "(to_int " ++ a ++ ")"
+                        _            -> noCast
+
       _            -> noCast
 
-  where noCast  = error $ "SBV.SMTLib2: Unexpected integer cast from: " ++ show kFrom ++ " to " ++ show kTo
+  where noCast  = error $ "SBV.SMTLib2: Unexpected cast from: " ++ show kFrom ++ " to " ++ show kTo
 
         fromBV upConv m n
          | n > m  = upConv  (n - m)

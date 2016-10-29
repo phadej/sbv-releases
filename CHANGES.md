@@ -1,7 +1,23 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 5.12, 2016-06-06
+* Latest Hackage released version: 5.13, 2016-10-29
+
+### Version 5.13, 2016-10-29
+
+  * Fix broken links, thanks to Stephan Renatus for the patch.
+
+  * Code generation: Create directory path if it does not exist. Thanks to Robert Dockins
+    for the patch.
+
+  * Generalize the type of sFromIntegral, dropping the Bits requirement. In turn, this
+    allowed us to remove sIntegerToSReal, since sFromIntegral can be used instead.
+
+  * Add support for sRealToSInteger. (Essentially the floor function for SReal.)
+
+  * Several space-leaks fixed for better performance. Patch contributed by Robert Dockins.
+
+  * Improved Random instance for Rational. Thanks to Joe Leslie-Hurd for the idea.
 
 ### Version 5.12, 2016-06-06
 

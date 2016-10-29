@@ -30,7 +30,7 @@ module Data.SBV.BitVectors.Model (
   , constrain, pConstrain, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
   , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, slet
-  , sIntegerToSReal, label
+  , sRealToSInteger, label
   , sAssert
   , liftQRem, liftDMod, symbolicMergeWithKind
   , genLiteral, genFromCW, genMkSymVar
@@ -300,13 +300,19 @@ sDouble = symbolic
 sDoubles :: [String] -> Symbolic [SDouble]
 sDoubles = symbolics
 
--- | Promote an SInteger to an SReal
-sIntegerToSReal :: SInteger -> SReal
-sIntegerToSReal x
-  | Just i <- unliteral x = literal $ fromInteger i
-  | True                  = SBV (SVal KReal (Right (cache y)))
+-- | Convert an SReal to an SInteger. That is, it computes the
+-- largest integer @n@ that satisfies @sIntegerToSReal n <= r@
+-- essentially giving us the @floor@.
+--
+-- For instance, @1.3@ will be @1@, but @-1.3@ will be @-2@.
+sRealToSInteger :: SReal -> SInteger
+sRealToSInteger x
+  | Just i <- unliteral x, isExactRational i
+  = literal $ floor (toRational i)
+  | True
+  = SBV (SVal KUnbounded (Right (cache y)))
   where y st = do xsw <- sbvToSW st x
-                  newExpr st KReal (SBVApp (IntCast KUnbounded KReal) [xsw])
+                  newExpr st KUnbounded (SBVApp (KindCast KReal KUnbounded) [xsw])
 
 -- | label: Label the result of an expression. This is essentially a no-op, but useful as it generates a comment in the generated C/SMT-Lib code.
 -- Note that if the argument is a constant, then the label is dropped completely, per the usual constant folding strategy.
@@ -679,7 +685,7 @@ setBitTo :: (Num a, Bits a, SymWord a) => SBV a -> Int -> SBool -> SBV a
 setBitTo x i b = ite b (setBit x i) (clearBit x i)
 
 -- | Conversion between integral-symbolic values, akin to Haskell's fromIntegral
-sFromIntegral :: forall a b. (Integral a, HasKind a, Num a, Bits a, SymWord a, HasKind b, Num b, Bits b, SymWord b) => SBV a -> SBV b
+sFromIntegral :: forall a b. (Integral a, HasKind a, Num a, SymWord a, HasKind b, Num b, SymWord b) => SBV a -> SBV b
 sFromIntegral x
   | isReal x
   = error "SBV.sFromIntegral: Called on a real value" -- can't really happen due to types, but being overcautious
@@ -691,7 +697,7 @@ sFromIntegral x
         kFrom  = kindOf x
         kTo    = kindOf (undefined :: b)
         y st   = do xsw <- sbvToSW st x
-                    newExpr st kTo (SBVApp (IntCast kFrom kTo) [xsw])
+                    newExpr st kTo (SBVApp (KindCast kFrom kTo) [xsw])
 
 -- | Generalization of 'shiftL', when the shift-amount is symbolic. Since Haskell's
 -- 'shiftL' only takes an 'Int' as the shift amount, it cannot be used when we have
