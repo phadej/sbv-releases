@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       5.13
+Version:       5.14
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -7,7 +7,7 @@ Description:   Express properties about Haskell programs and automatically prove
                .
                For details, please see: <http://leventerkok.github.com/sbv/>
 
-Copyright:     Levent Erkok, 2010-2016
+Copyright:     Levent Erkok, 2010-2017
 License:       BSD3
 License-file:  LICENSE
 Stability:     Experimental
@@ -48,9 +48,9 @@ Library
   Build-Depends   : base >= 4.8 && < 5
                   , base-compat >= 0.6
                   , ghc
+                  , QuickCheck >= 2.9.2
                   , array, async, containers, deepseq, directory, filepath, old-time
-                  , pretty, process, mtl, QuickCheck, random, syb, data-binary-ieee754
-                  , crackNum
+                  , pretty, process, mtl, random, syb, data-binary-ieee754, crackNum
   Exposed-modules : Data.SBV
                   , Data.SBV.Bridge.Boolector
                   , Data.SBV.Bridge.CVC4
