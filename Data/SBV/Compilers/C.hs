@@ -24,8 +24,9 @@ import System.FilePath                (takeBaseName, replaceExtension)
 import System.Random
 import Text.PrettyPrint.HughesPJ
 
-import Data.SBV.BitVectors.Data
-import Data.SBV.BitVectors.PrettyNum (shex, showCFloat, showCDouble)
+import Data.SBV.Core.Data
+
+import Data.SBV.Utils.PrettyNum (shex, showCFloat, showCDouble)
 import Data.SBV.Compilers.CodeGen
 
 import GHC.Stack.Compat
@@ -407,7 +408,7 @@ genDriver cfg randVals fn inps outs mbRet = [pre, header, body, post]
 
 -- | Generate the C program
 genCProg :: CgConfig -> String -> Doc -> Result -> [(String, CgVal)] -> [(String, CgVal)] -> Maybe SW -> Doc -> [Doc]
-genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _ _ (SBVPgm asgns) cstrs origAsserts _) inVars outVars mbRet extDecls
+genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _uis _axioms (SBVPgm asgns) cstrs _tacs _goals origAsserts _) inVars outVars mbRet extDecls
   | isNothing (cgInteger cfg) && KUnbounded `Set.member` kindInfo
   = error $ "SBV->C: Unbounded integers are not supported by the C compiler."
           ++ "\nUse 'cgIntegerSize' to specify a fixed size for SInteger representation."

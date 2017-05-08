@@ -10,13 +10,19 @@
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE PatternGuards #-}
-module Data.SBV.Tools.ExpectedValue (expectedValue, expectedValueWith) where
+module Data.SBV.Tools.ExpectedValue (
+        -- * Computing expected values
+        expectedValue
+      , expectedValueWith
+      )
+      where
 
 import Control.DeepSeq (rnf)
+import Control.Monad   (unless)
 import System.Random   (newStdGen, StdGen)
 import Numeric
 
-import Data.SBV.BitVectors.Data
+import Data.SBV.Core.Data
 
 -- | Generalized version of 'expectedValue', allowing the user to specify the
 -- warm-up count and the convergence factor. Maximum iteration count can also
@@ -38,7 +44,8 @@ expectedValueWith chatty warmupCount mbMaxIter epsilon m
                         let v' = zipWith (+) v t
                         rnf v' `seq` warmup (n-1) v'
         runOnce :: StdGen -> IO [Integer]
-        runOnce g = do (_, Result _ _ _ _ cs _ _ _ _ _ cstrs _ os) <- runSymbolic' (Concrete g) (m >>= output)
+        runOnce g = do (_, Result _ _ _ _ cs _ _ _ _ _ cstrs _ goals _ os) <- runSymbolic' (Concrete g) (m >>= output)
+                       unless (null goals) $ error "SBV.expectedValue: Cannot compute expected-values in the presence of optimization goals!"
                        let cval o = case o `lookup` cs of
                                       Nothing -> error "SBV.expectedValue: Cannot compute expected-values in the presence of uninterpreted constants!"
                                       Just cw -> case (kindOf cw, cwVal cw) of

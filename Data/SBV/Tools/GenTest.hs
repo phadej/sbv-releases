@@ -9,7 +9,10 @@
 -- Test generation from symbolic programs
 -----------------------------------------------------------------------------
 
-module Data.SBV.Tools.GenTest (genTest, TestVectors, getTestValues, renderTest, TestStyle(..)) where
+module Data.SBV.Tools.GenTest (
+        -- * Test case generation
+        genTest, TestVectors, getTestValues, renderTest, TestStyle(..)
+        ) where
 
 import Data.Bits     (testBit)
 import Data.Char     (isAlpha, toUpper)
@@ -18,9 +21,10 @@ import Data.List     (intercalate, groupBy)
 import Data.Maybe    (fromMaybe)
 import System.Random
 
-import Data.SBV.BitVectors.AlgReals
-import Data.SBV.BitVectors.Data
-import Data.SBV.BitVectors.PrettyNum
+import Data.SBV.Core.AlgReals
+import Data.SBV.Core.Data
+
+import Data.SBV.Utils.PrettyNum
 
 -- | Type of test vectors (abstract)
 newtype TestVectors = TV [([CW], [CW])]
@@ -42,7 +46,7 @@ genTest n m = gen 0 []
          | True   = do g <- newStdGen
                        t <- tc g
                        gen (i+1) (t:sofar)
-        tc g = do (_, Result _ tvals _ _ cs _ _ _ _ _ cstrs _ os) <- runSymbolic' (Concrete g) (m >>= output)
+        tc g = do (_, Result _ tvals _ _ cs _ _ _ _ _ cstrs _ _ _ os) <- runSymbolic' (Concrete g) (m >>= output)
                   let cval = fromMaybe (error "Cannot generate tests in the presence of uninterpeted constants!") . (`lookup` cs)
                       cond = all (cwToBool . cval) cstrs
                   if cond

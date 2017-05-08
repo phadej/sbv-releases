@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.BitVectors.Model
+-- Module      :  Data.SBV.Core.Model
 -- Copyright   :  (c) Levent Erkok
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
@@ -21,13 +21,13 @@
 {-# LANGUAGE TypeOperators          #-}
 {-# LANGUAGE DefaultSignatures      #-}
 
-module Data.SBV.BitVectors.Model (
-    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), SIntegral
+module Data.SBV.Core.Model (
+    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertSoft, SIntegral
   , ite, iteLazy, sTestBit, sExtractBits, sPopCount, setBitTo, sFromIntegral
   , sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, (.^)
   , allEqual, allDifferent, inRange, sElem, oneIf, blastBE, blastLE, fullAdder, fullMultiplier
   , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
-  , constrain, pConstrain, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
+  , constrain, pConstrain, tactic, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
   , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, slet
   , sRealToSInteger, label
@@ -60,15 +60,15 @@ import qualified Test.QuickCheck         as QC (quickCheckResult, counterexample
 import qualified Test.QuickCheck.Monadic as QC (monadicIO, run, assert, pre, monitor)
 import System.Random
 
-import Data.SBV.BitVectors.AlgReals
-import Data.SBV.BitVectors.Data
-import Data.SBV.Utils.Boolean
+import Data.SBV.Core.AlgReals
+import Data.SBV.Core.Data
+import Data.SBV.Core.Symbolic
+import Data.SBV.Core.Operations
 
 import Data.SBV.Provers.Prover (isVacuous, prove, defaultSMTCfg, internalSATCheck)
 import Data.SBV.SMT.SMT        (ThmResult, SatResult(..), showModel)
 
-import Data.SBV.BitVectors.Symbolic
-import Data.SBV.BitVectors.Operations
+import Data.SBV.Utils.Boolean
 
 -- | Newer versions of GHC (Starting with 7.8 I think), distinguishes between FiniteBits and Bits classes.
 -- We should really use FiniteBitSize for SBV which would make things better. In the interim, just work
@@ -1627,6 +1627,39 @@ constrain c = addConstraint Nothing c (bnot c)
 pConstrain :: Double -> SBool -> Symbolic ()
 pConstrain t c = addConstraint (Just t) c (bnot c)
 
+-- | Provide a tactic for the solver engine
+tactic :: Tactic SBool -> Symbolic ()
+tactic t = addSValTactic $ unSBV `fmap` t
+
+-- | Introduce a soft assertion, with an optional penalty
+assertSoft :: String -> SBool -> Penalty -> Symbolic ()
+assertSoft nm o p = addSValOptGoal $ unSBV `fmap` AssertSoft nm o p
+
+-- | Class of metrics we can optimize for. Currently,
+-- bounded signed/unsigned bit-vectors, unbounded integers,
+-- and algebraic reals can be optimized. (But not, say, SFloat, SDouble, or SBool.)
+-- Minimal complete definition: minimize/maximize.
+--
+-- A good reference on these features is given in the following paper:
+-- <http://www.easychair.org/publications/download/Z_-_Maximal_Satisfaction_with_Z3>.
+class Metric a where
+  -- | Minimize a named metric
+  minimize :: String -> a -> Symbolic ()
+
+  -- | Maximize a named metric
+  maximize :: String -> a -> Symbolic ()
+
+instance Metric SWord8   where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SWord16  where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SWord32  where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SWord64  where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SInt8    where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SInt16   where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SInt32   where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SInt64   where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SInteger where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+instance Metric SReal    where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+
 -- Quickcheck interface on symbolic-booleans..
 instance Testable SBool where
   property (SBV (SVal _ (Left b))) = property (cwToBool b)
@@ -1645,7 +1678,7 @@ instance Testable (Symbolic SBool) where
                                  Nothing -> noQC [show r]
                                  Just b  -> return (cond, b, tvals)
                          us -> noQC us
-           complain qcInfo = showModel defaultSMTCfg (SMTModel qcInfo)
+           complain qcInfo = showModel defaultSMTCfg (SMTModel [] qcInfo)
            noQC us         = error $ "Cannot quick-check in the presence of uninterpreted constants: " ++ intercalate ", " us
 
 -- | Quick check an SBV property. Note that a regular 'quickCheck' call will work just as
@@ -1675,8 +1708,9 @@ slet x f = SBV $ SVal k $ Right $ cache r
 
 -- | Check if a boolean condition is satisfiable in the current state. This function can be useful in contexts where an
 -- interpreter implemented on top of SBV needs to decide if a particular stae (represented by the boolean) is reachable
--- in the current if-then-else paths implied by the 'ite' calls.
-isSatisfiableInCurrentPath :: SBool -> Symbolic Bool
+-- in the current if-then-else paths implied by the 'ite' calls. Returns Nothing if not satisfiable, otherwise the
+-- satisfying model.
+isSatisfiableInCurrentPath :: SBool -> Symbolic (Maybe SatResult)
 isSatisfiableInCurrentPath cond = do
        st <- ask
        let cfg  = fromMaybe defaultSMTCfg (getSBranchRunConfig st)
@@ -1688,7 +1722,8 @@ isSatisfiableInCurrentPath cond = do
                    SatResult (Unsatisfiable _) -> False
                    _                           -> error $ "isSatisfiableInCurrentPath: Unexpected external result: " ++ show check
        res `seq` liftIO $ msg $ "isSatisfiableInCurrentPath: Conclusion: " ++ if res then "Satisfiable" else "Unsatisfiable"
-       return res
+       return $ if res then Just check
+                       else Nothing
 
 -- We use 'isVacuous' and 'prove' only for the "test" section in this file, and GHC complains about that. So, this shuts it up.
 __unused :: a

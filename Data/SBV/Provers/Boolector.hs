@@ -11,7 +11,7 @@
 
 module Data.SBV.Provers.Boolector(boolector) where
 
-import Data.SBV.BitVectors.Data
+import Data.SBV.Core.Data
 import Data.SBV.SMT.SMT
 
 -- | The description of the Boolector SMT solver
@@ -34,6 +34,7 @@ boolector = SMTSolver {
                               , supportsReals              = False
                               , supportsFloats             = False
                               , supportsDoubles            = False
+                              , supportsOptimization       = False
                               }
          }
  where addTimeOut o i | i < 0 = error $ "Boolector: Timeout value must be non-negative, received: " ++ show i

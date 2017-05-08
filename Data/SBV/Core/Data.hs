@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.BitVectors.Data
+-- Module      :  Data.SBV.Core.Data
 -- Copyright   :  (c) Levent Erkok
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
@@ -9,6 +9,7 @@
 -- Internal data-structures for the sbv library
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE CPP                   #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
 {-# LANGUAGE TypeOperators         #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -18,14 +19,14 @@
 {-# LANGUAGE DefaultSignatures     #-}
 {-# LANGUAGE NamedFieldPuns        #-}
 
-module Data.SBV.BitVectors.Data
+module Data.SBV.Core.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
  , SInt8, SInt16, SInt32, SInt64, SInteger, SReal, SFloat, SDouble
  , nan, infinity, sNaN, sInfinity, RoundingMode(..), SRoundingMode
  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero
  , sRNE, sRNA, sRTP, sRTN, sRTZ
  , SymWord(..)
- , CW(..), CWVal(..), AlgReal(..), cwSameType, cwToBool
+ , CW(..), CWVal(..), AlgReal(..), ExtCW(..), GeneralizedCW(..), isRegularCW, cwSameType, cwToBool
  , mkConstCW ,liftCW2, mapCW, mapCW2
  , SW(..), trueSW, falseSW, trueCW, falseCW, normCW
  , SVal(..)
@@ -46,6 +47,8 @@ module Data.SBV.BitVectors.Data
  , extractSymbolicSimulationState
  , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..), getSBranchRunConfig
  , declNewSArray, declNewSFunArray
+ , OptimizeStyle(..), Penalty(..), Objective(..)
+ , Tactic(..), CaseCond(..), SMTProblem(..), isParallelCaseAnywhere
  ) where
 
 import Control.DeepSeq      (NFData(..))
@@ -56,17 +59,24 @@ import Data.Word            (Word8, Word16, Word32, Word64)
 import Data.List            (elemIndex, intercalate)
 import Data.Maybe           (fromMaybe)
 
+import qualified Data.Set as Set (Set)
 import qualified Data.Generics as G    (Data(..))
+
+import GHC.Stack.Compat
+#if !MIN_VERSION_base(4,9,0)
+import GHC.SrcLoc.Compat
+#endif
 
 import System.Random
 
-import Data.SBV.BitVectors.AlgReals
-import Data.SBV.Utils.Lib
+import Data.SBV.Core.AlgReals
+import Data.SBV.Core.Kind
+import Data.SBV.Core.Concrete
+import Data.SBV.Core.Symbolic
 
-import Data.SBV.BitVectors.Kind
-import Data.SBV.BitVectors.Concrete
-import Data.SBV.BitVectors.Symbolic
 import Data.SBV.SMT.SMTLibNames
+
+import Data.SBV.Utils.Lib
 
 import Prelude ()
 import Prelude.Compat
@@ -437,9 +447,38 @@ instance (HasKind a, HasKind b) => Show (SFunArray a b) where
 mkSFunArray :: (SBV a -> SBV b) -> SFunArray a b
 mkSFunArray = SFunArray
 
--- | Add a constraint with a given probability
+-- | Add a constraint with a given probability.
 addConstraint :: Maybe Double -> SBool -> SBool -> Symbolic ()
 addConstraint mt (SBV c) (SBV c') = addSValConstraint mt c c'
+
+-- | A case condition (internal)
+data CaseCond = NoCase                         -- ^ No case-split
+              | CasePath [SW]                  -- ^ In a case-path
+              | CaseVac  [SW] SW               -- ^ For checking the vacuity of a case
+              | CaseCov  [SW] [SW]             -- ^ In a case-path end, coverage (first arg is path cond, second arg is coverage cond)
+              | CstrVac                        -- ^ In a constraint vacuity check (top-level)
+              | Opt      [Objective (SW, SW)]  -- ^ In an optimization call
+
+instance NFData CaseCond where
+  rnf NoCase           = ()
+  rnf (CasePath ps)    = rnf ps
+  rnf (CaseVac  ps q)  = rnf ps `seq` rnf q  `seq` ()
+  rnf (CaseCov  ps qs) = rnf ps `seq` rnf qs `seq` ()
+  rnf CstrVac          = ()
+  rnf (Opt os)         = rnf os `seq` ()
+
+-- | Internal representation of a symbolic simulation result
+data SMTProblem = SMTProblem { smtInputs    :: [(Quantifier, NamedSymVar)]        -- ^ inputs
+                             , smtSkolemMap :: [Either SW (SW, [SW])]             -- ^ skolem-map
+                             , kindsUsed    :: Set.Set Kind                       -- ^ kinds used
+                             , smtAsserts   :: [(String, Maybe CallStack, SW)]    -- ^ assertions
+                             , tactics      :: [Tactic SW]                        -- ^ tactics to use
+                             , objectives   :: [Objective (SW, SW)]               -- ^ optimization goals, if any
+                             , smtLibPgm    :: SMTConfig -> CaseCond -> SMTLibPgm -- ^ SMTLib representation, given the config and case-splits
+                             }
+
+instance NFData SMTProblem where
+  rnf (SMTProblem i m k a t o p) = rnf i `seq` rnf m `seq` rnf k `seq` rnf a `seq` rnf t `seq` rnf o `seq` rnf p `seq` ()
 
 instance NFData (SBV a) where
   rnf (SBV x) = rnf x `seq` ()

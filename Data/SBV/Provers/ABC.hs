@@ -11,7 +11,7 @@
 
 module Data.SBV.Provers.ABC(abc) where
 
-import Data.SBV.BitVectors.Data
+import Data.SBV.Core.Data
 import Data.SBV.SMT.SMT
 
 -- | The description of abc. The default executable is @\"abc\"@,
@@ -36,6 +36,7 @@ abc = SMTSolver {
                               , supportsReals              = False
                               , supportsFloats             = False
                               , supportsDoubles            = False
+                              , supportsOptimization       = False
                               }
          }
   where addTimeOut _ _ = error "ABC: Timeout values are not supported"

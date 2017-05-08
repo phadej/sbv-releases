@@ -13,7 +13,7 @@
 
 module Data.SBV.Provers.Yices(yices) where
 
-import Data.SBV.BitVectors.Data
+import Data.SBV.Core.Data
 import Data.SBV.SMT.SMT
 
 -- | The description of the Yices SMT solver
@@ -36,6 +36,7 @@ yices = SMTSolver {
                               , supportsReals              = True
                               , supportsFloats             = False
                               , supportsDoubles            = False
+                              , supportsOptimization       = False
                               }
          }
   where addTimeOut _ _ = error "Yices: Timeout values are not supported by Yices"

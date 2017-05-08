@@ -32,21 +32,24 @@ import System.Process     (runInteractiveProcess, waitForProcess, terminateProce
 
 import qualified Data.Map as M
 
-import Data.SBV.BitVectors.AlgReals
-import Data.SBV.BitVectors.Data
-import Data.SBV.BitVectors.PrettyNum
-import Data.SBV.BitVectors.Symbolic   (SMTEngine)
-import Data.SBV.SMT.SMTLib            (interpretSolverOutput, interpretSolverModelLine)
+import Data.SBV.Core.AlgReals
+import Data.SBV.Core.Data
+import Data.SBV.Core.Symbolic (SMTEngine)
+
+import Data.SBV.SMT.SMTLib    (interpretSolverOutput, interpretSolverModelLine, interpretSolverObjectiveLine)
+
+import Data.SBV.Utils.PrettyNum
 import Data.SBV.Utils.Lib             (joinArgs, splitArgs)
 import Data.SBV.Utils.TDiff
 
 -- | Extract the final configuration from a result
 resultConfig :: SMTResult -> SMTConfig
-resultConfig (Unsatisfiable c) = c
-resultConfig (Satisfiable c _) = c
-resultConfig (Unknown c _)     = c
-resultConfig (ProofError c _)  = c
-resultConfig (TimeOut c)       = c
+resultConfig (Unsatisfiable c  ) = c
+resultConfig (Satisfiable   c _) = c
+resultConfig (SatExtField   c _) = c
+resultConfig (Unknown       c _) = c
+resultConfig (ProofError    c _) = c
+resultConfig (TimeOut       c  ) = c
 
 -- | A 'prove' call results in a 'ThmResult'
 newtype ThmResult    = ThmResult    SMTResult
@@ -55,30 +58,35 @@ newtype ThmResult    = ThmResult    SMTResult
 -- The reason for having a separate 'SatResult' is to have a more meaningful 'Show' instance.
 newtype SatResult    = SatResult    SMTResult
 
--- | A 'safe' call results in a 'SafeResult'
-newtype SafeResult   = SafeResult   (Maybe String, String, SMTResult)
-
 -- | An 'allSat' call results in a 'AllSatResult'. The boolean says whether
 -- we should warn the user about prefix-existentials.
 newtype AllSatResult = AllSatResult (Bool, [SMTResult])
+
+-- | A 'safe' call results in a 'SafeResult'
+newtype SafeResult   = SafeResult   (Maybe String, String, SMTResult)
+
+-- | An 'optimize' call results in a 'OptimizeResult'
+data OptimizeResult = LexicographicResult SMTResult
+                    | ParetoResult        [SMTResult]
+                    | IndependentResult   [(String, SMTResult)]
 
 -- | User friendly way of printing theorem results
 instance Show ThmResult where
   show (ThmResult r) = showSMTResult "Q.E.D."
                                      "Unknown"     "Unknown. Potential counter-example:\n"
-                                     "Falsifiable" "Falsifiable. Counter-example:\n" r
+                                     "Falsifiable" "Falsifiable. Counter-example:\n" "Falsifiable in an extension field:\n" r
 
 -- | User friendly way of printing satisfiablity results
 instance Show SatResult where
   show (SatResult r) = showSMTResult "Unsatisfiable"
                                      "Unknown"     "Unknown. Potential model:\n"
-                                     "Satisfiable" "Satisfiable. Model:\n" r
+                                     "Satisfiable" "Satisfiable. Model:\n" "Satisfiable in an extension field. Model:\n" r
 
 -- | User friendly way of printing safety results
 instance Show SafeResult where
    show (SafeResult (mbLoc, msg, r)) = showSMTResult (tag "No violations detected")
                                                      (tag "Unknown")  (tag "Unknown. Potential violating model:\n")
-                                                     (tag "Violated") (tag "Violated. Model:\n") r
+                                                     (tag "Violated") (tag "Violated. Model:\n") (tag "Violated in an extension field:\n") r
         where loc   = maybe "" (++ ": ") mbLoc
               tag s = loc ++ msg ++ ": " ++ s
 
@@ -97,10 +105,35 @@ instance Show AllSatResult where
                           _ -> "Found " ++ show c ++ " different solutions." ++ uniqueWarn
           sh i c = (ok, showSMTResult "Unsatisfiable"
                                       "Unknown" "Unknown. Potential model:\n"
-                                      ("Solution #" ++ show i ++ ":\nSatisfiable") ("Solution #" ++ show i ++ ":\n") c)
+                                      ("Solution #" ++ show i ++ ":\nSatisfiable") ("Solution #" ++ show i ++ ":\n")
+                                      ("Solution $" ++ show i ++ " in an extension field:\n")
+                                      c)
               where ok = case c of
                            Satisfiable{} -> True
                            _             -> False
+
+-- | Show instance for optimization results
+instance Show OptimizeResult where
+  show res = case res of
+               LexicographicResult r   -> sh id r
+
+               IndependentResult   rs  -> multi "objectives" (map (uncurry shI) rs)
+
+               ParetoResult        [r] -> sh (\s -> "Unique pareto front: " ++ s) r
+               ParetoResult        rs  -> multi "pareto optimal values" (zipWith shP [(1::Int)..] rs)
+
+       where multi w [] = "There are no " ++ w ++ " to display models for."
+             multi _ xs = intercalate "\n" xs
+
+             shI n = sh (\s -> "Objective "     ++ show n ++ ": " ++ s)
+             shP i = sh (\s -> "Pareto front #" ++ show i ++ ": " ++ s)
+
+             sh tag = showSMTResult (tag "Unsatisfiable.")
+                                    (tag "Unknown.")
+                                    (tag "Unknown. Potential model:" ++ "\n")
+                                    (tag "Optimal with no assignments.")
+                                    (tag "Optimal model:" ++ "\n")
+                                    (tag "Optimal in an extension field:" ++ "\n")
 
 -- | Instances of 'SatModel' can be automatically extracted from models returned by the
 -- solvers. The idea is that the sbv infrastructure provides a stream of 'CW''s (constant-words)
@@ -246,15 +279,19 @@ instance (SatModel a, SatModel b, SatModel c, SatModel d, SatModel e, SatModel f
 class Modelable a where
   -- | Is there a model?
   modelExists :: a -> Bool
+
   -- | Extract a model, the result is a tuple where the first argument (if True)
   -- indicates whether the model was "probable". (i.e., if the solver returned unknown.)
   getModel :: SatModel b => a -> Either String (Bool, b)
+
   -- | Extract a model dictionary. Extract a dictionary mapping the variables to
   -- their respective values as returned by the SMT solver. Also see `getModelDictionaries`.
   getModelDictionary :: a -> M.Map String CW
+
   -- | Extract a model value for a given element. Also see `getModelValues`.
   getModelValue :: SymWord b => String -> a -> Maybe b
   getModelValue v r = fromCW `fmap` (v `M.lookup` getModelDictionary r)
+
   -- | Extract a representative name for the model value of an uninterpreted kind.
   -- This is supposed to correspond to the value as computed internally by the
   -- SMT solver; and is unportable from solver to solver. Also see `getModelUninterpretedValues`.
@@ -268,6 +305,13 @@ class Modelable a where
   extractModel a = case getModel a of
                      Right (_, b) -> Just b
                      _            -> Nothing
+
+  -- | Extract model objective values, for all optimization goals.
+  getModelObjectives :: a -> M.Map String GeneralizedCW
+
+  -- | Extract the value of an objective
+  getModelObjectiveValue :: String -> a -> Maybe GeneralizedCW
+  getModelObjectiveValue v r = v `M.lookup` getModelObjectives r
 
 -- | Return all the models from an 'allSat' call, similar to 'extractModel' but
 -- is suitable for the case of multiple results.
@@ -291,28 +335,41 @@ instance Modelable ThmResult where
   getModel           (ThmResult r) = getModel r
   modelExists        (ThmResult r) = modelExists r
   getModelDictionary (ThmResult r) = getModelDictionary r
+  getModelObjectives (ThmResult r) = getModelObjectives r
 
 -- | 'SatResult' as a generic model provider
 instance Modelable SatResult where
   getModel           (SatResult r) = getModel r
   modelExists        (SatResult r) = modelExists r
   getModelDictionary (SatResult r) = getModelDictionary r
+  getModelObjectives (SatResult r) = getModelObjectives r
 
 -- | 'SMTResult' as a generic model provider
 instance Modelable SMTResult where
   getModel (Unsatisfiable _) = Left "SBV.getModel: Unsatisfiable result"
+  getModel (Satisfiable _ m) = Right (False, parseModelOut m)
+  getModel (SatExtField _ _) = Left "SBV.getModel: The model is in an extension field"
   getModel (Unknown _ m)     = Right (True, parseModelOut m)
   getModel (ProofError _ s)  = error $ unlines $ "Backend solver complains: " : s
   getModel (TimeOut _)       = Left "Timeout"
-  getModel (Satisfiable _ m) = Right (False, parseModelOut m)
+
   modelExists Satisfiable{}   = True
   modelExists Unknown{}       = False -- don't risk it
   modelExists _               = False
+
   getModelDictionary (Unsatisfiable _) = M.empty
+  getModelDictionary (Satisfiable _ m) = M.fromList (modelAssocs m)
+  getModelDictionary (SatExtField _ _) = M.empty
   getModelDictionary (Unknown _ m)     = M.fromList (modelAssocs m)
   getModelDictionary (ProofError _ _)  = M.empty
   getModelDictionary (TimeOut _)       = M.empty
-  getModelDictionary (Satisfiable _ m) = M.fromList (modelAssocs m)
+
+  getModelObjectives (Unsatisfiable _) = M.empty
+  getModelObjectives (Satisfiable _ m) = M.fromList (modelObjectives m)
+  getModelObjectives (SatExtField _ m) = M.fromList (modelObjectives m)
+  getModelObjectives (Unknown _ m)     = M.fromList (modelObjectives m)
+  getModelObjectives (ProofError _ _)  = M.empty
+  getModelObjectives (TimeOut _)       = M.empty
 
 -- | Extract a model out, will throw error if parsing is unsuccessful
 parseModelOut :: SatModel a => SMTModel -> a
@@ -332,44 +389,54 @@ displayModels disp (AllSatResult (_, ms)) = do
   where display r i = disp i r >> return i
 
 -- | Show an SMTResult; generic version
-showSMTResult :: String -> String -> String -> String -> String -> SMTResult -> String
-showSMTResult unsatMsg unkMsg unkMsgModel satMsg satMsgModel result = case result of
-  Unsatisfiable _             -> unsatMsg
-  Satisfiable _ (SMTModel []) -> satMsg
-  Satisfiable _ m             -> satMsgModel ++ showModel cfg m
-  Unknown     _ (SMTModel []) -> unkMsg
-  Unknown     _ m             -> unkMsgModel ++ showModel cfg m
-  ProofError  _ []            -> "*** An error occurred. No additional information available. Try running in verbose mode"
-  ProofError  _ ls            -> "*** An error occurred.\n" ++ intercalate "\n" (map ("***  " ++) ls)
-  TimeOut     _               -> "*** Timeout"
+showSMTResult :: String -> String -> String -> String -> String -> String -> SMTResult -> String
+showSMTResult unsatMsg unkMsg unkMsgModel satMsg satMsgModel satExtMsg result = case result of
+  Unsatisfiable _               -> unsatMsg
+  Satisfiable _ (SMTModel _ []) -> satMsg
+  Satisfiable _ m               -> satMsgModel ++ showModel cfg m
+  SatExtField _ (SMTModel b _)  -> satExtMsg   ++ showModelDictionary cfg b
+  Unknown     _ (SMTModel _ []) -> unkMsg
+  Unknown     _ m               -> unkMsgModel ++ showModel cfg m
+  ProofError  _ []              -> "*** An error occurred. No additional information available. Try running in verbose mode"
+  ProofError  _ ls              -> "*** An error occurred.\n" ++ intercalate "\n" (map ("***  " ++) ls)
+  TimeOut     _                 -> "*** Timeout"
  where cfg = resultConfig result
 
 -- | Show a model in human readable form. Ignore bindings to those variables that start
 -- with "__internal_sbv_" and also those marked as "nonModelVar" in the config; as these are only for internal purposes
 showModel :: SMTConfig -> SMTModel -> String
-showModel cfg model
+showModel cfg model = showModelDictionary cfg [(n, RegularCW c) | (n, c) <- modelAssocs model]
+
+-- | Show bindings in a generalized model dictionary, tabulated
+showModelDictionary :: SMTConfig -> [(String, GeneralizedCW)] -> String
+showModelDictionary cfg allVars
    | null allVars
    = "[There are no variables bound by the model.]"
    | null relevantVars
    = "[There are no model-variables bound by the model.]"
    | True
    = intercalate "\n" . display . map shM $ relevantVars
-  where allVars       = modelAssocs model
-        relevantVars  = filter (not . ignore) allVars
+  where relevantVars  = filter (not . ignore) allVars
         ignore (s, _) = "__internal_sbv_" `isPrefixOf` s || isNonModelVar cfg s
-        shM (s, v)    = let vs = shCW cfg v in ((length s, s), (vlength vs, vs))
+
+        shM (s, RegularCW v) = let vs = shCW cfg v in ((length s, s), (vlength vs, vs))
+        shM (s, other)       = let vs = show other in ((length s, s), (vlength vs, vs))
+
         display svs   = map line svs
            where line ((_, s), (_, v)) = "  " ++ right (nameWidth - length s) s ++ " = " ++ left (valWidth - lTrimRight (valPart v)) v
                  nameWidth             = maximum $ 0 : [l | ((l, _), _) <- svs]
                  valWidth              = maximum $ 0 : [l | (_, (l, _)) <- svs]
+
         right p s = s ++ replicate p ' '
         left  p s = replicate p ' ' ++ s
         vlength s = case dropWhile (/= ':') (reverse (takeWhile (/= '\n') s)) of
                       (':':':':r) -> length (dropWhile isSpace r)
                       _           -> length s -- conservative
+
         valPart ""          = ""
         valPart (':':':':_) = ""
         valPart (x:xs)      = x : valPart xs
+
         lTrimRight = length . dropWhile isSpace . reverse
 
 -- | Show a constant value, in the user-specified base
@@ -439,7 +506,9 @@ standardValueExtractor _ l = [l]
 
 -- | A standard post-processor: Reading the lines of solver output and turning it into a model:
 standardModelExtractor :: Bool -> [(Quantifier, NamedSymVar)] -> [String] -> SMTModel
-standardModelExtractor isSat qinps solverLines = SMTModel { modelAssocs = map snd $ sortByNodeId $ concatMap (interpretSolverModelLine inps) solverLines }
+standardModelExtractor isSat qinps solverLines = SMTModel { modelObjectives = map snd $ sortByNodeId $ concatMap (interpretSolverObjectiveLine inps) solverLines
+                                                          , modelAssocs     = map snd $ sortByNodeId $ concatMap (interpretSolverModelLine     inps) solverLines
+                                                          }
          where sortByNodeId :: [(Int, a)] -> [(Int, a)]
                sortByNodeId = sortBy (compare `on` fst)
                inps -- for "sat", display the prefix existentials. For completeness, we will drop
@@ -456,19 +525,32 @@ standardEngine :: String
                -> ([String] -> Int -> [String])
                -> (Bool -> [(Quantifier, NamedSymVar)] -> [String] -> SMTModel, SW -> String -> [String])
                -> SMTEngine
-standardEngine envName envOptName addTimeOut (extractMap, extractValue) cfg isSat qinps skolemMap pgm = do
+standardEngine envName envOptName addTimeOut (extractMap, extractValue) cfg isSat mbOptInfo qinps skolemMap pgm = do
+
+    -- If there's an optimization goal, it better be handled by a custom engine!
+    () <- case mbOptInfo of
+            Nothing -> return ()
+            Just _  -> error $ "SBV.standardEngine: Solver: " ++ show (name (solver cfg)) ++ " doesn't support optimization!"
+
     execName <-                    getEnv envName     `C.catch` (\(_ :: C.SomeException) -> return (executable (solver cfg)))
     execOpts <- (splitArgs `fmap`  getEnv envOptName) `C.catch` (\(_ :: C.SomeException) -> return (options (solver cfg)))
+
     let cfg'    = cfg {solver = (solver cfg) {executable = execName, options = maybe execOpts (addTimeOut execOpts) (timeOut cfg)}}
         tweaks  = case solverTweaks cfg' of
                     [] -> ""
                     ts -> unlines $ "; --- user given solver tweaks ---" : ts ++ ["; --- end of user given tweaks ---"]
+
         cont rm = intercalate "\n" $ concatMap extract skolemMap
            where extract (Left s)        = extractValue s $ "(echo \"((" ++ show s ++ " " ++ mkSkolemZero rm (kindOf s) ++ "))\")"
                  extract (Right (s, [])) = extractValue s $ "(get-value (" ++ show s ++ "))"
                  extract (Right (s, ss)) = extractValue s $ "(get-value (" ++ show s ++ concat [' ' : mkSkolemZero rm (kindOf a) | a <- ss] ++ "))"
+
         script = SMTScript {scriptBody = tweaks ++ pgm, scriptModel = Just (cont (roundingMode cfg))}
-    standardSolver cfg' script id (ProofError cfg') (interpretSolverOutput cfg' (extractMap isSat qinps))
+
+        -- standard engines only return one result ever
+        wrap x = [x]
+
+    standardSolver cfg' script id (wrap . ProofError cfg') (wrap . interpretSolverOutput cfg' (extractMap isSat qinps))
 
 -- | A standard solver interface. If the solver is SMT-Lib compliant, then this function should suffice in
 -- communicating with it.
@@ -484,8 +566,8 @@ standardSolver config script cleanErrs failure success = do
     case smtFile config of
       Nothing -> return ()
       Just f  -> do msg $ "Saving the generated script in file: " ++ show f
-                    writeFile f (scriptBody script)
-    contents <- timeIf isTiming (WorkByProver nmSolver) $ pipeProcess config  exec opts script cleanErrs
+                    writeFile f (scriptBody script ++ intercalate "\n" ("" : optimizeArgs config ++ [satCmd config]))
+    contents <- timeIf isTiming (WorkByProver nmSolver) $ pipeProcess config exec opts script cleanErrs
     msg $ nmSolver ++ " output:\n" ++ either id (intercalate "\n") contents
     case contents of
       Left e   -> return $ failure (lines e)
@@ -531,6 +613,7 @@ runSolver cfg execPath opts script
                                                              else (ex,          finalOut ++ "\n" ++ out, err)
                 return (send, ask, cleanUp, pid)
       let executeSolver = do mapM_ send (lines (scriptBody script))
+                             mapM_ send (optimizeArgs cfg)
                              response <- case scriptModel script of
                                            Nothing -> do send $ satCmd cfg
                                                          return Nothing

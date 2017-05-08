@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.BitVectors.PrettyNum
+-- Module      :  Data.SBV.Utils.PrettyNum
 -- Copyright   :  (c) Levent Erkok
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
@@ -12,7 +12,7 @@
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
-module Data.SBV.BitVectors.PrettyNum (
+module Data.SBV.Utils.PrettyNum (
         PrettyNum(..), readBin, shex, shexI, sbin, sbinI
       , showCFloat, showCDouble, showHFloat, showHDouble
       , showSMTFloat, showSMTDouble, smtRoundingMode, cwToSMTLib, mkSkolemZero
@@ -28,8 +28,8 @@ import Numeric    (showIntAtBase, showHex, readInt)
 
 import Data.Numbers.CrackNum (floatToFP, doubleToFP)
 
-import Data.SBV.BitVectors.Data
-import Data.SBV.BitVectors.AlgReals (algRealToSMTLib2)
+import Data.SBV.Core.Data
+import Data.SBV.Core.AlgReals (algRealToSMTLib2)
 
 -- | PrettyNum class captures printing of numbers in hex and binary formats; also supporting negative numbers.
 --

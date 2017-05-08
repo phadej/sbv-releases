@@ -1,8 +1,122 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 5.15, 2017-01-30
+* Latest Hackage released version: 6.0, 2017-05-07
 
+### Version 6.0, 2017-05-07
+
+  * This is a backwards compatibility breaking release, hence the major version
+    bump from 5.15 to 6.0:
+     
+        * Most of existing code should work with no changes
+	* Old code relying on some features might require extra imports,
+	  since we no longer export some functionality directly from Data.SBV.
+          This was done in order to reduce the number of exported items to
+          avoid extra clutter.
+        * Old optimization features are removed, as the new and much improved
+	  capabilities should be used instead.
+
+  * The next two bullets cover new features in SBV regarding optimization, based
+    on the capabilities of the z3 SMT solver. With this release SBV gains the
+    capability optimize objectives, and solve MaxSAT problems; by appropriately
+    employing the corresponding capabilities in z3. A good review of these features
+    as implemented by Z3, and thus what is available in SBV is given in this
+    paper: http://www.easychair.org/publications/download/Z_-_Maximal_Satisfaction_with_Z3
+
+
+  * SBV now allows for  real or integral valued metrics. Goals can be lexicographically
+    (default), independently, or pareto-front optimized. Currently, only the z3 backend
+    supports optimization routines.
+
+    Optimization can be done over bit-vector, real, and integer goals. The relevant
+    functions are:
+
+    	* `minimize`: Minimize a given arithmetic goal
+    	* `maximize`: Minimize a given arithmetic goal
+
+    For instance, a call of the form 
+    
+         minimize "name-of-goal" $ x + 2*y
+
+    Minimizes the arithmetic goal x+2*y, where x and y can be bit-vectors, reals,
+    or integers. Such goals will be lexicographicly optimized, i.e., in the order
+    given. If there are multiple goals, then user can also ask for independent
+    optimization results, or pareto-fronts.
+
+    Once the objectives are given, a top level call to `optimize` (similar to `prove`
+    and `sat`) performs the optimization.
+
+  * SBV now implements soft-asserts. A soft assertion is a hint to the SMT solver that
+    we would like a particular condition to hold if *possible*. That is, if there is
+    a solution satisfying it, then we would like it to hold. However, if the set of
+    constraints is unsatisfiable, then a soft-assertion can be violated by incurring
+    a user-given numeric penalty to satisfy the remaining constraints. The solver then
+    tries to minimize the penalty, i.e., satisfy as many of the soft-asserts as possible
+    such that the total penalty for those that are not satisfied is minimized.
+    
+    Note that `assertSoft` works well with optimization goals (minimize/maximize etc.),
+    and are most useful when we are optimizing a metric and thus some of the constraints
+    can be relaxed with a penalty to obtain a good solution.
+
+  * SBV no longer provides the old optimization routines, based on iterative and quantifier
+    based methods. Those methods were rarely used, and are now superseded by the above
+    mechanism. If the old code is needed, please contact for help: They can be resurrected
+    in your own code if absolutely necessary.
+
+  * SBV now implements tactics, which allow the user to navigate the proof process.
+    This is an advanced feature that most users will have no need of, but can become
+    handy when dealing with complicated problems. Users can, for instance, implement
+    case-splitting in a proof to guide the underlying solver through. Here is the list
+    of tactics implemented:
+
+       * `CaseSplit`         : Case-split, with implicit coverage. Bool says whether we should be verbose.
+       * `CheckCaseVacuity`  : Should the case-splits be checked for vacuity? (Default: True.)
+       * `ParallelCase`      : Run case-splits in parallel. (Default: Sequential.)
+       * `CheckConstrVacuity`: Should constraints be checked for vacuity? (Default: False.)
+       * `StopAfter`         : Time-out given to solver, in seconds.
+       * `CheckUsing`        : Invoke with check-sat-using command, instead of check-sat
+       * `UseLogic`          : Use this logic, a custom one can be specified too
+       * `UseSolver`         : Use this solver (z3, yices, etc.)
+       * `OptimizePriority`  : Specify priority for optimization: Lexicographic (default), Independent, or Pareto.
+
+  * Name-space clean-up. The following modules are no longer automatically exported
+    from Data.SBV:
+
+	- `Data.SBV.Tools.ExpectedValue` (computing with expected values)
+	- `Data.SBV.Tools.GenTest` (test case generation)
+	- `Data.SBV.Tools.Polynomial` (polynomial arithmetic, CRCs etc.)
+	- `Data.SBV.Tools.STree` (full symbolic binary trees)
+ 
+    To use the functionality of these modules, users must now explicitly import the corresponding
+    module. Not other changes should be needed other than the explicit import.
+
+  * Changed the signatures of:
+
+          isSatisfiableInCurrentPath :: SBool -> Symbolic Bool
+        svIsSatisfiableInCurrentPath :: SVal  -> Symbolic Bool
+
+    to:
+
+          isSatisfiableInCurrentPath :: SBool -> Symbolic (Maybe SatResult)
+        svIsSatisfiableInCurrentPath :: SVal  -> Symbolic (Maybe SatResult)
+
+    which returns the result in case of SAT. This is more useful than before. This is
+    backwards-compatibility breaking, but is more useful. (Requested by Jared Ziegler.)
+
+  * Add instance `Provable (Symbolic ())`, which simply stands for returning true
+    for proof/sat purposes. This allows for simpler coding, as constrain/minimize/maximize
+    calls (which return unit) can now be directly sat/prove processed, without needing
+    a final call to return at the end.
+
+  * Add type synonym Goal (for "Symbolic ()"), in order to simplify type signatures
+
+  * SBV now properly adds check-sat commands and other directives in debugging output.
+
+  * New examples:
+      - Data.SBV.Examples.Optimization.LinearOpt: Simple linear-optimization example.
+      - Data.SBV.Examples.Optimization.Production: Scheduling machines in a shop
+      - Data.SBV.Examples.Optimization.VM: Scheduling virtual-machines in a data-center
+    
 ### Version 5.15, 2017-01-30
 
   * Bump up dependency on CrackNum >= 1.9, to get access to hexadecimal floats.

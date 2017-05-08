@@ -105,7 +105,8 @@
 -- get in touch if there is a solver you'd like to see included.
 ---------------------------------------------------------------------------------
 
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE    FlexibleInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.SBV (
   -- * Programming with symbolic values
@@ -142,8 +143,6 @@ module Data.SBV (
   , SBV
   -- *** Arrays of symbolic values
   , SymArray(..), SArray, SFunArray, mkSFunArray
-  -- *** Full binary trees
-  , STree, readSTree, writeSTree, mkSTree
   -- ** Operations on symbolic values
   -- *** Word level
   , sTestBit, sExtractBits, sPopCount, sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, sFromIntegral, setBitTo, oneIf
@@ -158,8 +157,7 @@ module Data.SBV (
   , blastBE, blastLE, FromBits(..)
   -- *** Splitting, joining, and extending
   , Splittable(..)
-  -- ** Polynomial arithmetic and CRCs
-  , Polynomial(..), crcBV, crc
+
   -- ** Conditionals: Mergeable values
   , Mergeable(..), ite, iteLazy
   -- ** Symbolic equality
@@ -188,9 +186,9 @@ module Data.SBV (
 
   -- * Properties, proofs, satisfiability, and safety
   -- $proveIntro
-
-  -- ** Predicates
-  , Predicate, Provable(..), Equality(..)
+  -- $noteOnNestedQuantifiers
+  -- ** Predicates and Goals
+  , Predicate, Goal, Provable(..), Equality(..)
   -- ** Proving properties
   , prove, proveWith, isTheorem, isTheoremWith
   -- ** Checking satisfiability
@@ -214,20 +212,21 @@ module Data.SBV (
   -- $multiIntro
   , proveWithAll, proveWithAny, satWithAll, satWithAny
 
-  -- * Optimization
-  -- $optimizeIntro
-  , minimize, maximize, optimize
-  , minimizeWith, maximizeWith, optimizeWith
+  -- * Tactics
+  -- $tacticIntro
+  , Tactic(..), tactic
 
-  -- * Computing expected values
-  , expectedValue, expectedValueWith
+  -- * Optimization
+  -- $optiIntro
+  , OptimizeStyle(..), Penalty(..), Objective(..), minimize, maximize, assertSoft, optimize, optimizeWith
+  , ExtCW(..), GeneralizedCW(..)
 
   -- * Model extraction
   -- $modelExtraction
 
   -- ** Inspecting proof results
   -- $resultTypes
-  , ThmResult(..), SatResult(..), SafeResult(..), AllSatResult(..), SMTResult(..)
+  , ThmResult(..), SatResult(..), AllSatResult(..), SafeResult(..), OptimizeResult(..), SMTResult(..)
 
   -- ** Programmable model extraction
   -- $programmableExtraction
@@ -235,17 +234,15 @@ module Data.SBV (
   , getModelDictionaries, getModelValues, getModelUninterpretedValues
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), SMTLibVersion(..), SMTLibLogic(..), Logic(..), OptimizeOpts(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
-  , Timing(..), TimedStep(..), TimingInfo, showTDiff
+  , SMTConfig(..), SMTLibVersion(..), SMTLibLogic(..), Logic(..), Solver(..), SMTSolver(..)
+  , boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
+  , Timing(..), TimedStep(..), TimingInfo, showTDiff, CW(..), HasKind(..), Kind(..), cwToBool
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
 
   -- * Getting SMT-Lib output (for offline analysis)
   , compileToSMTLib, generateSMTBenchmarks
-
-  -- * Test case generation
-  , genTest, getTestValues, TestVectors, TestStyle(..), renderTest, CW(..), HasKind(..), Kind(..), cwToBool
 
   -- * Code generation from symbolic programs
   -- $cCodeGeneration
@@ -286,22 +283,21 @@ import Control.Monad            (filterM)
 import Control.Concurrent.Async (async, waitAny, waitAnyCancel)
 import System.IO.Unsafe         (unsafeInterleaveIO)             -- only used safely!
 
-import Data.SBV.BitVectors.AlgReals
-import Data.SBV.BitVectors.Data
-import Data.SBV.BitVectors.Model
-import Data.SBV.BitVectors.Floating
-import Data.SBV.BitVectors.PrettyNum
-import Data.SBV.BitVectors.Splittable
-import Data.SBV.BitVectors.STree
+import Data.SBV.Core.AlgReals
+import Data.SBV.Core.Data
+import Data.SBV.Core.Model
+import Data.SBV.Core.Floating
+import Data.SBV.Core.Splittable
+
 import Data.SBV.Compilers.C
 import Data.SBV.Compilers.CodeGen
+
 import Data.SBV.Provers.Prover
-import Data.SBV.Tools.GenTest
-import Data.SBV.Tools.ExpectedValue
-import Data.SBV.Tools.Optimize
-import Data.SBV.Tools.Polynomial
+
 import Data.SBV.Utils.Boolean
 import Data.SBV.Utils.TDiff
+import Data.SBV.Utils.PrettyNum
+
 import Data.Bits
 import Data.Int
 import Data.Ratio
@@ -382,6 +378,14 @@ satWithAll = (`sbvWithAll` satWith)
 -- the result of the first one to finish will be returned, remaining threads will be killed.
 satWithAny :: Provable a => [SMTConfig] -> a -> IO (Solver, SatResult)
 satWithAny    = (`sbvWithAny` satWith)
+
+-- If we get a program producing nothing (i.e., Symbolic ()), pretend it simply returns True.
+-- This is useful since min/max calls and constraints will provide the context
+instance Provable Goal where
+  forAll_    a = forAll_    ((a >> return true) :: Predicate)
+  forAll ns  a = forAll ns  ((a >> return true) :: Predicate)
+  forSome_   a = forSome_   ((a >> return true) :: Predicate)
+  forSome ns a = forSome ns ((a >> return true) :: Predicate)
 
 -- | Equality as a proof method. Allows for
 -- very concise construction of equivalence proofs, which is very typical in
@@ -527,47 +531,126 @@ Also see "Data.SBV.Examples.Misc.NoDiv0" for the classic div-by-zero example.
 -}
 
 
-{- $optimizeIntro
-Symbolic optimization. A call of the form:
+{- $tacticIntro
+In certain cases, the prove/sat calls can benefit from user guidance, in terms of tactics. From a semantic view,
+a tactic has no effect on the meaning of a predicate. It is merely guidance for SBV to guide the proof. It is
+also used for executing cases in parallel ('ParallelCase'), or picking the logic to use ('UseLogic'), or
+specifying a timeout ('StopAfter'). For most users, default values of these should suffice.
+-}
 
-    @minimize Quantified cost n valid@
+{- $optiIntro
+  SBV can optimize metric functions, i.e., those that generate both bounded 'SIntN', 'SWordN', and unbounded 'SInteger'
+  types, along with those produce 'SReal's. That is, it can find models satisfying all the constraints while minimizing
+  or maximizing user given metrics. Currently, optimization requires the use of the z3 SMT solver as the backend,
+  and a good review of these features is given
+  in this paper: <http://www.easychair.org/publications/download/Z_-_Maximal_Satisfaction_with_Z3>.
 
-returns @Just xs@, such that:
+  Goals can be lexicographically (default), independently, or pareto-front optimized. The relevant functions are:
 
-   * @xs@ has precisely @n@ elements
+      * 'minimize': Minimize a given arithmetic goal
+      * 'maximize': Minimize a given arithmetic goal
 
-   * @valid xs@ holds
+  Goals can be optimized at a regular or an extended value: An extended value is either positive or negative infinity
+  (for unbounded integers and reals) or positive or negative epsilon differential from a real value (for reals).
 
-   * @cost xs@ is minimal. That is, for all sequences @ys@ that satisfy the first two criteria above, @cost xs .<= cost ys@ holds.
+  For instance, a call of the form 
 
-If there is no such sequence, then 'minimize' will return 'Nothing'.
+       @ 'minimize' "name-of-goal" $ x + 2*y @
 
-The function 'maximize' is similar, except the comparator is '.>='. So the value returned has the largest cost (or value, in that case).
+  minimizes the arithmetic goal @x+2*y@, where @x@ and @y@ can be signed\/unsigned bit-vectors, reals,
+  or integers.
 
-The function 'optimize' allows the user to give a custom comparison function.
+== A simple example
 
-The 'OptimizeOpts' argument controls how the optimization is done. If 'Quantified' is used, then the SBV optimization engine satisfies the following predicate:
+  Here's an optimization example in action:
 
-   @exists xs. forall ys. valid xs && (valid ys \`implies\` (cost xs \`cmp\` cost ys))@
+  >>> optimize $ \x y -> minimize "goal" (x+2*(y::SInteger))
+  Optimal in an extension field:
+    goal = -oo :: Integer
 
-Note that this may cause efficiency problems as it involves alternating quantifiers.
-If 'OptimizeOpts' is set to 'Iterative' 'True', then SBV will programmatically
-search for an optimal solution, by repeatedly calling the solver appropriately. (The boolean argument controls whether progress reports are given. Use
-'False' for quiet operation.)
+  Of course, this becomes more useful when the result is not in an extension field:
 
-=== Quantified vs Iterative
+  @
+      optimize $ do x <- sInteger "x"
+                    y <- sInteger "y"
 
-Note that the quantified and iterative versions are two different optimization approaches and may not necessarily yield the same
-results. In particular, the quantified version can tell us no such solution exists if there is no global optimum value, while the iterative
-version might simply loop forever for such a problem. To wit, consider the example:
+                    constrain $ x .> 0
+                    constrain $ x .< 6
+                    constrain $ y .> 2
+                    constrain $ y .< 12
 
-   @ maximize Quantified head 1 (const true :: [SInteger] -> SBool) @
+                    minimize "goal" (x+2*(y::SInteger))
+  @
 
-which asks for the largest `SInteger` value. The SMT solver will happily answer back saying there is no such value with the 'Quantified' call, but the 'Iterative' variant
-will simply loop forever as it would search through an infinite chain of ascending 'SInteger' values.
+  This will produce:
 
-In practice, however, the iterative version is usually the more effective choice since alternating quantifiers are hard to deal with for many SMT-solvers and thus will
-likely result in an @unknown@ result. While the 'Iterative' variant can loop for a long time, one can simply use the boolean flag 'True' and see how the search is progressing.
+  @
+  Optimal model:
+    x    = 1 :: Integer
+    y    = 3 :: Integer
+    goal = 7 :: Integer
+   @
+
+  As usual, the programmatic API can be used to extract the values of objectives and model-values ('getModelObjectives',
+  'getModel', etc.) to access these values and program with them further.
+
+== Multiple optimization goals
+
+  Multiple goals can be specified, using the same syntax. In this case, the user gets to pick what style of
+  optimization to perform:
+
+    * The default is lexicographic. That is, solver will optimize the goals in the given order, optimizing
+      the latter ones under the model that optimizes the previous ones. This is the default behavior, but
+      can also be explicitly specified by:
+
+       @ 'tactic' $ 'OptimizePriority' 'Lexicographic' @
+
+    * Goals can also be independently optimized. In this case the user will be presented a model for each
+      goal given. To enable this, use the tactic:
+
+       @ 'tactic' $ 'OptimizePriority' 'Independent' @
+
+    * Finally, the user can query for pareto-fronts. A pareto front is an model such that no goal can be made
+      "better" without making some other goal "worse." To enable this style, use:
+
+       @ 'tactic' $ 'OptimizePriority' 'Pareto' @
+
+== Soft Assertions
+
+  Related to optimization, SBV implements soft-asserts via 'assertSoft' calls. A soft assertion
+  is a hint to the SMT solver that we would like a particular condition to hold if **possible*.
+  That is, if there is a solution satisfying it, then we would like it to hold, but it can be violated
+  if there is no way to satisfy it. Each soft-assertion can be associated with a numeric penalty for
+  not satisfying it, hence turning it into an optimization problem.
+
+  Note that 'assertSoft' works well with optimization goals ('minimize'/'maximize' etc.),
+  and are most useful when we are optimizing a metric and thus some of the constraints
+  can be relaxed with a penalty to obtain a good solution. Again
+  see <http://www.easychair.org/publications/download/Z_-_Maximal_Satisfaction_with_Z3>
+  for a good overview of the features in Z3 that SBV is providing the bridge for.
+
+  A soft assertion can be specified in one of the following three main ways:
+
+       @
+         'assertSoft' "bounded_x" (x .< 5) 'DefaultPenalty'
+         'assertSoft' "bounded_x" (x .< 5) ('Penalty' 2.3 Nothing)
+         'assertSoft' "bounded_x" (x .< 5) ('Penalty' 4.7 (Just "group-1")) @
+
+  In the first form, we are saying that the constraint @x .< 5@ must be satisfied, if possible,
+  but if this constraint can not be satisfied to find a model, it can be violated with the default penalty of 1.
+
+  In the second case, we are associating a penalty value of @2.3@.
+
+  Finally in the third case, we are also associating this constraint with a group. The group
+  name is only needed if we have classes of soft-constraints that should be considered together.
+
+== Optimization examples
+
+  The following examples illustrate the use of basic optimization routines:
+
+     * "Data.SBV.Examples.Optimization.LinearOpt": Simple linear-optimization example.
+     * "Data.SBV.Examples.Optimization.Production": Scheduling machines in a shop
+     * "Data.SBV.Examples.Optimization.VM": Scheduling virtual-machines in a data-center
 -}
 
 {- $modelExtraction
@@ -683,7 +766,7 @@ the introduction of variables.
 Note that the proper reading of a constraint
 depends on the context:
 
-    * In a 'sat' (or 'allSat') call: The constraint added is asserted
+  * In a 'sat' (or 'allSat') call: The constraint added is asserted
     conjunctively. That is, the resulting satisfying model (if any) will
     always satisfy all the constraints given.
 
@@ -729,9 +812,7 @@ rarely satisfy the constraints. (As an extreme case, consider @'constrain' 'fals
 A probabilistic constraint (see 'pConstrain') attaches a probability threshold for the
 constraint to be considered. For instance:
 
-  @
-     'pConstrain' 0.8 c
-  @
+  @ 'pConstrain' 0.8 c @
 
 will make sure that the condition @c@ is satisfied 80% of the time (and correspondingly, falsified 20%
 of the time), in expectation. This variant is useful for 'genTest' and 'quickCheck' functions, where we
@@ -751,6 +832,17 @@ Note that while 'constrain' can be used freely, 'pConstrain' is only allowed in 
 'genTest' or 'quickCheck'. Calls to 'pConstrain' in a prove/sat call will be rejected as SBV does not
 deal with probabilistic constraints when it comes to satisfiability and proofs.
 Also, both 'constrain' and 'pConstrain' calls during code-generation will also be rejected, for similar reasons.
+
+=== Constraint vacuity
+
+SBV does not check that a given constraints is not vacuous. That is, that it can never be satisfied. This is usually
+the right behavior, since checking vacuity can be costly. The functions 'isVacuous' and 'isVacuousWith' should be used
+to explicitly check for constraint vacuity if desired. Alternatively, the tactic:
+
+  @ 'tactic' $  'CheckConstrVacuity' True @
+
+can be given which will force SBV to run an explicit check that constraints are not vacuous. (And complain if they are!)
+Note that this adds an extra call to the solver for each constraint, and thus can be rather costly.
 -}
 
 {- $uninterpreted
@@ -808,6 +900,21 @@ which would list all three elements of this domain as satisfying solutions.
 
 Note that the result is properly typed as @X@ elements; these are not mere strings. So, in a 'getModel' scenario, the user can recover actual
 elements of the domain and program further with those values as usual.
+-}
+
+{- $noteOnNestedQuantifiers
+=== A note on reasoning in the presence of quantifers
+
+Note that SBV allows reasoning with quantifiers: Inputs can be existentially or universally quantified. Predicates can be built
+with arbitrary nesting of such quantifiers as well. However, SBV always /assumes/ that the input is in
+prenex-normal form: <https://en.wikipedia.org/wiki/Prenex_normal_form>. That is,
+all the input declarations are treated as happening at the beginning of a predicate, followed by the actual formula. Unfortunately,
+the way predicates are written can be misleading at times, since symbolic inputs can be created at arbitrary points; interleaving them
+with other code. The rule is simple, however: All inputs are assumed at the top, in the order declared, regardless of their quantifiers.
+SBV will apply skolemization to get rid of existentials before sending predicates to backend solvers. However, if you do want nested
+quantification, you will manually have to first convert to prenex-normal form (which produces an equisatisfiable but not necessarily
+equivalent formula), and code that explicitly in SBV. See <https://github.com/LeventErkok/sbv/issues/256> for a detailed discussion
+of this issue.
 -}
 
 {-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}

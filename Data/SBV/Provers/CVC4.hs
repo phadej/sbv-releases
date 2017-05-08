@@ -13,7 +13,7 @@
 
 module Data.SBV.Provers.CVC4(cvc4) where
 
-import Data.SBV.BitVectors.Data
+import Data.SBV.Core.Data
 import Data.SBV.SMT.SMT
 
 -- | The description of the CVC4 SMT solver
@@ -36,6 +36,7 @@ cvc4 = SMTSolver {
                               , supportsReals              = True  -- Not quite the same capability as Z3; but works more or less..
                               , supportsFloats             = False
                               , supportsDoubles            = False
+                              , supportsOptimization       = False
                               }
          }
  where addTimeOut o i | i < 0 = error $ "CVC4: Timeout value must be non-negative, received: " ++ show i

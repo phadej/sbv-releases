@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.BitVectors.Symbolic
+-- Module      :  Data.SBV.Core.Symbolic
 -- Copyright   :  (c) Levent Erkok
 -- License     :  BSD3
 -- Maintainer  :  erkokl@gmail.com
@@ -18,10 +18,11 @@
 {-# LANGUAGE    PatternGuards              #-}
 {-# LANGUAGE    NamedFieldPuns             #-}
 {-# LANGUAGE    DeriveDataTypeable         #-}
+{-# LANGUAGE    DeriveFunctor              #-}
 {-# LANGUAGE    CPP                        #-}
 {-# OPTIONS_GHC -fno-warn-orphans          #-}
 
-module Data.SBV.BitVectors.Symbolic
+module Data.SBV.Core.Symbolic
   ( NodeId(..)
   , SW(..), swKind, trueSW, falseSW
   , Op(..), FPOp(..)
@@ -45,6 +46,8 @@ module Data.SBV.BitVectors.Symbolic
   , SMTLibPgm(..), SMTLibVersion(..), smtLibVersionExtension
   , SolverCapabilities(..)
   , extractSymbolicSimulationState
+  , OptimizeStyle(..), Objective(..), Penalty(..), objectiveName, addSValOptGoal
+  , Tactic(..), addSValTactic, isParallelCaseAnywhere
   , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..), SMTEngine, getSBranchRunConfig
   , outputSVal
   , mkSValUserSort
@@ -72,8 +75,8 @@ import qualified Data.Sequence as S    (Seq, empty, (|>))
 import System.Mem.StableName
 import System.Random
 
-import Data.SBV.BitVectors.Kind
-import Data.SBV.BitVectors.Concrete
+import Data.SBV.Core.Kind
+import Data.SBV.Core.Concrete
 import Data.SBV.SMT.SMTLibNames
 import Data.SBV.Utils.TDiff(Timing)
 
@@ -278,28 +281,97 @@ newtype SBVPgm = SBVPgm {pgmAssignments :: S.Seq (SW, SBVExpr)}
 -- | 'NamedSymVar' pairs symbolic words and user given/automatically generated names
 type NamedSymVar = (SW, String)
 
+-- | Style of optimization
+data OptimizeStyle = Lexicographic -- ^ Objectives are optimized in the order given, earlier objectives have higher priority. This is the default.
+                   | Independent   -- ^ Each objective is optimized independently.
+                   | Pareto        -- ^ Objectives are optimized according to pareto front: That is, no objective can be made better without making some other worse.
+                   deriving (Eq, Show)
+
+-- | Penalty for a soft-assertion. The default penalty is @1@, with all soft-assertions belonging
+-- to the same objective goal. A positive weight and an optional group can be provided by using
+-- the 'Penalty' constructor.
+data Penalty = DefaultPenalty                  -- ^ Default: Penalty of @1@ and no group attached
+             | Penalty Rational (Maybe String) -- ^ Penalty with a weight and an optional group
+             deriving Show
+
+-- | Objective of optimization. We can minimize, maximize, or give a soft assertion with a penalty
+-- for not satisfying it.
+data Objective a = Minimize   String a         -- ^ Minimize this metric
+                 | Maximize   String a         -- ^ Maximize this metric
+                 | AssertSoft String a Penalty -- ^ A soft assertion, with an associated penalty
+                 deriving (Show, Functor)
+
+-- | The name of the objective
+objectiveName :: Objective a -> String
+objectiveName (Minimize   s _)   = s
+objectiveName (Maximize   s _)   = s
+objectiveName (AssertSoft s _ _) = s
+
+-- | Solver tactic
+data Tactic a = CaseSplit          Bool [(String, a, [Tactic a])]  -- ^ Case-split, with implicit coverage. Bool says whether we should be verbose.
+              | CheckCaseVacuity   Bool                            -- ^ Should the case-splits be checked for vacuity? (Default: True.)
+              | ParallelCase                                       -- ^ Run case-splits in parallel. (Default: Sequential.)
+              | CheckConstrVacuity Bool                            -- ^ Should "constraints" be checked for vacuity? (Default: False.)
+              | StopAfter          Int                             -- ^ Time-out given to solver, in seconds.
+              | CheckUsing         String                          -- ^ Invoke with check-sat-using command, instead of check-sat
+              | UseLogic           Logic                           -- ^ Use this logic, a custom one can be specified too
+              | UseSolver          SMTConfig                       -- ^ Use this solver (z3, yices, etc.)
+              | OptimizePriority   OptimizeStyle                   -- ^ Use this style for optimize calls. (Default: Lexicographic)
+              deriving (Show, Functor)
+
+instance NFData OptimizeStyle where
+   rnf x = x `seq` ()
+
+instance NFData Penalty where
+   rnf DefaultPenalty  = ()
+   rnf (Penalty p mbs) = rnf p `seq` rnf mbs `seq` ()
+
+instance NFData a => NFData (Objective a) where
+   rnf (Minimize   s a)   = rnf s `seq` rnf a `seq` ()
+   rnf (Maximize   s a)   = rnf s `seq` rnf a `seq` ()
+   rnf (AssertSoft s a p) = rnf s `seq` rnf a `seq` rnf p `seq` ()
+
+instance NFData a => NFData (Tactic a) where
+   rnf (CaseSplit   b l)      = rnf b `seq` rnf l `seq` ()
+   rnf (CheckCaseVacuity b)   = rnf b `seq` ()
+   rnf ParallelCase           = ()
+   rnf (CheckConstrVacuity b) = rnf b `seq` ()
+   rnf (StopAfter        i)   = rnf i `seq` ()
+   rnf (CheckUsing       s)   = rnf s `seq` ()
+   rnf (UseLogic         l)   = rnf l `seq` ()
+   rnf (UseSolver        s)   = rnf s `seq` ()
+   rnf (OptimizePriority s)   = rnf s `seq` ()
+
+-- | Is there a parallel-case anywhere?
+isParallelCaseAnywhere :: Tactic a -> Bool
+isParallelCaseAnywhere ParallelCase{}   = True
+isParallelCaseAnywhere (CaseSplit _ cs) = or [any isParallelCaseAnywhere t | (_, _, t) <- cs]
+isParallelCaseAnywhere _                = False
+
 -- | Result of running a symbolic computation
-data Result = Result { reskinds       :: Set.Set Kind                     -- ^ kinds used in the program
-                     , resTraces      :: [(String, CW)]                   -- ^ quick-check counter-example information (if any)
-                     , resUISegs      :: [(String, [String])]             -- ^ uninterpeted code segments
-                     , resInputs      :: [(Quantifier, NamedSymVar)]      -- ^ inputs (possibly existential)
-                     , resConsts      :: [(SW, CW)]                       -- ^ constants
-                     , resTables      :: [((Int, Kind, Kind), [SW])]      -- ^ tables (automatically constructed) (tableno, index-type, result-type) elts
-                     , resArrays      :: [(Int, ArrayInfo)]               -- ^ arrays (user specified)
-                     , resUIConsts    :: [(String, SBVType)]              -- ^ uninterpreted constants
-                     , resAxioms      :: [(String, [String])]             -- ^ axioms
-                     , resAsgns       :: SBVPgm                           -- ^ assignments
-                     , resConstraints :: [SW]                             -- ^ additional constraints (boolean)
-                     , resAssertions  :: [(String, Maybe CallStack, SW)]  -- ^ assertions
-                     , resOutputs     :: [SW]                             -- ^ outputs
+data Result = Result { reskinds       :: Set.Set Kind                            -- ^ kinds used in the program
+                     , resTraces      :: [(String, CW)]                          -- ^ quick-check counter-example information (if any)
+                     , resUISegs      :: [(String, [String])]                    -- ^ uninterpeted code segments
+                     , resInputs      :: [(Quantifier, NamedSymVar)]             -- ^ inputs (possibly existential)
+                     , resConsts      :: [(SW, CW)]                              -- ^ constants
+                     , resTables      :: [((Int, Kind, Kind), [SW])]             -- ^ tables (automatically constructed) (tableno, index-type, result-type) elts
+                     , resArrays      :: [(Int, ArrayInfo)]                      -- ^ arrays (user specified)
+                     , resUIConsts    :: [(String, SBVType)]                     -- ^ uninterpreted constants
+                     , resAxioms      :: [(String, [String])]                    -- ^ axioms
+                     , resAsgns       :: SBVPgm                                  -- ^ assignments
+                     , resConstraints :: [SW]                                    -- ^ additional constraints (boolean)
+                     , resTactics     :: [Tactic SW]                             -- ^ User given tactics
+                     , resGoals       :: [Objective (SW, SW)]                    -- ^ User specified optimization goals
+                     , resAssertions  :: [(String, Maybe CallStack, SW)]         -- ^ assertions
+                     , resOutputs     :: [SW]                                    -- ^ outputs
                      }
 
 -- | Show instance for 'Result'. Only for debugging purposes.
 instance Show Result where
-  show (Result _ _ _ _ cs _ _ [] [] _ [] _ [r])
+  show (Result _ _ _ _ cs _ _ [] [] _ [] _ _ _ [r])
     | Just c <- r `lookup` cs
     = show c
-  show (Result kinds _ cgs is cs ts as uis axs xs cstrs asserts os)  = intercalate "\n" $
+  show (Result kinds _ cgs is cs ts as uis axs xs cstrs tacs goals asserts os) = intercalate "\n" $
                    (if null usorts then [] else "SORTS" : map ("  " ++) usorts)
                 ++ ["INPUTS"]
                 ++ map shn is
@@ -315,6 +387,10 @@ instance Show Result where
                 ++ concatMap shcg cgs
                 ++ ["AXIOMS"]
                 ++ map shax axs
+                ++ ["TACTICS"]
+                ++ map show tacs
+                ++ ["GOALS"]
+                ++ map show goals
                 ++ ["DEFINE"]
                 ++ map (\(s, e) -> "  " ++ shs s ++ " = " ++ show e) (F.toList (pgmAssignments xs))
                 ++ ["CONSTRAINTS"]
@@ -428,6 +504,8 @@ data State  = State { runMode      :: SBVRunMode
                     , rUIMap       :: IORef UIMap
                     , rCgMap       :: IORef CgMap
                     , raxioms      :: IORef [(String, [String])]
+                    , rTacs        :: IORef [Tactic SW]
+                    , rOptGoals    :: IORef [Objective (SW, SW)]
                     , rAsserts     :: IORef [(String, Maybe CallStack, SW)]
                     , rSWCache     :: IORef (Cache SW)
                     , rAICache     :: IORef (Cache Int)
@@ -627,8 +705,7 @@ svMkSymVar mbQ k mbNm = do
                                      return (SVal k (Left cw))
           _          -> do (sw, internalName) <- liftIO $ newSW st k
                            let nm = fromMaybe internalName mbNm
-                           liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
-                           return $ SVal k $ Right $ cache (const (return sw))
+                           introduceUserName st nm k q sw
 
 -- | Create a properly quantified variable of a user defined sort. Only valid
 -- in proof contexts.
@@ -646,8 +723,15 @@ mkSValUserSort k mbQ mbNm = do
         ctr <- liftIO $ incCtr st
         let sw = SW k (NodeId ctr)
             nm = fromMaybe ('s':show ctr) mbNm
-        liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
-        return $ SVal k $ Right $ cache (const (return sw))
+        introduceUserName st nm k q sw
+
+-- | Introduce a new user name. We die if repeated.
+introduceUserName :: State -> String -> Kind -> Quantifier -> SW -> Symbolic SVal
+introduceUserName st nm k q sw = do is <- liftIO $ readIORef (rinps st)
+                                    if nm `elem` [n | (_, (_, n)) <- is]
+                                       then error $ "SBV: Repeated user given name: " ++ show nm ++ ". Please use unique names."
+                                       else do liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
+                                               return $ SVal k $ Right $ cache (const (return sw))
 
 -- | Add a user specified axiom to the generated SMT-Lib file. The first argument is a mere
 -- string, use for commenting purposes. The second argument is intended to hold the multiple-lines
@@ -683,6 +767,8 @@ runSymbolic' currentRunMode (Symbolic c) = do
    aiCache   <- newIORef IMap.empty
    usedKinds <- newIORef Set.empty
    cstrs     <- newIORef []
+   tacs      <- newIORef []
+   optGoals  <- newIORef []
    asserts   <- newIORef []
    rGen      <- case currentRunMode of
                   Concrete g -> newIORef g
@@ -706,6 +792,8 @@ runSymbolic' currentRunMode (Symbolic c) = do
                   , rSWCache     = swCache
                   , rAICache     = aiCache
                   , rConstraints = cstrs
+                  , rTacs        = tacs
+                  , rOptGoals    = optGoals
                   , rAsserts     = asserts
                   }
    _ <- newConst st falseCW -- s(-2) == falseSW
@@ -718,7 +806,8 @@ runSymbolic' currentRunMode (Symbolic c) = do
 -- instance when implementing 'sBranch'.
 extractSymbolicSimulationState :: State -> IO Result
 extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblMap=tables, rArrayMap=arrays, rUIMap=uis, raxioms=axioms
-                                       , rAsserts=asserts, rUsedKinds=usedKinds, rCgMap=cgs, rCInfo=cInfo, rConstraints=cstrs} = do
+                                       , rAsserts=asserts, rUsedKinds=usedKinds, rCgMap=cgs, rCInfo=cInfo, rConstraints=cstrs
+                                       , rTacs=tacs, rOptGoals=optGoals } = do
    SBVPgm rpgm  <- readIORef pgm
    inpsO <- reverse `fmap` readIORef inps
    outsO <- reverse `fmap` readIORef outs
@@ -733,10 +822,12 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
    axs   <- reverse `fmap` readIORef axioms
    knds  <- readIORef usedKinds
    cgMap <- Map.toList `fmap` readIORef cgs
-   traceVals <- reverse `fmap` readIORef cInfo
+   traceVals  <- reverse `fmap` readIORef cInfo
    extraCstrs <- reverse `fmap` readIORef cstrs
+   tactics    <- reverse `fmap` readIORef tacs
+   goals      <- reverse `fmap` readIORef optGoals
    assertions <- reverse `fmap` readIORef asserts
-   return $ Result knds traceVals cgMap inpsO cnsts tbls arrs unint axs (SBVPgm rpgm) extraCstrs assertions outsO
+   return $ Result knds traceVals cgMap inpsO cnsts tbls arrs unint axs (SBVPgm rpgm) extraCstrs tactics goals assertions outsO
 
 -- | Handling constraints
 imposeConstraint :: SVal -> Symbolic ()
@@ -749,6 +840,41 @@ imposeConstraint c = do st <- ask
 internalConstraint :: State -> SVal -> IO ()
 internalConstraint st b = do v <- svToSW st b
                              modifyIORef (rConstraints st) (v:)
+
+-- | Add a tactic
+addSValTactic :: Tactic SVal -> Symbolic ()
+addSValTactic tac = do st <- ask
+                       let walk (CaseSplit b cs)       = let app (nm, v, ts) = do ts' <- mapM walk ts
+                                                                                  v' <- svToSW st v
+                                                                                  return (nm, v', ts')
+                                                         in CaseSplit b `fmap` mapM app cs
+                           walk ParallelCase           = return   ParallelCase
+                           walk (CheckCaseVacuity b)   = return $ CheckCaseVacuity b
+                           walk (StopAfter i)          = return $ StopAfter  i
+                           walk (CheckConstrVacuity b) = return $ CheckConstrVacuity b
+                           walk (CheckUsing s)         = return $ CheckUsing s
+                           walk (UseLogic   l)         = return $ UseLogic   l
+                           walk (UseSolver  s)         = return $ UseSolver  s
+                           walk (OptimizePriority s)   = return $ OptimizePriority s
+                       tac' <- liftIO $ walk tac
+                       liftIO $ modifyIORef (rTacs st) (tac':)
+
+-- | Add an optimization goal
+addSValOptGoal :: Objective SVal -> Symbolic ()
+addSValOptGoal obj = do st <- ask
+
+                        -- create the tracking variable here for the metric
+                        let mkGoal nm orig = do origSW  <- liftIO $ svToSW st orig
+                                                track   <- svMkSymVar (Just EX) (kindOf orig) (Just nm)
+                                                trackSW <- liftIO $ svToSW st track
+                                                return (origSW, trackSW)
+
+                        let walk (Minimize   nm v)     = Minimize nm              `fmap` mkGoal nm v
+                            walk (Maximize   nm v)     = Maximize nm              `fmap` mkGoal nm v
+                            walk (AssertSoft nm v mbP) = flip (AssertSoft nm) mbP `fmap` mkGoal nm v
+
+                        obj' <- walk obj
+                        liftIO $ modifyIORef (rOptGoals st) (obj' :)
 
 -- | Add a constraint with a given probability
 addSValConstraint :: Maybe Double -> SVal -> SVal -> Symbolic ()
@@ -913,18 +1039,21 @@ smtLibVersionExtension :: SMTLibVersion -> String
 smtLibVersionExtension SMTLib2 = "smt2"
 
 -- | Representation of an SMT-Lib program. In between pre and post goes the refuted models
-data SMTLibPgm = SMTLibPgm SMTLibVersion  ( [(String, SW)]  -- alias table
-                                          , [String]        -- pre: declarations.
-                                          , [String])       -- post: formula
-instance NFData SMTLibVersion where rnf a                       = a `seq` ()
-instance NFData SMTLibPgm     where rnf (SMTLibPgm v (t, d, p)) = rnf v `seq` rnf t `seq` rnf d `seq` rnf p `seq` ()
+data SMTLibPgm = SMTLibPgm SMTLibVersion [String]
+
+instance NFData SMTLibVersion where rnf a               = a `seq` ()
+instance NFData SMTLibPgm     where rnf (SMTLibPgm v p) = rnf v `seq` rnf p `seq` ()
 
 instance Show SMTLibPgm where
-  show (SMTLibPgm _ (_, pre, post)) = intercalate "\n" $ pre ++ post
+  show (SMTLibPgm _ pre) = intercalate "\n" pre
 
 -- Other Technicalities..
 instance NFData CW where
   rnf (CW x y) = x `seq` y `seq` ()
+
+instance NFData GeneralizedCW where
+  rnf (ExtendedCW e) = e `seq` ()
+  rnf (RegularCW  c) = c `seq` ()
 
 #if MIN_VERSION_base(4,9,0)
 #else
@@ -932,15 +1061,14 @@ instance NFData CW where
 instance NFData CallStack where
   rnf _ = ()
 #endif
-  
-
 
 instance NFData Result where
-  rnf (Result kindInfo qcInfo cgs inps consts tbls arrs uis axs pgm cstr asserts outs)
-        = rnf kindInfo `seq` rnf qcInfo `seq` rnf cgs     `seq` rnf inps
-                       `seq` rnf consts `seq` rnf tbls    `seq` rnf arrs
-                       `seq` rnf uis    `seq` rnf axs     `seq` rnf pgm
-                       `seq` rnf cstr   `seq` rnf asserts `seq` rnf outs
+  rnf (Result kindInfo qcInfo cgs inps consts tbls arrs uis axs pgm cstr tacs goals asserts outs)
+        = rnf kindInfo `seq` rnf qcInfo  `seq` rnf cgs  `seq` rnf inps
+                       `seq` rnf consts  `seq` rnf tbls `seq` rnf arrs
+                       `seq` rnf uis     `seq` rnf axs  `seq` rnf pgm
+                       `seq` rnf cstr    `seq` rnf tacs `seq` rnf goals
+                       `seq` rnf asserts `seq` rnf outs
 instance NFData Kind         where rnf a          = seq a ()
 instance NFData ArrayContext where rnf a          = seq a ()
 instance NFData SW           where rnf a          = seq a ()
@@ -952,14 +1080,15 @@ instance NFData (Cached a)   where rnf (Cached f) = f `seq` ()
 instance NFData SVal         where rnf (SVal x y) = rnf x `seq` rnf y `seq` ()
 
 instance NFData SMTResult where
-  rnf (Unsatisfiable _)   = ()
-  rnf (Satisfiable _ xs)  = rnf xs `seq` ()
-  rnf (Unknown _ xs)      = rnf xs `seq` ()
-  rnf (ProofError _ xs)   = rnf xs `seq` ()
-  rnf (TimeOut _)         = ()
+  rnf Unsatisfiable{}    = ()
+  rnf (Satisfiable _ xs) = rnf xs `seq` ()
+  rnf (SatExtField _ xs) = rnf xs `seq` ()
+  rnf (Unknown _     xs) = rnf xs `seq` ()
+  rnf (ProofError _  xs) = rnf xs `seq` ()
+  rnf TimeOut{}          = ()
 
 instance NFData SMTModel where
-  rnf (SMTModel assocs) = rnf assocs `seq` ()
+  rnf (SMTModel objs assocs) = rnf objs `seq` rnf assocs `seq` ()
 
 instance NFData SMTScript where
   rnf (SMTScript b m) = rnf b `seq` rnf m `seq` ()
@@ -969,17 +1098,17 @@ instance NFData SMTScript where
 -- one is experimenting with custom logics that might be supported on new solvers. See <http://smtlib.cs.uiowa.edu/logics.shtml>
 -- for the official list.
 data SMTLibLogic
-  = AUFLIA    -- ^ Formulas over the theory of linear integer arithmetic and arrays extended with free sort and function symbols but restricted to arrays with integer indices and values
-  | AUFLIRA   -- ^ Linear formulas with free sort and function symbols over one- and two-dimentional arrays of integer index and real value
-  | AUFNIRA   -- ^ Formulas with free function and predicate symbols over a theory of arrays of arrays of integer index and real value
-  | LRA       -- ^ Linear formulas in linear real arithmetic
-  | QF_ABV    -- ^ Quantifier-free formulas over the theory of bitvectors and bitvector arrays
-  | QF_AUFBV  -- ^ Quantifier-free formulas over the theory of bitvectors and bitvector arrays extended with free sort and function symbols
-  | QF_AUFLIA -- ^ Quantifier-free linear formulas over the theory of integer arrays extended with free sort and function symbols
-  | QF_AX     -- ^ Quantifier-free formulas over the theory of arrays with extensionality
-  | QF_BV     -- ^ Quantifier-free formulas over the theory of fixed-size bitvectors
-  | QF_IDL    -- ^ Difference Logic over the integers. Boolean combinations of inequations of the form x - y < b where x and y are integer variables and b is an integer constant
-  | QF_LIA    -- ^ Unquantified linear integer arithmetic. In essence, Boolean combinations of inequations between linear polynomials over integer variables
+  = AUFLIA    -- ^ Formulas over the theory of linear integer arithmetic and arrays extended with free sort and function symbols but restricted to arrays with integer indices and values.
+  | AUFLIRA   -- ^ Linear formulas with free sort and function symbols over one- and two-dimentional arrays of integer index and real value.
+  | AUFNIRA   -- ^ Formulas with free function and predicate symbols over a theory of arrays of arrays of integer index and real value.
+  | LRA       -- ^ Linear formulas in linear real arithmetic.
+  | QF_ABV    -- ^ Quantifier-free formulas over the theory of bitvectors and bitvector arrays.
+  | QF_AUFBV  -- ^ Quantifier-free formulas over the theory of bitvectors and bitvector arrays extended with free sort and function symbols.
+  | QF_AUFLIA -- ^ Quantifier-free linear formulas over the theory of integer arrays extended with free sort and function symbols.
+  | QF_AX     -- ^ Quantifier-free formulas over the theory of arrays with extensionality.
+  | QF_BV     -- ^ Quantifier-free formulas over the theory of fixed-size bitvectors.
+  | QF_IDL    -- ^ Difference Logic over the integers. Boolean combinations of inequations of the form x - y < b where x and y are integer variables and b is an integer constant.
+  | QF_LIA    -- ^ Unquantified linear integer arithmetic. In essence, Boolean combinations of inequations between linear polynomials over integer variables.
   | QF_LRA    -- ^ Unquantified linear real arithmetic. In essence, Boolean combinations of inequations between linear polynomials over real variables.
   | QF_NIA    -- ^ Quantifier-free integer arithmetic.
   | QF_NRA    -- ^ Quantifier-free real arithmetic.
@@ -990,11 +1119,16 @@ data SMTLibLogic
   | QF_UFLIA  -- ^ Unquantified linear integer arithmetic with uninterpreted sort and function symbols.
   | QF_UFLRA  -- ^ Unquantified linear real arithmetic with uninterpreted sort and function symbols.
   | QF_UFNRA  -- ^ Unquantified non-linear real arithmetic with uninterpreted sort and function symbols.
+  | QF_UFNIRA -- ^ Unquantified non-linear real integer arithmetic with uninterpreted sort and function symbols.
   | UFLRA     -- ^ Linear real arithmetic with uninterpreted sort and function symbols.
   | UFNIA     -- ^ Non-linear integer arithmetic with uninterpreted sort and function symbols.
-  | QF_FPBV   -- ^ Quantifier-free formulas over the theory of floating point numbers, arrays, and bit-vectors
-  | QF_FP     -- ^ Quantifier-free formulas over the theory of floating point numbers
+  | QF_FPBV   -- ^ Quantifier-free formulas over the theory of floating point numbers, arrays, and bit-vectors.
+  | QF_FP     -- ^ Quantifier-free formulas over the theory of floating point numbers.
   deriving Show
+
+-- | NFData instance for SMTLibLogic
+instance NFData SMTLibLogic where
+   rnf x = x `seq` ()
 
 -- | Chosen logic for the solver
 data Logic = PredefinedLogic SMTLibLogic  -- ^ Use one of the logics as defined by the standard
@@ -1003,6 +1137,11 @@ data Logic = PredefinedLogic SMTLibLogic  -- ^ Use one of the logics as defined 
 instance Show Logic where
   show (PredefinedLogic l) = show l
   show (CustomLogic     s) = s
+
+-- | NFData instance for Logic
+instance NFData Logic where
+  rnf (PredefinedLogic l) = rnf l
+  rnf (CustomLogic s)     = rnf s `seq` ()
 
 -- | Translation tricks needed for specific capabilities afforded by each solver
 data SolverCapabilities = SolverCapabilities {
@@ -1016,6 +1155,7 @@ data SolverCapabilities = SolverCapabilities {
        , supportsReals              :: Bool                 -- ^ Does the solver support reals?
        , supportsFloats             :: Bool                 -- ^ Does the solver support single-precision floating point numbers?
        , supportsDoubles            :: Bool                 -- ^ Does the solver support double-precision floating point numbers?
+       , supportsOptimization       :: Bool                 -- ^ Does the solver support optimization routines?
        }
 
 -- | Rounding mode to be used for the IEEE floating-point operations.
@@ -1060,6 +1200,7 @@ data SMTConfig = SMTConfig {
        , printBase      :: Int            -- ^ Print integral literals in this base (2, 10, and 16 are supported.)
        , printRealPrec  :: Int            -- ^ Print algebraic real values with this precision. (SReal, default: 16)
        , solverTweaks   :: [String]       -- ^ Additional lines of script to give to the solver (user specified)
+       , optimizeArgs   :: [String]       -- ^ Additional commands to pass before check-sat is issued
        , satCmd         :: String         -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
        , isNonModelVar  :: String -> Bool -- ^ When constructing a model, ignore variables whose name satisfy this predicate. (Default: (const False), i.e., don't ignore anything)
        , smtFile        :: Maybe FilePath -- ^ If Just, the generated SMT script will be put in this file (for debugging purposes mostly)
@@ -1069,12 +1210,17 @@ data SMTConfig = SMTConfig {
        , useLogic       :: Maybe Logic    -- ^ If Nothing, pick automatically. Otherwise, either use the given one, or use the custom string.
        }
 
+-- We're just seq'ing top-level here, it shouldn't really matter. (i.e., no need to go deeper.)
+instance NFData SMTConfig where
+  rnf SMTConfig{} = ()
+
 instance Show SMTConfig where
   show = show . solver
 
 -- | A model, as returned by a solver
-newtype SMTModel = SMTModel {
-        modelAssocs    :: [(String, CW)]        -- ^ Mapping of symbolic values to constants.
+data SMTModel = SMTModel {
+        modelObjectives :: [(String, GeneralizedCW)]  -- ^ Mapping of symbolic values to objective values.
+     ,  modelAssocs     :: [(String, CW)]             -- ^ Mapping of symbolic values to constants.
      }
      deriving Show
 
@@ -1085,6 +1231,7 @@ newtype SMTModel = SMTModel {
 -- it. (Custom Show instances and model extractors.)
 data SMTResult = Unsatisfiable SMTConfig            -- ^ Unsatisfiable
                | Satisfiable   SMTConfig SMTModel   -- ^ Satisfiable with model
+               | SatExtField   SMTConfig SMTModel   -- ^ Prover returned a model, but in an extension field containing Infinite/epsilon
                | Unknown       SMTConfig SMTModel   -- ^ Prover returned unknown, with a potential (possibly bogus) model
                | ProofError    SMTConfig [String]   -- ^ Prover errored out
                | TimeOut       SMTConfig            -- ^ Computation timed out (see the 'timeout' combinator)
@@ -1096,7 +1243,13 @@ data SMTScript = SMTScript {
         }
 
 -- | An SMT engine
-type SMTEngine = SMTConfig -> Bool -> [(Quantifier, NamedSymVar)] -> [Either SW (SW, [SW])] -> String -> IO SMTResult
+type SMTEngine = SMTConfig                     -- ^ current configuration
+               -> Bool                         -- ^ is sat?
+               -> Maybe (OptimizeStyle, Int)   -- ^ if optimizing, the style and #of objectives
+               -> [(Quantifier, NamedSymVar)]  -- ^ quantified inputs
+               -> [Either SW (SW, [SW])]       -- ^ skolem map
+               -> String                       -- ^ program
+               -> IO [SMTResult]
 
 -- | Solvers that SBV is aware of
 data Solver = Z3

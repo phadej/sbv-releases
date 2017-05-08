@@ -83,12 +83,12 @@ module Data.SBV.Dynamic
   -- * Model extraction
 
   -- ** Inspecting proof results
-  , ThmResult(..), SatResult(..), SafeResult(..), AllSatResult(..), SMTResult(..)
+  , ThmResult(..), SatResult(..), AllSatResult(..), SafeResult(..), OptimizeResult(..), SMTResult(..)
 
   -- ** Programmable model extraction
   , genParse, getModel, getModelDictionary
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), SMTLibVersion(..), SMTLibLogic(..), Logic(..), OptimizeOpts(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
+  , SMTConfig(..), SMTLibVersion(..), SMTLibLogic(..), Logic(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
 
   -- * Symbolic computations
   , outputSVal
@@ -122,10 +122,10 @@ module Data.SBV.Dynamic
 
 import Data.Map (Map)
 
-import Data.SBV.BitVectors.Kind
-import Data.SBV.BitVectors.Concrete
-import Data.SBV.BitVectors.Symbolic
-import Data.SBV.BitVectors.Operations
+import Data.SBV.Core.Kind
+import Data.SBV.Core.Concrete
+import Data.SBV.Core.Symbolic
+import Data.SBV.Core.Operations
 
 import Data.SBV.Compilers.CodeGen
   ( SBVCodeGen
@@ -138,18 +138,17 @@ import Data.SBV.Compilers.CodeGen
   )
 import Data.SBV.Compilers.C    (compileToC, compileToCLib)
 import Data.SBV.Provers.Prover (boolector, cvc4, yices, z3, mathSAT, abc, defaultSMTCfg)
-import Data.SBV.SMT.SMT        (ThmResult(..), SatResult(..), SafeResult(..), AllSatResult(..), genParse)
-import Data.SBV.Tools.Optimize (OptimizeOpts(..))
+import Data.SBV.SMT.SMT        (ThmResult(..), SatResult(..), SafeResult(..), OptimizeResult(..), AllSatResult(..), genParse)
 import Data.SBV                (sbvCurrentSolver, sbvCheckSolverInstallation, defaultSolverConfig, sbvAvailableSolvers)
 
-import qualified Data.SBV                  as SBV (SBool, proveWithAll, proveWithAny, satWithAll, satWithAny)
-import qualified Data.SBV.BitVectors.Data  as SBV (SBV(..))
-import qualified Data.SBV.BitVectors.Model as SBV (isSatisfiableInCurrentPath, sbvQuickCheck)
-import qualified Data.SBV.Provers.Prover   as SBV (proveWith, satWith, safeWith, allSatWith, compileToSMTLib, generateSMTBenchmarks)
-import qualified Data.SBV.SMT.SMT          as SBV (Modelable(getModel, getModelDictionary))
+import qualified Data.SBV                as SBV (SBool, proveWithAll, proveWithAny, satWithAll, satWithAny)
+import qualified Data.SBV.Core.Data      as SBV (SBV(..))
+import qualified Data.SBV.Core.Model     as SBV (isSatisfiableInCurrentPath, sbvQuickCheck)
+import qualified Data.SBV.Provers.Prover as SBV (proveWith, satWith, safeWith, allSatWith, compileToSMTLib, generateSMTBenchmarks)
+import qualified Data.SBV.SMT.SMT        as SBV (Modelable(getModel, getModelDictionary))
 
 -- | Reduce a condition (i.e., try to concretize it) under the given path
-svIsSatisfiableInCurrentPath :: SVal -> Symbolic Bool
+svIsSatisfiableInCurrentPath :: SVal -> Symbolic (Maybe SatResult)
 svIsSatisfiableInCurrentPath = SBV.isSatisfiableInCurrentPath . toSBool
 
 -- | Dynamic variant of quick-check

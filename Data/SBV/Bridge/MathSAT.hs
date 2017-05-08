@@ -24,16 +24,14 @@
 module Data.SBV.Bridge.MathSAT (
   -- * MathSAT specific interface
   sbvCurrentSolver
-  -- ** Proving, checking satisfiability
-  , prove, sat, safe, allSat, isVacuous, isTheorem, isSatisfiable
-  -- ** Optimization routines
-  , optimize, minimize, maximize
+  -- ** Proving, checking satisfiability, optimization
+  , prove, sat, allSat, safe, optimize, isVacuous, isTheorem, isSatisfiable
   -- * Non-MathSAT specific SBV interface
   -- $moduleExportIntro
   , module Data.SBV
   ) where
 
-import Data.SBV hiding (prove, sat, safe, allSat, isVacuous, isTheorem, isSatisfiable, optimize, minimize, maximize, sbvCurrentSolver)
+import Data.SBV hiding (prove, sat, allSat, safe, optimize, isVacuous, isTheorem, isSatisfiable, sbvCurrentSolver)
 
 -- | Current solver instance, pointing to MathSAT.
 sbvCurrentSolver :: SMTConfig
@@ -63,6 +61,12 @@ allSat :: Provable a
        -> IO AllSatResult  -- ^ List of all satisfying models
 allSat = allSatWith sbvCurrentSolver
 
+-- | Optimize objectives, using MathSAT
+optimize :: Provable a
+         => a                -- ^ Program with objectives
+         -> IO OptimizeResult
+optimize = optimizeWith sbvCurrentSolver
+
 -- | Check vacuity of the explicit constraints introduced by calls to the 'constrain' function, using the MathSAT SMT solver
 isVacuous :: Provable a
           => a             -- ^ Property to check
@@ -82,34 +86,6 @@ isSatisfiable :: Provable a
               -> a               -- ^ Property to check
               -> IO (Maybe Bool) -- ^ Returns Nothing if time-out expiers
 isSatisfiable = isSatisfiableWith sbvCurrentSolver
-
--- | Optimize cost functions, using the MathSAT SMT solver
-optimize :: (SatModel a, SymWord a, Show a, SymWord c, Show c)
-         => OptimizeOpts                -- ^ Parameters to optimization (Iterative, Quantified, etc.)
-         -> (SBV c -> SBV c -> SBool)   -- ^ Betterness check: This is the comparison predicate for optimization
-         -> ([SBV a] -> SBV c)          -- ^ Cost function
-         -> Int                         -- ^ Number of inputs
-         -> ([SBV a] -> SBool)          -- ^ Validity function
-         -> IO (Maybe [a])              -- ^ Returns Nothing if there is no valid solution, otherwise an optimal solution
-optimize = optimizeWith sbvCurrentSolver
-
--- | Minimize cost functions, using the MathSAT SMT solver
-minimize :: (SatModel a, SymWord a, Show a, SymWord c, Show c)
-         => OptimizeOpts                -- ^ Parameters to optimization (Iterative, Quantified, etc.)
-         -> ([SBV a] -> SBV c)          -- ^ Cost function to minimize
-         -> Int                         -- ^ Number of inputs
-         -> ([SBV a] -> SBool)          -- ^ Validity function
-         -> IO (Maybe [a])              -- ^ Returns Nothing if there is no valid solution, otherwise an optimal solution
-minimize = minimizeWith sbvCurrentSolver
-
--- | Maximize cost functions, using the MathSAT SMT solver
-maximize :: (SatModel a, SymWord a, Show a, SymWord c, Show c)
-         => OptimizeOpts                -- ^ Parameters to optimization (Iterative, Quantified, etc.)
-         -> ([SBV a] -> SBV c)          -- ^ Cost function to maximize
-         -> Int                         -- ^ Number of inputs
-         -> ([SBV a] -> SBool)          -- ^ Validity function
-         -> IO (Maybe [a])              -- ^ Returns Nothing if there is no valid solution, otherwise an optimal solution
-maximize = maximizeWith sbvCurrentSolver
 
 {- $moduleExportIntro
 The remainder of the SBV library that is common to all back-end SMT solvers, directly coming from the "Data.SBV" module.

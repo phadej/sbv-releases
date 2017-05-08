@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       5.15
+Version:       6.0
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -61,6 +61,10 @@ Library
                   , Data.SBV.Bridge.ABC
                   , Data.SBV.Dynamic
                   , Data.SBV.Internals
+                  , Data.SBV.Tools.ExpectedValue
+                  , Data.SBV.Tools.GenTest
+                  , Data.SBV.Tools.Polynomial
+                  , Data.SBV.Tools.STree
                   , Data.SBV.Examples.BitPrecise.BitTricks
                   , Data.SBV.Examples.BitPrecise.Legato
                   , Data.SBV.Examples.BitPrecise.MergeSort
@@ -83,6 +87,9 @@ Library
                   , Data.SBV.Examples.Misc.NoDiv0
                   , Data.SBV.Examples.Misc.Word4
                   , Data.SBV.Examples.Polynomials.Polynomials
+                  , Data.SBV.Examples.Optimization.LinearOpt
+                  , Data.SBV.Examples.Optimization.Production
+                  , Data.SBV.Examples.Optimization.VM
                   , Data.SBV.Examples.Puzzles.Birthday
                   , Data.SBV.Examples.Puzzles.Coins
                   , Data.SBV.Examples.Puzzles.Counts
@@ -100,17 +107,15 @@ Library
                   , Data.SBV.Examples.Uninterpreted.Shannon
                   , Data.SBV.Examples.Uninterpreted.Sort
                   , Data.SBV.Examples.Uninterpreted.UISortAllSat
-  Other-modules   : Data.SBV.BitVectors.AlgReals
-                  , Data.SBV.BitVectors.Concrete
-                  , Data.SBV.BitVectors.Data
-                  , Data.SBV.BitVectors.Kind
-                  , Data.SBV.BitVectors.Model
-                  , Data.SBV.BitVectors.Operations
-                  , Data.SBV.BitVectors.PrettyNum
-                  , Data.SBV.BitVectors.Floating
-                  , Data.SBV.BitVectors.Splittable
-                  , Data.SBV.BitVectors.STree
-                  , Data.SBV.BitVectors.Symbolic
+  Other-modules   : Data.SBV.Core.AlgReals
+                  , Data.SBV.Core.Concrete
+                  , Data.SBV.Core.Data
+                  , Data.SBV.Core.Kind
+                  , Data.SBV.Core.Model
+                  , Data.SBV.Core.Operations
+                  , Data.SBV.Core.Floating
+                  , Data.SBV.Core.Splittable
+                  , Data.SBV.Core.Symbolic
                   , Data.SBV.Compilers.C
                   , Data.SBV.Compilers.CodeGen
                   , Data.SBV.SMT.SMT
@@ -125,14 +130,11 @@ Library
                   , Data.SBV.Provers.Z3
                   , Data.SBV.Provers.MathSAT
                   , Data.SBV.Provers.ABC
-                  , Data.SBV.Tools.ExpectedValue
-                  , Data.SBV.Tools.GenTest
-                  , Data.SBV.Tools.Optimize
-                  , Data.SBV.Tools.Polynomial
                   , Data.SBV.Utils.Boolean
                   , Data.SBV.Utils.Numeric
                   , Data.SBV.Utils.TDiff
                   , Data.SBV.Utils.Lib
+                  , Data.SBV.Utils.PrettyNum
                   , GHC.SrcLoc.Compat
                   , GHC.Stack.Compat
 
@@ -148,8 +150,7 @@ Executable SBVUnitTests
                 , HUnit, directory, filepath, process, syb, sbv, data-binary-ieee754
   Hs-Source-Dirs  : SBVUnitTest
   main-is         : SBVUnitTest.hs
-  Other-modules   : SBVUnitTestBuildTime
-                  , SBVTest
+  Other-modules   : SBVTest
                   , SBVTestCollection
                   , Examples.Arrays.Memory
                   , Examples.Basics.BasicTests
