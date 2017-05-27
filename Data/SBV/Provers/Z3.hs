@@ -79,7 +79,7 @@ z3 = SMTSolver {
          , capabilities   = SolverCapabilities {
                                   capSolverName              = "Z3"
                                 , mbDefaultLogic             = const Nothing
-                                , supportsMacros             = True
+                                , supportsDefineFun          = True
                                 , supportsProduceModels      = True
                                 , supportsQuantifiers        = True
                                 , supportsUninterpretedSorts = True
@@ -88,6 +88,8 @@ z3 = SMTSolver {
                                 , supportsFloats             = True
                                 , supportsDoubles            = True
                                 , supportsOptimization       = True
+                                , supportsPseudoBooleans     = True
+                                , supportsUnsatCores         = True
                                 }
          }
  where cont rm skolemMap mbModelIndex = intercalate "\n" $ wrapModel grabValues

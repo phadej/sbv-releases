@@ -35,7 +35,7 @@ module Data.SBV.Core.Data
  , sbvToSW, sbvToSymSW, forceSWArg
  , SBVExpr(..), newExpr
  , cache, Cached, uncache, uncacheAI, HasKind(..)
- , Op(..), FPOp(..), NamedSymVar, getTableIndex
+ , Op(..), PBOp(..), FPOp(..), NamedSymVar, getTableIndex
  , SBVPgm(..), Symbolic, SExecutable(..), runSymbolic, runSymbolic', State, getPathCondition, extendPathCondition
  , inProofMode, SBVRunMode(..), Kind(..), Outputtable(..), Result(..)
  , Logic(..), SMTLibLogic(..)
@@ -448,8 +448,8 @@ mkSFunArray :: (SBV a -> SBV b) -> SFunArray a b
 mkSFunArray = SFunArray
 
 -- | Add a constraint with a given probability.
-addConstraint :: Maybe Double -> SBool -> SBool -> Symbolic ()
-addConstraint mt (SBV c) (SBV c') = addSValConstraint mt c c'
+addConstraint :: Maybe String -> Maybe Double -> SBool -> SBool -> Symbolic ()
+addConstraint mn mt (SBV c) (SBV c') = addSValConstraint mn mt c c'
 
 -- | A case condition (internal)
 data CaseCond = NoCase                         -- ^ No case-split

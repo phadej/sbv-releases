@@ -1,20 +1,89 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 6.0, 2017-05-07
+* Latest Hackage released version: 6.1, 2017-05-26
+
+### Version 6.1, 2017-05-26
+
+  * Add support for unsat-core extraction. To use this feature, use
+    the `namedConstraint` function:
+    
+        namedConstraint :: String -> SBool -> Symbolic ()
+
+    to associate a label to a constrain or a boolean term that
+    can later be labeled by the backend solver as belonging to the
+    unsat-core.
+
+    Unsat-cores are not enabled by default since they can be
+    expensive; to use:
+
+        satWith z3{getUnsatCore=True} $ do ...
+
+    In the programmatic API, the function:
+
+        extractUnsatCore :: Modelable a => a -> Maybe [String]
+
+    can be used to programmatically extract the unsat-core. Note that
+    backend solvers will only include the named expressions in the unsat-core,
+    i.e., any unnamed yet part-of-the-core-unsat expressions will be missing;
+    as speculated in the SMT-Lib document itself.
+
+    Currently, Z3, MathSAT, and CVC4 backends support unsat-cores.
+    
+    (Thanks to Rohit Ramesh for the suggestion leading to this feature.)
+
+  * Added function `distinct`, which returns true if all the elements of the
+    given list are different. This function replaces the old `allDifferent`
+    function, which is now removed. The difference is that `distinct` will produce
+    much better code for SMT-Lib. If you used `allDifferent` before, simply
+    replacing it with `distinct` should work.
+
+  * Add support for pseudo-boolean operations:
+
+          pbAtMost           :: [SBool]        -> Int -> SBool
+          pbAtLeast          :: [SBool]        -> Int -> SBool
+          pbExactly          :: [SBool]        -> Int -> SBool
+          pbLe               :: [(Int, SBool)] -> Int -> SBool
+          pbGe               :: [(Int, SBool)] -> Int -> SBool
+          pbEq               :: [(Int, SBool)] -> Int -> SBool
+          pbMutexed          :: [SBool]               -> SBool
+          pbStronglyMutexed  :: [SBool]               -> SBool
+
+    These functions, while can be directly coded in SBV, produce better
+    translations to SMTLib for more efficient solving of cardinality constraints.
+    Currently, only Z3 supports pseudo-booleans directly. For all other solvers,
+    SBV will translate these to equivalent terms that do not require special
+    functions.
+
+  * Export `SolverCapabilities` from `Data.SBV.Internals`, in case users want access.
+
+  * Move code-generation facilities to `Data.SBV.Tools.CodeGen`, no longer exporting
+    the relevant functions directly from `Data.SBV`. This could break existing code,
+    but the fix should be as simple as `import Data.SBV.Tools.CodeGen`.
+
+  * Move the following two functions to `Data.SBV.Internals`:
+  
+         compileToSMTLib
+         generateSMTBenchmarks
+
+    If you use them, please `import Data.SBV.Internals`.
+
+  * Reorganized `EqSymbolic` and `EqOrd` classes to collect some of the
+    similarly named function together. Users should see no impact due to this change.
+
 
 ### Version 6.0, 2017-05-07
 
   * This is a backwards compatibility breaking release, hence the major version
     bump from 5.15 to 6.0:
-     
-        * Most of existing code should work with no changes
-	* Old code relying on some features might require extra imports,
-	  since we no longer export some functionality directly from Data.SBV.
-          This was done in order to reduce the number of exported items to
-          avoid extra clutter.
-        * Old optimization features are removed, as the new and much improved
-	  capabilities should be used instead.
+
+       - Most of existing code should work with no changes.
+       - Old code relying on some features might require extra imports,
+         since we no longer export some functionality directly from `Data.SBV`.
+         This was done in order to reduce the number of exported items to
+         avoid extra clutter.
+       - Old optimization features are removed, as the new and much improved
+         capabilities should be used instead.
 
   * The next two bullets cover new features in SBV regarding optimization, based
     on the capabilities of the z3 SMT solver. With this release SBV gains the
@@ -23,7 +92,6 @@
     as implemented by Z3, and thus what is available in SBV is given in this
     paper: http://www.easychair.org/publications/download/Z_-_Maximal_Satisfaction_with_Z3
 
-
   * SBV now allows for  real or integral valued metrics. Goals can be lexicographically
     (default), independently, or pareto-front optimized. Currently, only the z3 backend
     supports optimization routines.
@@ -31,8 +99,8 @@
     Optimization can be done over bit-vector, real, and integer goals. The relevant
     functions are:
 
-    	* `minimize`: Minimize a given arithmetic goal
-    	* `maximize`: Minimize a given arithmetic goal
+        - `minimize`: Minimize a given arithmetic goal
+        - `maximize`: Minimize a given arithmetic goal
 
     For instance, a call of the form 
     
@@ -69,23 +137,23 @@
     case-splitting in a proof to guide the underlying solver through. Here is the list
     of tactics implemented:
 
-       * `CaseSplit`         : Case-split, with implicit coverage. Bool says whether we should be verbose.
-       * `CheckCaseVacuity`  : Should the case-splits be checked for vacuity? (Default: True.)
-       * `ParallelCase`      : Run case-splits in parallel. (Default: Sequential.)
-       * `CheckConstrVacuity`: Should constraints be checked for vacuity? (Default: False.)
-       * `StopAfter`         : Time-out given to solver, in seconds.
-       * `CheckUsing`        : Invoke with check-sat-using command, instead of check-sat
-       * `UseLogic`          : Use this logic, a custom one can be specified too
-       * `UseSolver`         : Use this solver (z3, yices, etc.)
-       * `OptimizePriority`  : Specify priority for optimization: Lexicographic (default), Independent, or Pareto.
+        - `CaseSplit`         : Case-split, with implicit coverage. Bool says whether we should be verbose.
+        - `CheckCaseVacuity`  : Should the case-splits be checked for vacuity? (Default: True.)
+        - `ParallelCase`      : Run case-splits in parallel. (Default: Sequential.)
+        - `CheckConstrVacuity`: Should constraints be checked for vacuity? (Default: False.)
+        - `StopAfter`         : Time-out given to solver, in seconds.
+        - `CheckUsing`        : Invoke with check-sat-using command, instead of check-sat
+        - `UseLogic`          : Use this logic, a custom one can be specified too
+        - `UseSolver`         : Use this solver (z3, yices, etc.)
+        - `OptimizePriority`  : Specify priority for optimization: Lexicographic (default), Independent, or Pareto.
 
   * Name-space clean-up. The following modules are no longer automatically exported
     from Data.SBV:
 
-	- `Data.SBV.Tools.ExpectedValue` (computing with expected values)
-	- `Data.SBV.Tools.GenTest` (test case generation)
-	- `Data.SBV.Tools.Polynomial` (polynomial arithmetic, CRCs etc.)
-	- `Data.SBV.Tools.STree` (full symbolic binary trees)
+        - `Data.SBV.Tools.ExpectedValue` (computing with expected values)
+        - `Data.SBV.Tools.GenTest` (test case generation)
+        - `Data.SBV.Tools.Polynomial` (polynomial arithmetic, CRCs etc.)
+        - `Data.SBV.Tools.STree` (full symbolic binary trees)
  
     To use the functionality of these modules, users must now explicitly import the corresponding
     module. Not other changes should be needed other than the explicit import.
@@ -108,7 +176,7 @@
     calls (which return unit) can now be directly sat/prove processed, without needing
     a final call to return at the end.
 
-  * Add type synonym Goal (for "Symbolic ()"), in order to simplify type signatures
+  * Add type synonym `Goal` (for `Symbolic ()`), in order to simplify type signatures
 
   * SBV now properly adds check-sat commands and other directives in debugging output.
 
@@ -178,7 +246,7 @@
        * svSetBit                  : set a given bit
        * svBlastLE, svBlastBE      : Bit-blast to big/little endian
        * svWordFromLE, svWordFromBE: Unblast from big/little endian
-       * svAddConstant		   : Add a constant to an SVal
+       * svAddConstant             : Add a constant to an SVal
        * svIncrement, svDecrement  : Add/subtract 1 from an SVal
 
 ### Version 5.9, 2016-01-05
@@ -209,10 +277,10 @@
 
 ### Version 5.7, 2015-12-21
 
-  * Export HasKind(..) from the Dynamic interface. Thanks to Adam Foltzer for the patch.
+  * Export `HasKind(..)` from the Dynamic interface. Thanks to Adam Foltzer for the patch.
   * More careful handling of SMT-Lib reserved names.
   * Update tested version of MathSAT to 5.3.9
-  * Generalize sShiftLeft/sShiftRight/sRotateLeft/sRotateRight to work with signed
+  * Generalize `sShiftLeft`/`sShiftRight`/`sRotateLeft`/`sRotateRight` to work with signed
     shift/rotate amounts, where negative values revert the direction. Similar
     generalizations are also done for the dynamic variants.
 
@@ -224,14 +292,14 @@
 
   * Rework how SBV properties are quick-checked; much more usable and robust
 
-  * Provide a function sbvQuickCheck, which is essentially the same as
+  * Provide a function `sbvQuickCheck`, which is essentially the same as
     quickCheck, except it also returns a boolean. Useful for the
-    programmable API. (The dynamic version is called svQuickCheck)
+    programmable API. (The dynamic version is called `svQuickCheck`.)
 
   * Several changes/additions in support of the sbvPlugin development:
-  * Data.SBV.Dynamic: Define/export svFloat/svDouble/sReal/sNumerator/sDenominator
-  * Data.SBV.Internals: Export constructors of Result, SMTModel,
-    and the function showModel
+  * Data.SBV.Dynamic: Define/export `svFloat`/`svDouble`/`sReal`/`sNumerator`/`sDenominator`
+  * Data.SBV.Internals: Export constructors of `Result`, `SMTModel`,
+    and the function `showModel`
   * Simplify how Uninterpreted-types are internally represented.
 
 ### Version 5.5, 2015-11-10

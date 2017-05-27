@@ -24,11 +24,11 @@ cvc4 = SMTSolver {
            name         = CVC4
          , executable   = "cvc4"
          , options      = ["--lang", "smt"]
-         , engine       = standardEngine "SBV_CVC4" "SBV_CVC4_OPTIONS" addTimeOut standardModel
+         , engine       = standardEngine "SBV_CVC4" "SBV_CVC4_OPTIONS" id addTimeOut standardModel
          , capabilities = SolverCapabilities {
                                 capSolverName              = "CVC4"
                               , mbDefaultLogic             = const (Just "ALL_SUPPORTED")  -- CVC4 is not happy if we don't set the logic, so fall-back to this if necessary
-                              , supportsMacros             = True
+                              , supportsDefineFun          = True
                               , supportsProduceModels      = True
                               , supportsQuantifiers        = True
                               , supportsUninterpretedSorts = True
@@ -37,6 +37,8 @@ cvc4 = SMTSolver {
                               , supportsFloats             = False
                               , supportsDoubles            = False
                               , supportsOptimization       = False
+                              , supportsPseudoBooleans     = False
+                              , supportsUnsatCores         = True
                               }
          }
  where addTimeOut o i | i < 0 = error $ "CVC4: Timeout value must be non-negative, received: " ++ show i

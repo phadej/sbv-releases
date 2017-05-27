@@ -25,9 +25,10 @@ module Data.SBV.Core.Model (
     Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertSoft, SIntegral
   , ite, iteLazy, sTestBit, sExtractBits, sPopCount, setBitTo, sFromIntegral
   , sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, (.^)
-  , allEqual, allDifferent, inRange, sElem, oneIf, blastBE, blastLE, fullAdder, fullMultiplier
+  , oneIf, blastBE, blastLE, fullAdder, fullMultiplier
   , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
-  , constrain, pConstrain, tactic, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
+  , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
+  , constrain, namedConstraint, pConstrain, tactic, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
   , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, slet
   , sRealToSInteger, label
@@ -39,7 +40,7 @@ module Data.SBV.Core.Model (
   )
   where
 
-import Control.Monad        (when, unless)
+import Control.Monad        (when, unless, mplus)
 import Control.Monad.Reader (ask)
 import Control.Monad.Trans  (liftIO)
 
@@ -326,30 +327,66 @@ label m x
 
 -- | Symbolic Equality. Note that we can't use Haskell's 'Eq' class since Haskell insists on returning Bool
 -- Comparing symbolic values will necessarily return a symbolic value.
---
--- Minimal complete definition: '.=='
 infix 4 .==, ./=
 class EqSymbolic a where
-  (.==), (./=) :: a -> a -> SBool
+  -- | Symbolic equality.
+  (.==) :: a -> a -> SBool
+  -- | Symbolic inequality.
+  (./=) :: a -> a -> SBool
+
+  -- | Returns (symbolic) true if all the elements of the given list are different.
+  distinct :: [a] -> SBool
+
+  -- | Returns (symbolic) true if all the elements of the given list are the same.
+  allEqual :: [a] -> SBool
+
+  -- | Symbolic membership test.
+  sElem    :: a -> [a] -> SBool
+
   -- minimal complete definition: .==
   x ./= y = bnot (x .== y)
+
+  allEqual []     = true
+  allEqual (x:xs) = bAll (x .==) xs
+
+  -- Default implementation of distinct. Note that we override
+  -- this method for the base types to generate better code.
+  distinct []     = true
+  distinct (x:xs) = bAll (x ./=) xs &&& distinct xs
+
+  sElem x xs = bAny (.== x) xs
 
 -- | Symbolic Comparisons. Similar to 'Eq', we cannot implement Haskell's 'Ord' class
 -- since there is no way to return an 'Ordering' value from a symbolic comparison.
 -- Furthermore, 'OrdSymbolic' requires 'Mergeable' to implement if-then-else, for the
 -- benefit of implementing symbolic versions of 'max' and 'min' functions.
---
--- Minimal complete definition: '.<'
 infix 4 .<, .<=, .>, .>=
 class (Mergeable a, EqSymbolic a) => OrdSymbolic a where
-  (.<), (.<=), (.>), (.>=) :: a -> a -> SBool
-  smin, smax :: a -> a -> a
+  -- | Symbolic less than.
+  (.<)  :: a -> a -> SBool
+  -- | Symbolic less than or equal to.
+  (.<=) :: a -> a -> SBool
+  -- | Symbolic greater than.
+  (.>)  :: a -> a -> SBool
+  -- | Symbolic greater than or equal to.
+  (.>=) :: a -> a -> SBool
+  -- | Symbolic minimum.
+  smin  :: a -> a -> a
+  -- | Symbolic maximum.
+  smax  :: a -> a -> a
+  -- | Is the value withing the allowed /inclusive/ range?
+  inRange    :: a -> (a, a) -> SBool
+
   -- minimal complete definition: .<
   a .<= b    = a .< b ||| a .== b
   a .>  b    = b .<  a
   a .>= b    = b .<= a
+
   a `smin` b = ite (a .<= b) a b
   a `smax` b = ite (a .<= b) b a
+
+  inRange x (y, z) = x .>= y &&& x .<= z
+
 
 {- We can't have a generic instance of the form:
 
@@ -366,6 +403,30 @@ for natural reasons..
 instance EqSymbolic (SBV a) where
   SBV x .== SBV y = SBV (svEqual x y)
   SBV x ./= SBV y = SBV (svNotEqual x y)
+
+  -- Custom version of distinct that generates better code for base types
+  distinct []  = true
+  distinct [_] = true
+  distinct xs
+    | all isConc xs
+    = checkDiff xs
+    | True
+    = SBV (SVal KBool (Right (cache r)))
+    where r st = do xsw <- mapM (sbvToSW st) xs
+                    newExpr st KBool (SBVApp NotEqual xsw)
+
+          -- We call this in case all are concrete, which will
+          -- reduce to a constant and generate no code at all!
+          -- Note that this is essentially the same as the default
+          -- definition, which unfortunately we can no longer call!
+          checkDiff []     = true
+          checkDiff (a:as) = bAll (a ./=) as &&& checkDiff as
+
+          -- Sigh, we can't use isConcrete since that requires SymWord
+          -- constraint that we don't have here. (To support SBools.)
+          isConc (SBV (SVal _ (Left _))) = True
+          isConc _                       = False
+
 
 instance SymWord a => OrdSymbolic (SBV a) where
   SBV x .<  SBV y = SBV (svLessThan x y)
@@ -491,27 +552,98 @@ instance Boolean SBool where
   SBV a ||| SBV b = SBV (svOr a b)
   SBV a <+> SBV b = SBV (svXOr a b)
 
--- | Returns (symbolic) true if all the elements of the given list are different.
-allDifferent :: EqSymbolic a => [a] -> SBool
-allDifferent []     = true
-allDifferent (x:xs) = bAll (x ./=) xs &&& allDifferent xs
-
--- | Returns (symbolic) true if all the elements of the given list are the same.
-allEqual :: EqSymbolic a => [a] -> SBool
-allEqual []     = true
-allEqual (x:xs) = bAll (x .==) xs
-
--- | Returns (symbolic) true if the argument is in range
-inRange :: OrdSymbolic a => a -> (a, a) -> SBool
-inRange x (y, z) = x .>= y &&& x .<= z
-
--- | Symbolic membership test
-sElem :: EqSymbolic a => a -> [a] -> SBool
-sElem x xs = bAny (.== x) xs
-
 -- | Returns 1 if the boolean is true, otherwise 0.
 oneIf :: (Num a, SymWord a) => SBool -> SBV a
 oneIf t = ite t 1 0
+
+-- | Lift a pseudo-boolean op, performing checks
+liftPB :: String -> PBOp -> [SBool] -> SBool
+liftPB w o xs
+  | Just e <- check o
+  = error $ "SBV." ++ w ++ ": " ++ e
+  | True
+  = result
+  where check (PB_AtMost  k) = pos k
+        check (PB_AtLeast k) = pos k
+        check (PB_Exactly k) = pos k
+        check (PB_Le cs   k) = pos k `mplus` match cs
+        check (PB_Ge cs   k) = pos k `mplus` match cs
+        check (PB_Eq cs   k) = pos k `mplus` match cs
+
+        pos k
+          | k < 0 = Just $ "comparison value must be positive, received: " ++ show k
+          | True  = Nothing
+
+        match cs
+          | any (< 0) cs = Just $ "coefficients must be non-negative. Received: " ++ show cs
+          | lxs /= lcs   = Just $ "coefficient length must match number of arguments. Received: " ++ show (lcs, lxs)
+          | True         = Nothing
+          where lxs = length xs
+                lcs = length cs
+
+        result = SBV (SVal KBool (Right (cache r)))
+        r st   = do xsw <- mapM (sbvToSW st) xs
+                    -- PseudoBoolean's implicitly require support for integers, so make sure to register that kind!
+                    registerKind st KUnbounded
+                    newExpr st KBool (SBVApp (PseudoBoolean o) xsw)
+
+-- | 'true' if at most `k` of the input arguments are 'true'
+pbAtMost :: [SBool] -> Int -> SBool
+pbAtMost xs k
+ | k < 0             = error $ "SBV.pbAtMost: Non-negative value required, received: " ++ show k
+ | all isConcrete xs = literal $ sum (map (pbToInteger "pbAtMost" 1) xs) <= fromIntegral k
+ | True              = liftPB "pbAtMost" (PB_AtMost k) xs
+
+-- | 'true' if at least `k` of the input arguments are 'true'
+pbAtLeast :: [SBool] -> Int -> SBool
+pbAtLeast xs k
+ | k < 0             = error $ "SBV.pbAtLeast: Non-negative value required, received: " ++ show k
+ | all isConcrete xs = literal $ sum (map (pbToInteger "pbAtLeast" 1) xs) >= fromIntegral k
+ | True              = liftPB "pbAtLeast" (PB_AtLeast k) xs
+
+-- | 'true' if exactly `k` of the input arguments are 'true'
+pbExactly :: [SBool] -> Int -> SBool
+pbExactly xs k
+ | k < 0             = error $ "SBV.pbExactly: Non-negative value required, received: " ++ show k
+ | all isConcrete xs = literal $ sum (map (pbToInteger "pbExactly" 1) xs) == fromIntegral k
+ | True              = liftPB "pbExactly" (PB_Exactly k) xs
+
+-- | 'true' if the sum of coefficients for 'true' elements is at most 'k'. Generalizes 'pbAtMost'.
+pbLe :: [(Int, SBool)] -> Int -> SBool
+pbLe xs k
+ | k < 0                       = error $ "SBV.pbLe: Non-negative value required, received: " ++ show k
+ | all isConcrete (map snd xs) = literal $ sum [pbToInteger "pbLe" c b | (c, b) <- xs] <= fromIntegral k
+ | True                        = liftPB "pbLe" (PB_Le (map fst xs) k) (map snd xs)
+
+-- | 'true' if the sum of coefficients for 'true' elements is at least 'k'. Generalizes 'pbAtLeast'.
+pbGe :: [(Int, SBool)] -> Int -> SBool
+pbGe xs k
+ | k < 0                       = error $ "SBV.pbGe: Non-negative value required, received: " ++ show k
+ | all isConcrete (map snd xs) = literal $ sum [pbToInteger "pbGe" c b | (c, b) <- xs] >= fromIntegral k
+ | True                        = liftPB "pbGe" (PB_Ge (map fst xs) k) (map snd xs)
+
+-- | 'true' if the sum of coefficients for 'true' elements is exactly least 'k'. Useful for coding
+-- /exactly K-of-N/ constraints, and in particular mutex constraints.
+pbEq :: [(Int, SBool)] -> Int -> SBool
+pbEq xs k
+ | k < 0                       = error $ "SBV.pbEq: Non-negative value required, received: " ++ show k
+ | all isConcrete (map snd xs) = literal $ sum [pbToInteger "pbEq" c b | (c, b) <- xs] == fromIntegral k
+ | True                        = liftPB "pbEq" (PB_Eq (map fst xs) k) (map snd xs)
+
+-- | 'true' if there is at most one set bit
+pbMutexed :: [SBool] -> SBool
+pbMutexed xs = pbAtMost xs 1
+
+-- | 'true' if there is exactly one set bit
+pbStronglyMutexed :: [SBool] -> SBool
+pbStronglyMutexed xs = pbExactly xs 1
+
+-- | Convert a concrete pseudo-boolean to given int; converting to integer
+pbToInteger :: String -> Int -> SBool -> Integer
+pbToInteger w c b
+ | c < 0                 = error $ "SBV." ++ w ++ ": Non-negative coefficient required, received: " ++ show c
+ | Just v <- unliteral b = if v then fromIntegral c else 0
+ | True                  = error $ "SBV.pbToInteger: Received a symbolic boolean: " ++ show (c, b)
 
 -- | Predicate for optimizing word operations like (+) and (*).
 isConcreteZero :: SBV a -> Bool
@@ -1619,13 +1751,18 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
 --  >>> isVacuous pred'
 --  False
 constrain :: SBool -> Symbolic ()
-constrain c = addConstraint Nothing c (bnot c)
+constrain c = addConstraint Nothing Nothing c (bnot c)
+
+-- | A version of constrain, that also attaches a name. This variant is useful
+-- for extracting unsat cores.
+namedConstraint :: String -> SBool -> Symbolic ()
+namedConstraint nm c = addConstraint (Just nm) Nothing c (bnot c)
 
 -- | Adding a probabilistic constraint. The 'Double' argument is the probability
 -- threshold. Probabilistic constraints are useful for 'genTest' and 'quickCheck'
 -- calls where we restrict our attention to /interesting/ parts of the input domain.
 pConstrain :: Double -> SBool -> Symbolic ()
-pConstrain t c = addConstraint (Just t) c (bnot c)
+pConstrain t c = addConstraint Nothing (Just t) c (bnot c)
 
 -- | Provide a tactic for the solver engine
 tactic :: Tactic SBool -> Symbolic ()
@@ -1672,7 +1809,7 @@ instance Testable (Symbolic SBool) where
                                      QC.assert r
      where test g = do (r, Result{resTraces=tvals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic' (Concrete g) prop
                        let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
-                           cond = all (cwToBool . cval) cstrs
+                           cond = all (cwToBool . cval . snd) cstrs
                        case map fst unints of
                          [] -> case unliteral r of
                                  Nothing -> noQC [show r]
@@ -1718,9 +1855,9 @@ isSatisfiableInCurrentPath cond = do
            pc   = getPathCondition st
        check <- liftIO $ internalSATCheck cfg (pc &&& cond) st "isSatisfiableInCurrentPath: Checking satisfiability"
        let res = case check of
-                   SatResult Satisfiable{}     -> True
-                   SatResult (Unsatisfiable _) -> False
-                   _                           -> error $ "isSatisfiableInCurrentPath: Unexpected external result: " ++ show check
+                   SatResult Satisfiable{}   -> True
+                   SatResult Unsatisfiable{} -> False
+                   _                         -> error $ "isSatisfiableInCurrentPath: Unexpected external result: " ++ show check
        res `seq` liftIO $ msg $ "isSatisfiableInCurrentPath: Conclusion: " ++ if res then "Satisfiable" else "Unsatisfiable"
        return $ if res then Just check
                        else Nothing

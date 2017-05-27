@@ -24,11 +24,11 @@ mathSAT = SMTSolver {
            name         = MathSAT
          , executable   = "mathsat"
          , options      = ["-input=smt2", "-theory.fp.minmax_zero_mode=4"]
-         , engine       = standardEngine "SBV_MATHSAT" "SBV_MATHSAT_OPTIONS" addTimeOut standardModel
+         , engine       = standardEngine "SBV_MATHSAT" "SBV_MATHSAT_OPTIONS" modConfig addTimeOut standardModel
          , capabilities = SolverCapabilities {
                                 capSolverName              = "MathSAT"
                               , mbDefaultLogic             = const Nothing
-                              , supportsMacros             = False
+                              , supportsDefineFun          = True
                               , supportsProduceModels      = True
                               , supportsQuantifiers        = True
                               , supportsUninterpretedSorts = True
@@ -37,6 +37,15 @@ mathSAT = SMTSolver {
                               , supportsFloats             = True
                               , supportsDoubles            = True
                               , supportsOptimization       = False
+                              , supportsPseudoBooleans     = False
+                              , supportsUnsatCores         = True
                               }
          }
  where addTimeOut _ _ = error "MathSAT: Timeout values are not supported"
+
+       -- If unsat cores are needed, MathSAT requires an explicit command-line argument
+       modConfig :: SMTConfig -> SMTConfig
+       modConfig cfg
+        | not (getUnsatCore cfg) = cfg
+        | True                   = cfg {solver = (solver cfg) {options = newOpts}}
+        where newOpts = options (solver cfg) ++ ["-unsat_core_generation=3"]

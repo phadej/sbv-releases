@@ -133,22 +133,25 @@ module Data.SBV (
   -- *** Signed algebraic reals
   -- $algReals
   , SReal, AlgReal, sRealToSInteger
+
   -- ** Creating a symbolic variable
   -- $createSym
   , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble
+
   -- ** Creating a list of symbolic variables
   -- $createSyms
   , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReals, sFloats, sDoubles
+
   -- *** Abstract SBV type
   , SBV
   -- *** Arrays of symbolic values
   , SymArray(..), SArray, SFunArray, mkSFunArray
+
   -- ** Operations on symbolic values
   -- *** Word level
   , sTestBit, sExtractBits, sPopCount, sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, sFromIntegral, setBitTo, oneIf
   , lsb, msb, label
-  -- *** Predicates
-  , allEqual, allDifferent, inRange, sElem
+
   -- *** Addition and Multiplication with high-bits
   , fullAdder, fullMultiplier
   -- *** Exponentiation
@@ -160,10 +163,7 @@ module Data.SBV (
 
   -- ** Conditionals: Mergeable values
   , Mergeable(..), ite, iteLazy
-  -- ** Symbolic equality
-  , EqSymbolic(..)
-  -- ** Symbolic ordering
-  , OrdSymbolic(..)
+
   -- ** Symbolic integral numbers
   , SIntegral
   -- ** Division
@@ -180,6 +180,12 @@ module Data.SBV (
   -- * Uninterpreted sorts, constants, and functions
   -- $uninterpreted
   , Uninterpreted(..), addAxiom
+
+  -- * Symbolic Equality and Comparisons
+  , EqSymbolic(..), OrdSymbolic(..)
+  -- * Cardinality constraints
+  -- $cardIntro
+  , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
 
   -- * Enumerations
   -- $enumerations
@@ -202,7 +208,8 @@ module Data.SBV (
   , solve
   -- ** Adding constraints
   -- $constrainIntro
-  , constrain, pConstrain
+  , constrain, namedConstraint, pConstrain
+
   -- ** Checking constraint vacuity
   , isVacuous, isVacuousWith
   -- ** Quick-checking
@@ -241,35 +248,6 @@ module Data.SBV (
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
 
-  -- * Getting SMT-Lib output (for offline analysis)
-  , compileToSMTLib, generateSMTBenchmarks
-
-  -- * Code generation from symbolic programs
-  -- $cCodeGeneration
-  , SBVCodeGen
-
-  -- ** Setting code-generation options
-  , cgPerformRTCs, cgSetDriverValues, cgGenerateDriver, cgGenerateMakefile
-
-  -- ** Designating inputs
-  , cgInput, cgInputArr
-
-  -- ** Designating outputs
-  , cgOutput, cgOutputArr
-
-  -- ** Designating return values
-  , cgReturn, cgReturnArr
-
-  -- ** Code generation with uninterpreted functions
-  , cgAddPrototype, cgAddDecl, cgAddLDFlags, cgIgnoreSAssert
-
-  -- ** Code generation with 'SInteger' and 'SReal' types
-  -- $unboundedCGen
-  , cgIntegerSize, cgSRealType, CgSRealType(..)
-
-  -- ** Compilation to C
-  , compileToC, compileToCLib
-
   -- * Module exports
   -- $moduleExportIntro
 
@@ -288,9 +266,6 @@ import Data.SBV.Core.Data
 import Data.SBV.Core.Model
 import Data.SBV.Core.Floating
 import Data.SBV.Core.Splittable
-
-import Data.SBV.Compilers.C
-import Data.SBV.Compilers.CodeGen
 
 import Data.SBV.Provers.Prover
 
@@ -325,7 +300,7 @@ solve = return . bAnd
 sbvCheckSolverInstallation :: SMTConfig -> IO Bool
 sbvCheckSolverInstallation cfg = do ThmResult r <- proveWith cfg $ \x -> (x+x) .== ((x*2) :: SWord8)
                                     case r of
-                                      Unsatisfiable _ -> return True
+                                      Unsatisfiable{} -> return True
                                       _               -> return False
 
 -- | The default configs corresponding to supported SMT solvers
@@ -672,26 +647,6 @@ for library construction) that the SMT-models are reinterpreted in terms of doma
 extraction allows getting arbitrarily typed models out of SMT models.
 -}
 
-{- $cCodeGeneration
-The SBV library can generate straight-line executable code in C. (While other target languages are
-certainly possible, currently only C is supported.) The generated code will perform no run-time memory-allocations,
-(no calls to @malloc@), so its memory usage can be predicted ahead of time. Also, the functions will execute precisely the
-same instructions in all calls, so they have predictable timing properties as well. The generated code
-has no loops or jumps, and is typically quite fast. While the generated code can be large due to complete unrolling,
-these characteristics make them suitable for use in hard real-time systems, as well as in traditional computing.
--}
-
-{- $unboundedCGen
-The types 'SInteger' and 'SReal' are unbounded quantities that have no direct counterparts in the C language. Therefore,
-it is not possible to generate standard C code for SBV programs using these types, unless custom libraries are available. To
-overcome this, SBV allows the user to explicitly set what the corresponding types should be for these two cases, using
-the functions below. Note that while these mappings will produce valid C code, the resulting code will be subject to
-overflow/underflows for 'SInteger', and rounding for 'SReal', so there is an implicit loss of precision.
-
-If the user does /not/ specify these mappings, then SBV will
-refuse to compile programs that involve these types.
--}
-
 {- $moduleExportIntro
 The SBV library exports the following modules wholesale, as user programs will have to import these
 modules to make any sensible use of the SBV functionality.
@@ -833,6 +788,19 @@ Note that while 'constrain' can be used freely, 'pConstrain' is only allowed in 
 deal with probabilistic constraints when it comes to satisfiability and proofs.
 Also, both 'constrain' and 'pConstrain' calls during code-generation will also be rejected, for similar reasons.
 
+=== Named constraints and unsat cores
+
+Constraints can be given names:
+
+  @ 'namedConstraint' "a is at least 5" $ a .>= 5@
+
+Such constraints are useful when used in conjunction with 'getUnsatCore', and 'extractUnsatCore' features,
+where the backend solver can be queried to obtain an unsat core in case the constraints are unsatisfiable:
+
+   @ satWith z3{getUnsatCore=True} $ do ... @
+
+See "Data.SBV.Examples.Misc.UnsatCore" for an example use case.
+
 === Constraint vacuity
 
 SBV does not check that a given constraints is not vacuous. That is, that it can never be satisfied. This is usually
@@ -915,6 +883,30 @@ SBV will apply skolemization to get rid of existentials before sending predicate
 quantification, you will manually have to first convert to prenex-normal form (which produces an equisatisfiable but not necessarily
 equivalent formula), and code that explicitly in SBV. See <https://github.com/LeventErkok/sbv/issues/256> for a detailed discussion
 of this issue.
+-}
+
+{- $cardIntro
+A pseudo-boolean function (<http://en.wikipedia.org/wiki/Pseudo-Boolean_function>) is a
+function from booleans to reals, basically treating 'True' as @1@ and 'False' as @0@. They
+are typically expressed in polynomial form. Such functions can be used to express cardinality
+constraints, where we want to /count/ how many things satisfy a certain condition.
+
+One can code such constraints using regular SBV programming: Simply
+walk over the booleans and the corresponding coefficients, and assert the required relation.
+For instance:
+
+   > [b0, b1, b2, b3] `pbAtMost` 2
+
+is precisely equivalent to:
+
+   > sum (map (\b -> ite b 1 0) [b0, b1, b2, b3]) .<= 2
+
+and they both express that at most /two/ of @b0@, @b1@, @b2@, and @b3@ can be 'true'.
+However, the equivalent forms give rise to long formulas and the cardinality constraint
+can get lost in the translation. The idea here is that if you use these functions instead, SBV will
+produce better translations to SMTLib for more efficient solving of cardinality constraints, assuming
+the backend solver supports them. Currently, only Z3 supports pseudo-booleans directly. For all other solvers,
+SBV will translate these to equivalent terms that do not require special functions.
 -}
 
 {-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}

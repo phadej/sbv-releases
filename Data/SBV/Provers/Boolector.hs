@@ -22,11 +22,11 @@ boolector = SMTSolver {
            name         = Boolector
          , executable   = "boolector"
          , options      = ["--smt2", "--smt2-model", "--no-exit-codes"]
-         , engine       = standardEngine "SBV_BOOLECTOR" "SBV_BOOLECTOR_OPTIONS" addTimeOut standardModel
+         , engine       = standardEngine "SBV_BOOLECTOR" "SBV_BOOLECTOR_OPTIONS" id addTimeOut standardModel
          , capabilities = SolverCapabilities {
                                 capSolverName              = "Boolector"
                               , mbDefaultLogic             = const Nothing
-                              , supportsMacros             = False
+                              , supportsDefineFun          = False
                               , supportsProduceModels      = True
                               , supportsQuantifiers        = False
                               , supportsUninterpretedSorts = False
@@ -35,6 +35,8 @@ boolector = SMTSolver {
                               , supportsFloats             = False
                               , supportsDoubles            = False
                               , supportsOptimization       = False
+                              , supportsPseudoBooleans     = False
+                              , supportsUnsatCores         = False
                               }
          }
  where addTimeOut o i | i < 0 = error $ "Boolector: Timeout value must be non-negative, received: " ++ show i

@@ -24,11 +24,11 @@ yices = SMTSolver {
            name         = Yices
          , executable   = "yices-smt2"
          , options      = []
-         , engine       = standardEngine "SBV_YICES" "SBV_YICES_OPTIONS" addTimeOut standardModel
+         , engine       = standardEngine "SBV_YICES" "SBV_YICES_OPTIONS" id addTimeOut standardModel
          , capabilities = SolverCapabilities {
                                 capSolverName              = "Yices"
                               , mbDefaultLogic             = logic
-                              , supportsMacros             = True
+                              , supportsDefineFun          = True
                               , supportsProduceModels      = True
                               , supportsQuantifiers        = False
                               , supportsUninterpretedSorts = True
@@ -37,6 +37,8 @@ yices = SMTSolver {
                               , supportsFloats             = False
                               , supportsDoubles            = False
                               , supportsOptimization       = False
+                              , supportsPseudoBooleans     = False
+                              , supportsUnsatCores         = False
                               }
          }
   where addTimeOut _ _ = error "Yices: Timeout values are not supported by Yices"
