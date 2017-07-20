@@ -18,6 +18,8 @@
 {-# LANGUAGE PatternGuards         #-}
 {-# LANGUAGE DefaultSignatures     #-}
 {-# LANGUAGE NamedFieldPuns        #-}
+{-# LANGUAGE DeriveAnyClass        #-}
+{-# LANGUAGE DeriveGeneric         #-}
 
 module Data.SBV.Core.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
@@ -36,36 +38,30 @@ module Data.SBV.Core.Data
  , SBVExpr(..), newExpr
  , cache, Cached, uncache, uncacheAI, HasKind(..)
  , Op(..), PBOp(..), FPOp(..), NamedSymVar, getTableIndex
- , SBVPgm(..), Symbolic, SExecutable(..), runSymbolic, runSymbolic', State, getPathCondition, extendPathCondition
- , inProofMode, SBVRunMode(..), Kind(..), Outputtable(..), Result(..)
- , Logic(..), SMTLibLogic(..)
- , addConstraint, internalVariable, internalConstraint, isCodeGenMode
+ , SBVPgm(..), Symbolic, runSymbolic, State, getPathCondition, extendPathCondition
+ , inSMTMode, SBVRunMode(..), Kind(..), Outputtable(..), Result(..)
+ , SolverContext(..), internalVariable, internalConstraint, isCodeGenMode
  , SBVType(..), newUninterpreted, addAxiom
  , Quantifier(..), needsExistentials
  , SMTLibPgm(..), SMTLibVersion(..), smtLibVersionExtension, smtLibReservedNames
  , SolverCapabilities(..)
  , extractSymbolicSimulationState
- , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..), getSBranchRunConfig
+ , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..)
  , declNewSArray, declNewSFunArray
  , OptimizeStyle(..), Penalty(..), Objective(..)
- , Tactic(..), CaseCond(..), SMTProblem(..), isParallelCaseAnywhere
+ , QueryState(..), Query(..), SMTProblem(..)
  ) where
+
+import GHC.Generics (Generic)
 
 import Control.DeepSeq      (NFData(..))
 import Control.Monad.Reader (ask)
 import Control.Monad.Trans  (liftIO)
 import Data.Int             (Int8, Int16, Int32, Int64)
 import Data.Word            (Word8, Word16, Word32, Word64)
-import Data.List            (elemIndex, intercalate)
-import Data.Maybe           (fromMaybe)
+import Data.List            (elemIndex)
 
-import qualified Data.Set as Set (Set)
 import qualified Data.Generics as G    (Data(..))
-
-import GHC.Stack.Compat
-#if !MIN_VERSION_base(4,9,0)
-import GHC.SrcLoc.Compat
-#endif
 
 import System.Random
 
@@ -73,13 +69,14 @@ import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Kind
 import Data.SBV.Core.Concrete
 import Data.SBV.Core.Symbolic
+import Data.SBV.Core.Operations
+
+import Data.SBV.Control.Types
 
 import Data.SBV.SMT.SMTLibNames
 
 import Data.SBV.Utils.Lib
-
-import Prelude ()
-import Prelude.Compat
+import Data.SBV.Utils.Boolean
 
 -- | Get the current path condition
 getPathCondition :: State -> SBool
@@ -92,6 +89,7 @@ extendPathCondition st f = extendSValPathCondition st (unSBV . f . SBV)
 -- | The "Symbolic" value. The parameter 'a' is phantom, but is
 -- extremely important in keeping the user interface strongly typed.
 newtype SBV a = SBV { unSBV :: SVal }
+              deriving (Generic, NFData)
 
 -- | A symbolic boolean/bit
 type SBool   = SBV Bool
@@ -152,6 +150,15 @@ sNaN = literal nan
 sInfinity :: (Floating a, SymWord a) => SBV a
 sInfinity = literal infinity
 
+-- Boolean combinators
+instance Boolean SBool where
+  true  = SBV (svBool True)
+  false = SBV (svBool False)
+  bnot (SBV b) = SBV (svNot b)
+  SBV a &&& SBV b = SBV (svAnd a b)
+  SBV a ||| SBV b = SBV (svOr a b)
+  SBV a <+> SBV b = SBV (svXOr a b)
+
 -- | 'RoundingMode' can be used symbolically
 instance SymWord RoundingMode
 
@@ -198,12 +205,15 @@ sRTN = sRoundTowardNegative
 sRTZ :: SRoundingMode
 sRTZ = sRoundTowardZero
 
--- Not particularly "desirable", but will do if needed
+-- Not particularly "desirable," when the value is symbolic, but we do need this
+-- instance as otherwise we cannot simply evaluate Haskell functions that return
+-- symbolic values and have their constant values printed easily!
 instance Show (SBV a) where
   show (SBV sv) = show sv
 
 -- Equality constraint on SBV values. Not desirable since we can't really compare two
--- symbolic values, but will do.
+-- symbolic values, but will do. Note that we do need this instance since we want
+-- Bits as a class for SBV that we implement, which necessiates the Eq class.
 instance Eq (SBV a) where
   SBV a == SBV b = a == b
   SBV a /= SBV b = a /= b
@@ -221,13 +231,40 @@ sbvToSW st (SBV s) = svToSW st s
 
 -- | Create a symbolic variable.
 mkSymSBV :: forall a. Maybe Quantifier -> Kind -> Maybe String -> Symbolic (SBV a)
-mkSymSBV mbQ k mbNm = fmap SBV (svMkSymVar mbQ k mbNm)
+mkSymSBV mbQ k mbNm = SBV <$> (ask >>= liftIO . svMkSymVar mbQ k mbNm)
 
 -- | Convert a symbolic value to an SW, inside the Symbolic monad
 sbvToSymSW :: SBV a -> Symbolic SW
 sbvToSymSW sbv = do
         st <- ask
         liftIO $ sbvToSW st sbv
+
+-- | Actions we can do in a context: Either at problem description
+-- time or while we are dynamically querying. 'Symbolic' and 'Query' are
+-- two instances of this class. Note that we use this mechanism
+-- internally and do not export it from SBV.
+class SolverContext m where
+   -- | Add a constraint, any satisfying instance must satisfy this condition
+   constrain       :: SBool -> m ()
+   -- | Add a named constraint. The name is used in unsat-core extraction.
+   namedConstraint :: String -> SBool -> m ()
+   -- | Set info. Example: @setInfo ":status" ["unsat"]@.
+   setInfo :: String -> [String] -> m ()
+   -- | Set an option.
+   setOption :: SMTOption -> m ()
+   -- | Set the logic.
+   setLogic :: Logic -> m ()
+   -- | Set a solver time-out value, in milli-seconds. This function
+   -- essentially translates to the SMTLib call @(set-info :timeout val)@,
+   -- and your backend solver may or may not support it! The amount given
+   -- is in milliseconds. Also see the function 'timeOut' for finer level
+   -- control of time-outs, directly from SBV.
+   setTimeOut :: Integer -> m ()
+
+   -- time-out, logic, and info are  simply options in our implementation, so default implementation suffices
+   setTimeOut t = setOption $ OptionKeyword ":timeout" [show t]
+   setLogic     = setOption . SetLogic
+   setInfo    k = setOption . SetInfo k
 
 -- | A class representing what can be returned from a symbolic computation.
 class Outputtable a where
@@ -348,7 +385,7 @@ class (HasKind a, Ord a) => SymWord a where
   fromCW cw                         = error $ "Cannot convert CW " ++ show cw ++ " to kind " ++ show (kindOf (undefined :: a))
 
   default mkSymWord :: (Read a, G.Data a) => Maybe Quantifier -> Maybe String -> Symbolic (SBV a)
-  mkSymWord mbQ mbNm = SBV <$> mkSValUserSort k mbQ mbNm
+  mkSymWord mbQ mbNm = SBV <$> (ask >>= liftIO . svMkSymVar mbQ k mbNm)
     where k = constructUKind (undefined :: a)
 
 instance (Random a, SymWord a) => Random (SBV a) where
@@ -361,10 +398,7 @@ instance (Random a, SymWord a) => Random (SBV a) where
 ---------------------------------------------------------------------------------
 
 -- | Flat arrays of symbolic values
--- An @array a b@ is an array indexed by the type @'SBV' a@, with elements of type @'SBV' b@
--- If an initial value is not provided in 'newArray_' and 'newArray' methods, then the elements
--- are left unspecified, i.e., the solver is free to choose any value. This is the right thing
--- to do if arrays are used as inputs to functions to be verified, typically. 
+-- An @array a b@ is an array indexed by the type @'SBV' a@, with elements of type @'SBV' b@.
 --
 -- While it's certainly possible for user to create instances of 'SymArray', the
 -- 'SArray' and 'SFunArray' instances already provided should cover most use cases
@@ -374,14 +408,12 @@ instance (Random a, SymWord a) => Random (SBV a) where
 --
 -- Minimal complete definition: All methods are required, no defaults.
 class SymArray array where
-  -- | Create a new array, with an optional initial value
-  newArray_      :: (HasKind a, HasKind b) => Maybe (SBV b) -> Symbolic (array a b)
-  -- | Create a named new array, with an optional initial value
-  newArray       :: (HasKind a, HasKind b) => String -> Maybe (SBV b) -> Symbolic (array a b)
+  -- | Create a new anonymous array
+  newArray_      :: (HasKind a, HasKind b) => Symbolic (array a b)
+  -- | Create a named new array
+  newArray       :: (HasKind a, HasKind b) => String -> Symbolic (array a b)
   -- | Read the array element at @a@
   readArray      :: array a b -> SBV a -> SBV b
-  -- | Reset all the elements of the array to the value @b@
-  resetArray     :: SymWord b => array a b -> SBV b -> array a b
   -- | Update the element at @a@ to be @b@
   writeArray     :: SymWord b => array a b -> SBV a -> SBV b -> array a b
   -- | Merge two given arrays on the symbolic condition
@@ -410,21 +442,22 @@ instance SymArray SArray where
   newArray_                                      = declNewSArray (\t -> "array_" ++ show t)
   newArray n                                     = declNewSArray (const n)
   readArray   (SArray arr) (SBV a)               = SBV (readSArr arr a)
-  resetArray  (SArray arr) (SBV b)               = SArray (resetSArr arr b)
   writeArray  (SArray arr) (SBV a)    (SBV b)    = SArray (writeSArr arr a b)
   mergeArrays (SBV t)      (SArray a) (SArray b) = SArray (mergeSArr t a b)
 
 -- | Declare a new symbolic array, with a potential initial value
-declNewSArray :: forall a b. (HasKind a, HasKind b) => (Int -> String) -> Maybe (SBV b) -> Symbolic (SArray a b)
-declNewSArray mkNm mbInit = do
+declNewSArray :: forall a b. (HasKind a, HasKind b) => (Int -> String) -> Symbolic (SArray a b)
+declNewSArray mkNm = do
    let aknd = kindOf (undefined :: a)
        bknd = kindOf (undefined :: b)
-   arr <- newSArr (aknd, bknd) mkNm (fmap unSBV mbInit)
+   arr <- newSArr (aknd, bknd) mkNm
    return (SArray arr)
 
--- | Declare a new functional symbolic array, with a potential initial value. Note that a read from an uninitialized cell will result in an error.
-declNewSFunArray :: forall a b. (HasKind a, HasKind b) => Maybe (SBV b) -> Symbolic (SFunArray a b)
-declNewSFunArray mbiVal = return $ SFunArray $ const $ fromMaybe (error "Reading from an uninitialized array entry") mbiVal
+-- | Declare a new functional symbolic array. Note that a read from an uninitialized cell will result in an error.
+declNewSFunArray :: forall a b. (HasKind a, HasKind b) => Maybe String -> Symbolic (SFunArray a b)
+declNewSFunArray mbNm = return $ SFunArray $ error . msg mbNm
+  where msg Nothing   i = "Reading from an uninitialized array entry, index: " ++ show i
+        msg (Just nm) i = "Array " ++ show nm ++ ": Reading from an uninitialized array entry, index: " ++ show i
 
 -- | Arrays implemented internally as functions
 --
@@ -447,135 +480,5 @@ instance (HasKind a, HasKind b) => Show (SFunArray a b) where
 mkSFunArray :: (SBV a -> SBV b) -> SFunArray a b
 mkSFunArray = SFunArray
 
--- | Add a constraint with a given probability.
-addConstraint :: Maybe String -> Maybe Double -> SBool -> SBool -> Symbolic ()
-addConstraint mn mt (SBV c) (SBV c') = addSValConstraint mn mt c c'
-
--- | A case condition (internal)
-data CaseCond = NoCase                         -- ^ No case-split
-              | CasePath [SW]                  -- ^ In a case-path
-              | CaseVac  [SW] SW               -- ^ For checking the vacuity of a case
-              | CaseCov  [SW] [SW]             -- ^ In a case-path end, coverage (first arg is path cond, second arg is coverage cond)
-              | CstrVac                        -- ^ In a constraint vacuity check (top-level)
-              | Opt      [Objective (SW, SW)]  -- ^ In an optimization call
-
-instance NFData CaseCond where
-  rnf NoCase           = ()
-  rnf (CasePath ps)    = rnf ps
-  rnf (CaseVac  ps q)  = rnf ps `seq` rnf q  `seq` ()
-  rnf (CaseCov  ps qs) = rnf ps `seq` rnf qs `seq` ()
-  rnf CstrVac          = ()
-  rnf (Opt os)         = rnf os `seq` ()
-
 -- | Internal representation of a symbolic simulation result
-data SMTProblem = SMTProblem { smtInputs    :: [(Quantifier, NamedSymVar)]        -- ^ inputs
-                             , smtSkolemMap :: [Either SW (SW, [SW])]             -- ^ skolem-map
-                             , kindsUsed    :: Set.Set Kind                       -- ^ kinds used
-                             , smtAsserts   :: [(String, Maybe CallStack, SW)]    -- ^ assertions
-                             , tactics      :: [Tactic SW]                        -- ^ tactics to use
-                             , objectives   :: [Objective (SW, SW)]               -- ^ optimization goals, if any
-                             , smtLibPgm    :: SMTConfig -> CaseCond -> SMTLibPgm -- ^ SMTLib representation, given the config and case-splits
-                             }
-
-instance NFData SMTProblem where
-  rnf (SMTProblem i m k a t o p) = rnf i `seq` rnf m `seq` rnf k `seq` rnf a `seq` rnf t `seq` rnf o `seq` rnf p `seq` ()
-
-instance NFData (SBV a) where
-  rnf (SBV x) = rnf x `seq` ()
-
--- | Symbolically executable program fragments. This class is mainly used for 'safe' calls, and is sufficently populated internally to cover most use
--- cases. Users can extend it as they wish to allow 'safe' checks for SBV programs that return/take types that are user-defined.
-class SExecutable a where
-   sName_ :: a -> Symbolic ()
-   sName  :: [String] -> a -> Symbolic ()
-
-instance NFData a => SExecutable (Symbolic a) where
-   sName_   a = a >>= \r -> rnf r `seq` return ()
-   sName []   = sName_
-   sName xs   = error $ "SBV.SExecutable.sName: Extra unmapped name(s): " ++ intercalate ", " xs
-
-instance SExecutable (SBV a) where
-   sName_   v = sName_ (output v)
-   sName xs v = sName xs (output v)
-
--- Unit output
-instance SExecutable () where
-   sName_   () = sName_   (output ())
-   sName xs () = sName xs (output ())
-
--- List output
-instance SExecutable [SBV a] where
-   sName_   vs = sName_   (output vs)
-   sName xs vs = sName xs (output vs)
-
--- 2 Tuple output
-instance (NFData a, SymWord a, NFData b, SymWord b) => SExecutable (SBV a, SBV b) where
-  sName_ (a, b) = sName_ (output a >> output b)
-  sName _       = sName_
-
--- 3 Tuple output
-instance (NFData a, SymWord a, NFData b, SymWord b, NFData c, SymWord c) => SExecutable (SBV a, SBV b, SBV c) where
-  sName_ (a, b, c) = sName_ (output a >> output b >> output c)
-  sName _          = sName_
-
--- 4 Tuple output
-instance (NFData a, SymWord a, NFData b, SymWord b, NFData c, SymWord c, NFData d, SymWord d) => SExecutable (SBV a, SBV b, SBV c, SBV d) where
-  sName_ (a, b, c, d) = sName_ (output a >> output b >> output c >> output c >> output d)
-  sName _             = sName_
-
--- 5 Tuple output
-instance (NFData a, SymWord a, NFData b, SymWord b, NFData c, SymWord c, NFData d, SymWord d, NFData e, SymWord e) => SExecutable (SBV a, SBV b, SBV c, SBV d, SBV e) where
-  sName_ (a, b, c, d, e) = sName_ (output a >> output b >> output c >> output d >> output e)
-  sName _                = sName_
-
--- 6 Tuple output
-instance (NFData a, SymWord a, NFData b, SymWord b, NFData c, SymWord c, NFData d, SymWord d, NFData e, SymWord e, NFData f, SymWord f) => SExecutable (SBV a, SBV b, SBV c, SBV d, SBV e, SBV f) where
-  sName_ (a, b, c, d, e, f) = sName_ (output a >> output b >> output c >> output d >> output e >> output f)
-  sName _                   = sName_
-
--- 7 Tuple output
-instance (NFData a, SymWord a, NFData b, SymWord b, NFData c, SymWord c, NFData d, SymWord d, NFData e, SymWord e, NFData f, SymWord f, NFData g, SymWord g) => SExecutable (SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) where
-  sName_ (a, b, c, d, e, f, g) = sName_ (output a >> output b >> output c >> output d >> output e >> output f >> output g)
-  sName _                      = sName_
-
--- Functions
-instance (SymWord a, SExecutable p) => SExecutable (SBV a -> p) where
-   sName_        k = forall_   >>= \a -> sName_   $ k a
-   sName (s:ss)  k = forall s  >>= \a -> sName ss $ k a
-   sName []      k = sName_ k
-
--- 2 Tuple input
-instance (SymWord a, SymWord b, SExecutable p) => SExecutable ((SBV a, SBV b) -> p) where
-  sName_        k = forall_  >>= \a -> sName_   $ \b -> k (a, b)
-  sName (s:ss)  k = forall s >>= \a -> sName ss $ \b -> k (a, b)
-  sName []      k = sName_ k
-
--- 3 Tuple input
-instance (SymWord a, SymWord b, SymWord c, SExecutable p) => SExecutable ((SBV a, SBV b, SBV c) -> p) where
-  sName_       k  = forall_  >>= \a -> sName_   $ \b c -> k (a, b, c)
-  sName (s:ss) k  = forall s >>= \a -> sName ss $ \b c -> k (a, b, c)
-  sName []     k  = sName_ k
-
--- 4 Tuple input
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SExecutable p) => SExecutable ((SBV a, SBV b, SBV c, SBV d) -> p) where
-  sName_        k = forall_  >>= \a -> sName_   $ \b c d -> k (a, b, c, d)
-  sName (s:ss)  k = forall s >>= \a -> sName ss $ \b c d -> k (a, b, c, d)
-  sName []      k = sName_ k
-
--- 5 Tuple input
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SExecutable p) => SExecutable ((SBV a, SBV b, SBV c, SBV d, SBV e) -> p) where
-  sName_        k = forall_  >>= \a -> sName_   $ \b c d e -> k (a, b, c, d, e)
-  sName (s:ss)  k = forall s >>= \a -> sName ss $ \b c d e -> k (a, b, c, d, e)
-  sName []      k = sName_ k
-
--- 6 Tuple input
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SExecutable p) => SExecutable ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f) -> p) where
-  sName_        k = forall_  >>= \a -> sName_   $ \b c d e f -> k (a, b, c, d, e, f)
-  sName (s:ss)  k = forall s >>= \a -> sName ss $ \b c d e f -> k (a, b, c, d, e, f)
-  sName []      k = sName_ k
-
--- 7 Tuple input
-instance (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, SExecutable p) => SExecutable ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> p) where
-  sName_        k = forall_  >>= \a -> sName_   $ \b c d e f g -> k (a, b, c, d, e, f, g)
-  sName (s:ss)  k = forall s >>= \a -> sName ss $ \b c d e f g -> k (a, b, c, d, e, f, g)
-  sName []      k = sName_ k
+newtype SMTProblem = SMTProblem {smtLibPgm :: SMTConfig -> SMTLibPgm} -- ^ SMTLib representation, given the config

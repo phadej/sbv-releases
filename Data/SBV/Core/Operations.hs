@@ -20,7 +20,7 @@ module Data.SBV.Core.Operations
   , svAsBool, svAsInteger, svNumerator, svDenominator
   -- ** Basic operations
   , svPlus, svTimes, svMinus, svUNeg, svAbs
-  , svDivide, svQuot, svRem
+  , svDivide, svQuot, svRem, svQuotRem
   , svEqual, svNotEqual
   , svLessThan, svGreaterThan, svLessEq, svGreaterEq
   , svAnd, svOr, svXOr, svNot
@@ -207,11 +207,12 @@ svDecrement x = svAddConstant x (-1 :: Integer)
 -- "div" operator ("Euclidean" division, which always has a
 -- non-negative remainder). For unsigned bitvectors, it is "bvudiv";
 -- and for signed bitvectors it is "bvsdiv", which rounds toward zero.
--- All operations have unspecified semantics in case @y = 0@.
+-- Division by 0 is defined s.t. @x/0 = 0@, which holds even when @x@ itself is @0@.
 svQuot :: SVal -> SVal -> SVal
 svQuot x y
   | isConcreteZero x = x
-  | isConcreteOne y  = x
+  | isConcreteZero y = svInteger (kindOf x) 0
+  | isConcreteOne  y = x
   | True             = liftSym2 (mkSymOp Quot) nonzeroCheck
                                 (noReal "quot") quot' (noFloat "quot") (noDouble "quot") x y
   where
@@ -222,17 +223,22 @@ svQuot x y
 -- it is used: For unbounded integers, it corresponds to the SMT-Lib
 -- "mod" operator (always non-negative). For unsigned bitvectors, it
 -- is "bvurem"; and for signed bitvectors it is "bvsrem", which rounds
--- toward zero (sign of remainder matches that of @x@). All operations
--- have unspecified semantics in case @y = 0@.
+-- toward zero (sign of remainder matches that of @x@). Division by 0 is
+-- defined s.t. @x/0 = 0@, which holds even when @x@ itself is @0@.
 svRem :: SVal -> SVal -> SVal
 svRem x y
   | isConcreteZero x = x
-  | isConcreteOne y  = svInteger (kindOf x) 0
+  | isConcreteZero y = x
+  | isConcreteOne  y = svInteger (kindOf x) 0
   | True             = liftSym2 (mkSymOp Rem) nonzeroCheck
                                 (noReal "rem") rem' (noFloat "rem") (noDouble "rem") x y
   where
     rem' a b | kindOf x == KUnbounded = mod a (abs b)
              | otherwise              = rem a b
+
+-- | Combination of quot and rem
+svQuotRem :: SVal -> SVal -> (SVal, SVal)
+svQuotRem x y = (x `svQuot` y, x `svRem` y)
 
 -- | Optimize away x == true and x /= false to x; otherwise just do eqOpt
 eqOptBool :: Op -> SW -> SW -> SW -> Maybe SW

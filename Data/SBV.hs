@@ -78,7 +78,7 @@
 -- If a predicate is not valid, 'prove' will return a counterexample: An
 -- assignment to inputs such that the predicate fails. The 'sat' function will
 -- return a satisfying assignment, if there is one. The 'allSat' function returns
--- all satisfying assignments, lazily.
+-- all satisfying assignments.
 --
 -- The sbv library uses third-party SMT solvers via the standard SMT-Lib interface:
 -- <http://smtlib.cs.uiowa.edu/>
@@ -105,8 +105,12 @@
 -- get in touch if there is a solver you'd like to see included.
 ---------------------------------------------------------------------------------
 
-{-# LANGUAGE    FlexibleInstances #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# LANGUAGE    FlexibleInstances   #-}
+{-# LANGUAGE    QuasiQuotes         #-}
+{-# LANGUAGE    TemplateHaskell     #-}
+{-# LANGUAGE    ScopedTypeVariables #-}
+{-# LANGUAGE    StandaloneDeriving  #-}
+{-# OPTIONS_GHC -fno-warn-orphans  #-}
 
 module Data.SBV (
   -- * Programming with symbolic values
@@ -123,13 +127,9 @@ module Data.SBV (
   -- *** Signed unbounded integers
   -- $unboundedLimitations
   , SInteger
-  -- *** IEEE-floating point numbers
+  -- *** Floating point numbers
   -- $floatingPoints
-  , SFloat, SDouble, IEEEFloating(..), IEEEFloatConvertable(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity
-  -- **** Rounding modes
-  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero, sRNE, sRNA, sRTP, sRTN, sRTZ
-  -- **** Bit-pattern conversions
-  , sFloatAsSWord32, sWord32AsSFloat, sDoubleAsSWord64, sWord64AsSDouble, blastSFloat, blastSDouble
+  , SFloat, SDouble
   -- *** Signed algebraic reals
   -- $algReals
   , SReal, AlgReal, sRealToSInteger
@@ -143,7 +143,7 @@ module Data.SBV (
   , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReals, sFloats, sDoubles
 
   -- *** Abstract SBV type
-  , SBV
+  , SBV, HasKind(..), Kind(..)
   -- *** Arrays of symbolic values
   , SymArray(..), SArray, SFunArray, mkSFunArray
 
@@ -172,60 +172,45 @@ module Data.SBV (
   , Boolean(..)
   -- *** Generalizations of boolean operations
   , bAnd, bOr, bAny, bAll
-  -- ** Pretty-printing and reading numbers in Hex & Binary
-  , PrettyNum(..), readBin
-  -- * Checking satisfiability in path conditions
-  , isSatisfiableInCurrentPath
 
   -- * Uninterpreted sorts, constants, and functions
   -- $uninterpreted
   , Uninterpreted(..), addAxiom
 
   -- * Symbolic Equality and Comparisons
-  , EqSymbolic(..), OrdSymbolic(..)
-  -- * Cardinality constraints
+  , EqSymbolic(..), OrdSymbolic(..), Equality(..)
+
+  -- * Constraints
+  -- $constrainIntro
+  , constrain, namedConstraint
+  -- ** Cardinality constraints
   -- $cardIntro
   , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
 
   -- * Enumerations
   -- $enumerations
+  , mkSymbolicEnumeration
 
   -- * Properties, proofs, satisfiability, and safety
   -- $proveIntro
   -- $noteOnNestedQuantifiers
-  -- ** Predicates and Goals
-  , Predicate, Goal, Provable(..), Equality(..)
-  -- ** Proving properties
-  , prove, proveWith, isTheorem, isTheoremWith
-  -- ** Checking satisfiability
-  , sat, satWith, isSatisfiable, isSatisfiableWith
+  -- $multiIntro
+  , Predicate, Goal, Provable(..)
   -- ** Checking safety
   -- $safeIntro
-  , sAssert, safe, safeWith, isSafe, SExecutable(..)
-  -- ** Finding all satisfying assignments
-  , allSat, allSatWith
+  , sAssert, isSafe, SExecutable(..)
   -- ** Satisfying a sequence of boolean conditions
   , solve
-  -- ** Adding constraints
-  -- $constrainIntro
-  , constrain, namedConstraint, pConstrain
 
-  -- ** Checking constraint vacuity
-  , isVacuous, isVacuousWith
   -- ** Quick-checking
   , sbvQuickCheck
 
-  -- * Proving properties using multiple solvers
-  -- $multiIntro
-  , proveWithAll, proveWithAny, satWithAll, satWithAny
-
-  -- * Tactics
-  -- $tacticIntro
-  , Tactic(..), tactic
+  -- * Running a symbolic computation
+  , runSMT, runSMTWith
 
   -- * Optimization
   -- $optiIntro
-  , OptimizeStyle(..), Penalty(..), Objective(..), minimize, maximize, assertSoft, optimize, optimizeWith
+  , OptimizeStyle(..), Penalty(..), Objective(..), minimize, maximize, assertSoft
   , ExtCW(..), GeneralizedCW(..)
 
   -- * Model extraction
@@ -235,15 +220,22 @@ module Data.SBV (
   -- $resultTypes
   , ThmResult(..), SatResult(..), AllSatResult(..), SafeResult(..), OptimizeResult(..), SMTResult(..)
 
+  -- * IEEE-floating point numbers
+  , IEEEFloating(..), IEEEFloatConvertable(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity
+  -- ** Rounding modes
+  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero, sRNE, sRNA, sRTP, sRTN, sRTZ
+  -- ** Bit-pattern conversions
+  , sFloatAsSWord32, sWord32AsSFloat, sDoubleAsSWord64, sWord64AsSDouble, blastSFloat, blastSDouble
+
   -- ** Programmable model extraction
   -- $programmableExtraction
   , SatModel(..), Modelable(..), displayModels, extractModels
   , getModelDictionaries, getModelValues, getModelUninterpretedValues
 
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), SMTLibVersion(..), SMTLibLogic(..), Logic(..), Solver(..), SMTSolver(..)
-  , boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
-  , Timing(..), TimedStep(..), TimingInfo, showTDiff, CW(..), HasKind(..), Kind(..), cwToBool
+  , SMTConfig(..), Timing(..), SMTLibVersion(..), Solver(..), SMTSolver(..)
+  , boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
+  , setLogic, setOption, setInfo, setTimeOut
 
   -- * Symbolic computations
   , Symbolic, output, SymWord(..)
@@ -257,9 +249,9 @@ module Data.SBV (
   , module Data.Ratio
   ) where
 
-import Control.Monad            (filterM)
-import Control.Concurrent.Async (async, waitAny, waitAnyCancel)
-import System.IO.Unsafe         (unsafeInterleaveIO)             -- only used safely!
+import Control.Monad (filterM)
+
+import qualified Control.Exception as C
 
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Data
@@ -270,20 +262,16 @@ import Data.SBV.Core.Splittable
 import Data.SBV.Provers.Prover
 
 import Data.SBV.Utils.Boolean
-import Data.SBV.Utils.TDiff
-import Data.SBV.Utils.PrettyNum
+import Data.SBV.Utils.TDiff   (Timing(..))
 
 import Data.Bits
 import Data.Int
 import Data.Ratio
 import Data.Word
 
--- | The currently active solver, obtained by importing "Data.SBV".
--- To have other solvers /current/, import one of the bridge
--- modules "Data.SBV.Bridge.ABC", "Data.SBV.Bridge.Boolector", "Data.SBV.Bridge.CVC4",
--- "Data.SBV.Bridge.Yices", or "Data.SBV.Bridge.Z3" directly.
-sbvCurrentSolver :: SMTConfig
-sbvCurrentSolver = z3
+import qualified Language.Haskell.TH as TH
+import Data.Generics
+import Data.SBV.Control.Utils(SMTValue)
 
 -- | Form the symbolic conjunction of a given list of boolean conditions. Useful in expressing
 -- problems with constraints, like the following:
@@ -298,10 +286,11 @@ solve = return . bAnd
 -- | Check whether the given solver is installed and is ready to go. This call does a
 -- simple call to the solver to ensure all is well.
 sbvCheckSolverInstallation :: SMTConfig -> IO Bool
-sbvCheckSolverInstallation cfg = do ThmResult r <- proveWith cfg $ \x -> (x+x) .== ((x*2) :: SWord8)
-                                    case r of
-                                      Unsatisfiable{} -> return True
-                                      _               -> return False
+sbvCheckSolverInstallation cfg = check `C.catch` (\(_ :: C.SomeException) -> return False)
+  where check = do ThmResult r <- proveWith cfg $ \x -> (x+x) .== ((x*2) :: SWord8)
+                   case r of
+                     Unsatisfiable{} -> return True
+                     _               -> return False
 
 -- | The default configs corresponding to supported SMT solvers
 defaultSolverConfig :: Solver -> SMTConfig
@@ -315,44 +304,6 @@ defaultSolverConfig ABC       = abc
 -- | Return the known available solver configs, installed on your machine.
 sbvAvailableSolvers :: IO [SMTConfig]
 sbvAvailableSolvers = filterM sbvCheckSolverInstallation (map defaultSolverConfig [minBound .. maxBound])
-
-sbvWithAny :: [SMTConfig] -> (SMTConfig -> a -> IO b) -> a -> IO (Solver, b)
-sbvWithAny []      _    _ = error "SBV.withAny: No solvers given!"
-sbvWithAny solvers what a = snd `fmap` (mapM try solvers >>= waitAnyCancel)
-   where try s = async $ what s a >>= \r -> return (name (solver s), r)
-
-sbvWithAll :: [SMTConfig] -> (SMTConfig -> a -> IO b) -> a -> IO [(Solver, b)]
-sbvWithAll solvers what a = mapM try solvers >>= (unsafeInterleaveIO . go)
-   where try s = async $ what s a >>= \r -> return (name (solver s), r)
-         go []  = return []
-         go as  = do (d, r) <- waitAny as
-                     -- The following filter works because the Eq instance on Async
-                     -- checks the thread-id; so we know that we're removing the
-                     -- correct solver from the list. This also allows for
-                     -- running the same-solver (with different options), since
-                     -- they will get different thread-ids.
-                     rs <- unsafeInterleaveIO $ go (filter (/= d) as)
-                     return (r : rs)
-
--- | Prove a property with multiple solvers, running them in separate threads. The
--- results will be returned in the order produced.
-proveWithAll :: Provable a => [SMTConfig] -> a -> IO [(Solver, ThmResult)]
-proveWithAll  = (`sbvWithAll` proveWith)
-
--- | Prove a property with multiple solvers, running them in separate threads. Only
--- the result of the first one to finish will be returned, remaining threads will be killed.
-proveWithAny :: Provable a => [SMTConfig] -> a -> IO (Solver, ThmResult)
-proveWithAny  = (`sbvWithAny` proveWith)
-
--- | Find a satisfying assignment to a property with multiple solvers, running them in separate threads. The
--- results will be returned in the order produced.
-satWithAll :: Provable a => [SMTConfig] -> a -> IO [(Solver, SatResult)]
-satWithAll = (`sbvWithAll` satWith)
-
--- | Find a satisfying assignment to a property with multiple solvers, running them in separate threads. Only
--- the result of the first one to finish will be returned, remaining threads will be killed.
-satWithAny :: Provable a => [SMTConfig] -> a -> IO (Solver, SatResult)
-satWithAny    = (`sbvWithAny` satWith)
 
 -- If we get a program producing nothing (i.e., Symbolic ()), pretend it simply returns True.
 -- This is useful since min/max calls and constraints will provide the context
@@ -410,6 +361,21 @@ instance {-# OVERLAPPABLE #-}
 instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> z) where
   k === l = prove $ \a b c d e f g -> k (a, b, c, d, e, f, g) .== l (a, b, c, d, e, f, g)
 
+-- | Make an enumeration a symbolic type.
+mkSymbolicEnumeration :: TH.Name -> TH.Q [TH.Dec]
+mkSymbolicEnumeration typeName = do
+    let typeCon = TH.conT typeName
+    [d| deriving instance Eq       $(typeCon)
+        deriving instance Show     $(typeCon)
+        deriving instance Ord      $(typeCon)
+        deriving instance Read     $(typeCon)
+        deriving instance Data     $(typeCon)
+        deriving instance SymWord  $(typeCon)
+        deriving instance HasKind  $(typeCon)
+        deriving instance SMTValue $(typeCon)
+        deriving instance SatModel $(typeCon)
+      |]
+
 -- Haddock section documentation
 {- $progIntro
 The SBV library is really two things:
@@ -431,6 +397,15 @@ particular, any Haskell program you build out of symbolic components is fully co
 executable within Haskell, without the need for any custom interpreters. (They are truly
 Haskell programs, not AST's built out of pieces of syntax.) This provides for an integrated
 feel of the system, one of the original design goals for SBV.
+
+= Incremental mode: Queries
+
+SBV provides a wide variety of ways to utilize SMT-solvers, without requiring the user to
+deal with the solvers themselves. While this mode is convenient, advanced users might need
+access to the underlying solver, using the SMTLib language. For such use cases, SBV allows
+users to have an interactive session: The user can issue commands to the solver, inspect
+the values/results, and formulate new constraints. This advanced feature is available through
+the "Data.SBV.Control" module, where most SMTLib features are made available via a typed-API.
 -}
 
 {- $proveIntro
@@ -484,8 +459,8 @@ We can use 'safe' to statically see if such a violation is possible before we us
 
 >>> safe (sub :: SInt8 -> SInt8 -> SInt8)
 [sub: x >= y must hold!: Violated. Model:
-  s0 = -128 :: Int8
-  s1 = -127 :: Int8]
+  s0 = 30 :: Int8
+  s1 = 32 :: Int8]
 
 What happens if we make sure to arrange for this invariant? Consider this version:
 
@@ -505,13 +480,6 @@ by SBV to print a diagnostic info to pinpoint the failure.
 Also see "Data.SBV.Examples.Misc.NoDiv0" for the classic div-by-zero example.
 -}
 
-
-{- $tacticIntro
-In certain cases, the prove/sat calls can benefit from user guidance, in terms of tactics. From a semantic view,
-a tactic has no effect on the meaning of a predicate. It is merely guidance for SBV to guide the proof. It is
-also used for executing cases in parallel ('ParallelCase'), or picking the logic to use ('UseLogic'), or
-specifying a timeout ('StopAfter'). For most users, default values of these should suffice.
--}
 
 {- $optiIntro
   SBV can optimize metric functions, i.e., those that generate both bounded 'SIntN', 'SWordN', and unbounded 'SInteger'
@@ -539,56 +507,51 @@ specifying a timeout ('StopAfter'). For most users, default values of these shou
 
   Here's an optimization example in action:
 
-  >>> optimize $ \x y -> minimize "goal" (x+2*(y::SInteger))
+  >>> optimize Lexicographic $ \x y -> minimize "goal" (x+2*(y::SInteger))
   Optimal in an extension field:
     goal = -oo :: Integer
 
+  We will describe the role of the constructor 'Lexicographic' shortly.
+
   Of course, this becomes more useful when the result is not in an extension field:
 
-  @
-      optimize $ do x <- sInteger "x"
-                    y <- sInteger "y"
-
-                    constrain $ x .> 0
-                    constrain $ x .< 6
-                    constrain $ y .> 2
-                    constrain $ y .< 12
-
-                    minimize "goal" (x+2*(y::SInteger))
-  @
-
-  This will produce:
-
-  @
-  Optimal model:
-    x    = 1 :: Integer
-    y    = 3 :: Integer
-    goal = 7 :: Integer
-   @
+>>> :{
+    optimize Lexicographic $ do
+                  x <- sInteger "x"
+                  y <- sInteger "y"
+                  constrain $ x .> 0
+                  constrain $ x .< 6
+                  constrain $ y .> 2
+                  constrain $ y .< 12
+                  minimize "goal" $ x + 2 * y
+    :}
+Optimal model:
+  x    = 1 :: Integer
+  y    = 3 :: Integer
+  goal = 7 :: Integer
 
   As usual, the programmatic API can be used to extract the values of objectives and model-values ('getModelObjectives',
-  'getModel', etc.) to access these values and program with them further.
+  'getModelAssignment', etc.) to access these values and program with them further.
 
 == Multiple optimization goals
 
   Multiple goals can be specified, using the same syntax. In this case, the user gets to pick what style of
-  optimization to perform:
+  optimization to perform, by passing the relevant 'OptimizeStyle' as the first argument to 'optimize'.
 
-    * The default is lexicographic. That is, solver will optimize the goals in the given order, optimizing
-      the latter ones under the model that optimizes the previous ones. This is the default behavior, but
-      can also be explicitly specified by:
+    * ['Lexicographic']. The solver will optimize the goals in the given order, optimizing
+      the latter ones under the model that optimizes the previous ones.
 
-       @ 'tactic' $ 'OptimizePriority' 'Lexicographic' @
+    * ['Independent']. The solver will optimize the goals independently of each other. In this case the user will
+      be presented a model for each goal given.
 
-    * Goals can also be independently optimized. In this case the user will be presented a model for each
-      goal given. To enable this, use the tactic:
+    * ['Pareto']. Finally, the user can query for pareto-fronts. A pareto front is an model such that no goal can be made
+      "better" without making some other goal "worse."
 
-       @ 'tactic' $ 'OptimizePriority' 'Independent' @
-
-    * Finally, the user can query for pareto-fronts. A pareto front is an model such that no goal can be made
-      "better" without making some other goal "worse." To enable this style, use:
-
-       @ 'tactic' $ 'OptimizePriority' 'Pareto' @
+      The optional number argument to 'Pareto' specifies the maximum number of pareto-fronts the user is asking
+      to get. If 'Nothing', SBV will query for all pareto-fronts. Note that pareto-fronts can be infinite
+      in number, so if 'Nothing' is used, there is a potential for infinitely waiting for the SBV-solver interaction
+      to finish. (If you suspect this might be the case, run in 'verbose' mode to see the interaction and
+      put a limiting factor appropriately.)
 
 == Soft Assertions
 
@@ -764,46 +727,59 @@ Also note that this semantics imply that test case generation ('genTest') and qu
 can take arbitrarily long in the presence of constraints, if the random input values generated
 rarely satisfy the constraints. (As an extreme case, consider @'constrain' 'false'@.)
 
-A probabilistic constraint (see 'pConstrain') attaches a probability threshold for the
-constraint to be considered. For instance:
-
-  @ 'pConstrain' 0.8 c @
-
-will make sure that the condition @c@ is satisfied 80% of the time (and correspondingly, falsified 20%
-of the time), in expectation. This variant is useful for 'genTest' and 'quickCheck' functions, where we
-want to filter the test cases according to some probability distribution, to make sure that the test-vectors
-are drawn from interesting subsets of the input space. For instance, if we were to generate 100 test cases
-with the above constraint, we'd expect about 80 of them to satisfy the condition @c@, while about 20 of them
-will fail it.
-
-The following properties hold:
-
-  @
-    'constrain'      = 'pConstrain' 1
-    'pConstrain' t c = 'pConstrain' (1-t) (not c)
-  @
-
-Note that while 'constrain' can be used freely, 'pConstrain' is only allowed in the contexts of
-'genTest' or 'quickCheck'. Calls to 'pConstrain' in a prove/sat call will be rejected as SBV does not
-deal with probabilistic constraints when it comes to satisfiability and proofs.
-Also, both 'constrain' and 'pConstrain' calls during code-generation will also be rejected, for similar reasons.
-
 === Named constraints and unsat cores
 
 Constraints can be given names:
 
   @ 'namedConstraint' "a is at least 5" $ a .>= 5@
 
-Such constraints are useful when used in conjunction with 'getUnsatCore', and 'extractUnsatCore' features,
-where the backend solver can be queried to obtain an unsat core in case the constraints are unsatisfiable:
+Such constraints are useful when used in conjunction with 'getUnsatCore' function
+where the backend solver can be queried to obtain an unsat core in case the constraints are unsatisfiable.
+This feature is enabled by the following tactic:
 
-   @ satWith z3{getUnsatCore=True} $ do ... @
+   @ tactic $ SetOptions [ProduceUnsatCores True] @
 
 See "Data.SBV.Examples.Misc.UnsatCore" for an example use case.
 
 === Constraint vacuity
 
-SBV does not check that a given constraints is not vacuous. That is, that it can never be satisfied. This is usually
+When adding constraints, one has to be careful about
+making sure they are not inconsistent. The function 'isVacuous' can be use for this purpose.
+Here is an example. Consider the following predicate:
+
+    >>> let pred = do { x <- free "x"; constrain $ x .< x; return $ x .>= (5 :: SWord8) }
+
+This predicate asserts that all 8-bit values are larger than 5, subject to the constraint that the
+values considered satisfy @x .< x@, i.e., they are less than themselves. Since there are no values that
+satisfy this constraint, the proof will pass vacuously:
+
+    >>> prove pred
+    Q.E.D.
+
+We can use 'isVacuous' to make sure to see that the pass was vacuous:
+
+    >>> isVacuous pred
+    True
+
+While the above example is trivial, things can get complicated if there are multiple constraints with
+non-straightforward relations; so if constraints are used one should make sure to check the predicate
+is not vacuously true. Here's an example that is not vacuous:
+
+     >>> let pred' = do { x <- free "x"; constrain $ x .> 6; return $ x .>= (5 :: SWord8) }
+
+This time the proof passes as expected:
+
+     >>> prove pred'
+     Q.E.D.
+
+And the proof is not vacuous:
+
+     >>> isVacuous pred'
+     False
+
+=== Checking for vacuity
+
+As we discussed SBV does not check that a given constraints is not vacuous. That is, that it can never be satisfied. This is usually
 the right behavior, since checking vacuity can be costly. The functions 'isVacuous' and 'isVacuousWith' should be used
 to explicitly check for constraint vacuity if desired. Alternatively, the tactic:
 
@@ -824,7 +800,9 @@ following example demonstrates:
 (Note that you'll also need to use the language pragmas @DeriveDataTypeable@, @DeriveAnyClass@, and import @Data.Generics@ for the above to work.) 
 
 This is all it takes to introduce 'B' as an uninterpreted sort in SBV, which makes the type @SBV B@ automagically become available as the type
-of symbolic values that ranges over 'B' values. Note that the @()@ argument is important to distinguish it from enumerations.
+of symbolic values that ranges over 'B' values. Note that the @()@ argument is important to distinguish it from enumerations, which will be
+translated to proper SMT data-types.
+
 
 Uninterpreted functions over both uninterpreted and regular sorts can be declared using the facilities introduced by
 the 'Uninterpreted' class.
@@ -834,15 +812,24 @@ the 'Uninterpreted' class.
 If the uninterpreted sort definition takes the form of an enumeration (i.e., a simple data type with all nullary constructors), then SBV will actually
 translate that as just such a data-type to SMT-Lib, and will use the constructors as the inhabitants of the said sort. A simple example is:
 
-  @
-    data X = A | B | C deriving (Eq, Ord, Show, Read, Data, SymWord, HasKind, SatModel)
-  @
+@
+    data X = A | B | C
+    mkSymbolicEnumeration ''X
+@
+
+Note the magic incantation @mkSymbolicEnumeration ''X@. For this to work, you need to have the following
+options turned on:
+
+>   LANGUAGE TemplateHaskell
+>   LANGUAGE StandaloneDeriving
+>   LANGUAGE DeriveDataTypeable
+>   LANGUAGE DeriveAnyClass
 
 Now, the user can define
 
-  @
+@
     type SX = SBV X
-  @
+@
 
 and treat @SX@ as a regular symbolic type ranging over the values @A@, @B@, and @C@. Such values can be compared for equality, and with the usual
 other comparison operators, such as @.==@, @./=@, @.>@, @.>=@, @<@, and @<=@.
@@ -850,13 +837,13 @@ other comparison operators, such as @.==@, @./=@, @.>@, @.>=@, @<@, and @<=@.
 Note that in this latter case the type is no longer uninterpreted, but is properly represented as a simple enumeration of the said elements. A simple
 query would look like:
 
-   @
+@
      allSat $ \x -> x .== (x :: SX)
-   @
+@
 
 which would list all three elements of this domain as satisfying solutions.
 
-   @
+@
      Solution #1:
        s0 = A :: X
      Solution #2:
@@ -864,10 +851,12 @@ which would list all three elements of this domain as satisfying solutions.
      Solution #3:
        s0 = C :: X
      Found 3 different solutions.
-   @
+@
 
-Note that the result is properly typed as @X@ elements; these are not mere strings. So, in a 'getModel' scenario, the user can recover actual
+Note that the result is properly typed as @X@ elements; these are not mere strings. So, in a 'getModelAssignment' scenario, the user can recover actual
 elements of the domain and program further with those values as usual.
+
+See "Data.SBV.Examples.Misc.Enumerate" for an extended example on how to use symbolic enumerations.
 -}
 
 {- $noteOnNestedQuantifiers

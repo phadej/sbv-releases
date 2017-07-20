@@ -13,7 +13,7 @@
 
 module Data.SBV.Internals (
   -- * Running symbolic programs /manually/
-    Result(..), SBVRunMode(..)
+    Result(..), SBVRunMode(..), IStage(..)
 
   -- * Solver capabilities
   , SolverCapabilities(..)
@@ -22,10 +22,7 @@ module Data.SBV.Internals (
   , module Data.SBV.Core.Data
 
   -- * Operations useful for instantiating SBV type classes
-  , genLiteral, genFromCW, genMkSymVar, checkAndConvert, genParse, showModel, SMTModel(..), liftQRem, liftDMod
-
-  -- * Getting SMT-Lib output (for offline analysis)
-  , compileToSMTLib, generateSMTBenchmarks
+  , genLiteral, genFromCW, CW(..), genMkSymVar, checkAndConvert, genParse, showModel, SMTModel(..), liftQRem, liftDMod
 
   -- * Compilation to C, extras
   , compileToC', compileToCLib'
@@ -35,20 +32,62 @@ module Data.SBV.Internals (
 
   -- * Various math utilities around floats
   , module Data.SBV.Utils.Numeric
+
+  -- * Pretty number printing
+  , module Data.SBV.Utils.PrettyNum
+
+  -- * Timing computations
+  , module Data.SBV.Utils.TDiff
+
+  -- * Coordinating with the solver
+  -- $coordinateSolverInfo
+  , sendStringToSolver, sendRequestToSolver, retrieveResponseFromSolver
+
   ) where
 
 import Data.SBV.Core.Data
-import Data.SBV.Core.Model      (genLiteral, genFromCW, genMkSymVar)
+import Data.SBV.Core.Model      (genLiteral, genFromCW, genMkSymVar, liftQRem, liftDMod)
+import Data.SBV.Core.Symbolic   (IStage(..))
 import Data.SBV.Core.Splittable (checkAndConvert)
-import Data.SBV.Core.Model      (liftQRem, liftDMod)
 
 import Data.SBV.Compilers.C       (compileToC', compileToCLib')
 import Data.SBV.Compilers.CodeGen
 
-import Data.SBV.Provers.Prover (compileToSMTLib, generateSMTBenchmarks)
-
 import Data.SBV.SMT.SMT (genParse, showModel)
 
 import Data.SBV.Utils.Numeric
+
+import Data.SBV.Utils.TDiff
+import Data.SBV.Utils.PrettyNum
+
+import qualified Data.SBV.Control.Utils as Query
+
+-- | Send an arbitrary string to the solver in a query.
+-- Note that this is inherently dangerous as it can put the solver in an arbitrary
+-- state and confuse SBV. If you use this feature, you are on your own!
+sendStringToSolver :: String -> Query ()
+sendStringToSolver = Query.send False
+
+-- | Retrieve multiple responses from the solver, until it responds with a user given
+-- tag that we shall arrange for internally. The optional timeout is in milliseconds.
+-- If the time-out is exceeded, then we will raise an error. Note that this is inherently
+-- dangerous as it can put the solver in an arbitrary state and confuse SBV. If you use this
+-- feature, you are on your own!
+retrieveResponseFromSolver :: String -> Maybe Int -> Query [String]
+retrieveResponseFromSolver = Query.retrieveResponse
+
+-- | Send an arbitrary string to the solver in a query, and return a response.
+-- Note that this is inherently dangerous as it can put the solver in an arbitrary
+-- state and confuse SBV.
+sendRequestToSolver :: String -> Query String
+sendRequestToSolver = Query.ask
+
+{- $coordinateSolverInfo
+In rare cases it might be necessary to send an arbitrary string down to the solver. Needless to say, this
+should be avoided if at all possible. Users should prefer the provided API. If you do find yourself
+needing 'send' and 'ask' directly, please get in touch to see if SBV can support a typed API for your use case.
+Similarly, the function 'retrieveResponseFromSolver' might occasionally be necessary to clean-up the communication
+buffer. We would like to hear if you do need these functions regularly so we can provide better support.
+-}
 
 {-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}

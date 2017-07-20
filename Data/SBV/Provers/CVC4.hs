@@ -23,23 +23,18 @@ cvc4 :: SMTSolver
 cvc4 = SMTSolver {
            name         = CVC4
          , executable   = "cvc4"
-         , options      = ["--lang", "smt"]
-         , engine       = standardEngine "SBV_CVC4" "SBV_CVC4_OPTIONS" id addTimeOut standardModel
+         , options      = const ["--lang", "smt", "--incremental", "--interactive", "--no-interactive-prompt"]
+         , engine       = standardEngine "SBV_CVC4" "SBV_CVC4_OPTIONS"
          , capabilities = SolverCapabilities {
-                                capSolverName              = "CVC4"
-                              , mbDefaultLogic             = const (Just "ALL_SUPPORTED")  -- CVC4 is not happy if we don't set the logic, so fall-back to this if necessary
-                              , supportsDefineFun          = True
-                              , supportsProduceModels      = True
-                              , supportsQuantifiers        = True
+                                supportsQuantifiers        = True
                               , supportsUninterpretedSorts = True
                               , supportsUnboundedInts      = True
                               , supportsReals              = True  -- Not quite the same capability as Z3; but works more or less..
-                              , supportsFloats             = False
-                              , supportsDoubles            = False
+                              , supportsApproxReals        = False
+                              , supportsIEEE754            = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
-                              , supportsUnsatCores         = True
+                              , supportsCustomQueries      = True
+                              , supportsGlobalDecls        = True
                               }
          }
- where addTimeOut o i | i < 0 = error $ "CVC4: Timeout value must be non-negative, received: " ++ show i
-                      | True  = o ++ ["--tlimit=" ++ show i ++ "000"]  -- SBV takes seconds, CVC4 wants milli-seconds

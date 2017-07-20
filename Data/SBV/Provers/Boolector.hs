@@ -21,23 +21,18 @@ boolector :: SMTSolver
 boolector = SMTSolver {
            name         = Boolector
          , executable   = "boolector"
-         , options      = ["--smt2", "--smt2-model", "--no-exit-codes"]
-         , engine       = standardEngine "SBV_BOOLECTOR" "SBV_BOOLECTOR_OPTIONS" id addTimeOut standardModel
+         , options      = const ["--smt2", "--smt2-model", "--no-exit-codes", "--incremental"]
+         , engine       = standardEngine "SBV_BOOLECTOR" "SBV_BOOLECTOR_OPTIONS"
          , capabilities = SolverCapabilities {
-                                capSolverName              = "Boolector"
-                              , mbDefaultLogic             = const Nothing
-                              , supportsDefineFun          = False
-                              , supportsProduceModels      = True
-                              , supportsQuantifiers        = False
+                                supportsQuantifiers        = False
                               , supportsUninterpretedSorts = False
                               , supportsUnboundedInts      = False
                               , supportsReals              = False
-                              , supportsFloats             = False
-                              , supportsDoubles            = False
+                              , supportsApproxReals        = False
+                              , supportsIEEE754            = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
-                              , supportsUnsatCores         = False
+                              , supportsCustomQueries      = True
+                              , supportsGlobalDecls        = False
                               }
          }
- where addTimeOut o i | i < 0 = error $ "Boolector: Timeout value must be non-negative, received: " ++ show i
-                      | True  = o ++ ["-t=" ++ show i]

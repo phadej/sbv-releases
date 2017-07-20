@@ -23,22 +23,18 @@ abc :: SMTSolver
 abc = SMTSolver {
            name         = ABC
          , executable   = "abc"
-         , options      = ["-S", "%blast; &sweep -C 5000; &syn4; &cec -s -m -C 2000"]
-         , engine       = standardEngine "SBV_ABC" "SBV_ABC_OPTIONS" id addTimeOut standardModel
+         , options      = const ["-S", "%blast; &sweep -C 5000; &syn4; &cec -s -m -C 2000"]
+         , engine       = standardEngine "SBV_ABC" "SBV_ABC_OPTIONS"
          , capabilities = SolverCapabilities {
-                                capSolverName              = "ABC"
-                              , mbDefaultLogic             = const Nothing
-                              , supportsDefineFun          = True
-                              , supportsProduceModels      = True
-                              , supportsQuantifiers        = False
+                                supportsQuantifiers        = False
                               , supportsUninterpretedSorts = False
                               , supportsUnboundedInts      = False
                               , supportsReals              = False
-                              , supportsFloats             = False
-                              , supportsDoubles            = False
+                              , supportsApproxReals        = False
+                              , supportsIEEE754            = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
-                              , supportsUnsatCores         = False
+                              , supportsCustomQueries      = False
+                              , supportsGlobalDecls        = False
                               }
          }
-  where addTimeOut _ _ = error "ABC: Timeout values are not supported"

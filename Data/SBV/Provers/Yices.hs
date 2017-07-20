@@ -23,26 +23,18 @@ yices :: SMTSolver
 yices = SMTSolver {
            name         = Yices
          , executable   = "yices-smt2"
-         , options      = []
-         , engine       = standardEngine "SBV_YICES" "SBV_YICES_OPTIONS" id addTimeOut standardModel
+         , options      = const ["--incremental"]
+         , engine       = standardEngine "SBV_YICES" "SBV_YICES_OPTIONS"
          , capabilities = SolverCapabilities {
-                                capSolverName              = "Yices"
-                              , mbDefaultLogic             = logic
-                              , supportsDefineFun          = True
-                              , supportsProduceModels      = True
-                              , supportsQuantifiers        = False
+                                supportsQuantifiers        = False
                               , supportsUninterpretedSorts = True
                               , supportsUnboundedInts      = True
                               , supportsReals              = True
-                              , supportsFloats             = False
-                              , supportsDoubles            = False
+                              , supportsApproxReals        = False
+                              , supportsIEEE754            = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
-                              , supportsUnsatCores         = False
+                              , supportsCustomQueries      = True
+                              , supportsGlobalDecls        = False
                               }
          }
-  where addTimeOut _ _ = error "Yices: Timeout values are not supported by Yices"
-        -- Yices doesn't like it if we don't set the logic; so pick one and hope for the best
-        logic hasReals
-          | hasReals   = Just "QF_UFLRA"
-          | True       = Just "QF_AUFLIA"

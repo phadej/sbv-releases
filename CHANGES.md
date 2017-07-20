@@ -1,7 +1,125 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 6.1, 2017-05-26
+* Latest Hackage released version: 7.0, 2017-07-19
+
+### Version 7.0, Released 2017-07-19
+
+  * NB. SBV now requires GHC >= 8.0.1 to compile. If you are stuck with an older
+    version of GHC, please get in contact.
+
+  * This is a major rewrite of the internals of SBV, and is a backwards compatibility
+    breaking release. While we kept the top-level and most commonly used APIs the
+    same (both types and semantics), much of the internals and advanced features
+    have been rewritten to move SBV to a new model of execution: SBV no longer
+    runs your program symbolically and calls the SMT solver afterwards. Instead,
+    the interaction with the solver happens interleaved with the actual program execution.
+    The motivation is to allow the end-users to send/receive arbitrary SMTLib
+    commands to the solver, instead of the cooked-up recipes. SBV still provides
+    all the recipes for its existing functionality, but users can now interact
+    with the solver directly. See the module "Data.SBV.Control" for the main
+    API, together with the new functions 'runSMT' and 'runSMTWith'.
+
+  * The 'Tactic' based solver control (introduced in v6.0) is completely removed, and
+    is replaced by the above described mechanism which gives the user a lot of
+    flexibility instead. Use queries for anything that required a tactic before.
+
+  * The call 'allSat' has been reworked so it performs only one call to the underlying
+    solver and repeatedly issues check-sat to get new assignments. This differs from the
+    previous implementation where we spun off a new call to the executable for each
+    successive model. While this is more efficient and much more preferable, it also
+    means that the results are no longer lazily computed: If there is an infinite number
+    of solutions (or a very large number), you can no longer merely do a 'take' on the result.
+    While this is inconvenient, it fits better with our new methodology of query based
+    interaction. Note that the old behavior can be modeled, if required, by the user; by explicitly
+    interleaving the calls to 'sat.' Furthermore, we now provide a new configuration
+    parameter named 'allSatMaxModelCount' which can be used to limit the number models we
+    seek. The default is to get all models, however long that might take.
+
+  * The Bridge modules (`Data.SBV.Bridge.Yices`, `Data.SBV.Bridge.Z3`) etc. are
+    all removed. The bridge functionality was hardly used, where different solvers
+    were much easier to access using the `with` functions. (Such as `proveWith`,
+    `satWith` etc.) This should result in no loss of functionality, except for
+    occasional explicit mention of solvers in your code, if you were using
+    bridge modules to start with.
+
+  * Optimization routines have been changed to take a priority as an argument, (i.e.,
+    Lexicographic, Independent, etc.). The old method of supplying the priority
+    via tactics is no longer supported.
+
+  * Pareto-front extraction has been reworked, reflecting the changes in Z3 for
+    this functionality. Since pareto-fronts can be infinite in number, the user
+    is now allowed to specify a "limit" to stop the solver from querying ad
+    infinitum. If the limit is not specified, then sbv will query till it
+    exhausts all the pareto-fronts, or till it runs out of memory in case there
+    is an infinite number of them.
+
+  * Extraction of unsat-cores has changed. To use this feature, we now use
+    custom queries. See "Data.SBV.Examples.Misc.UnsatCore" for an example.
+    Old style of unsat-core extraction is no longer supported.
+
+  * The 'timing' option of SMTConfig has been reworked. Since we now start the
+    solver immediately, it is no longer sensible to distinguish between "SBV" time,
+    "translation" time etc. Instead, we print one simple "Elapsed" time if requested.
+    If you need a detailed timing analysis, use the new 'transcript' option to
+    SMTConfig: It will produce a file with precise timing intervals for each
+    command issued to help you figure out how long each step took.
+
+  * The following functions have been reworked, so they now also return
+    the time-elapsed for each solver:
+
+        satWithAll   :: Provable a => [SMTConfig] -> a -> IO [(Solver, NominalDiffTime, SatResult)]
+        satWithAny   :: Provable a => [SMTConfig] -> a -> IO  (Solver, NominalDiffTime, SatResult)
+        proveWithAll :: Provable a => [SMTConfig] -> a -> IO [(Solver, NominalDiffTime, ThmResult)]
+        proveWithAny :: Provable a => [SMTConfig] -> a -> IO  (Solver, NominalDiffTime, ThmResult)
+
+  * Changed the way `satWithAny` and `proveWithAny` works. Previously, these
+    two functions ran multiple solvers, and took the result of the first
+    one to finish, killing all the others. In addition, they *waitied* for
+    the still-running solvers to finish cleaning-up, as sending a 'ThreadKilled'
+    is usually not instantaneous. Furthermore, a solver might simply take
+    its time! We now send the interrupt but do not wait for the process to
+    actually terminate. In rare occasions this could create zombie processes
+    if you use a solver that is not cooperating, but we have seen not insignificant
+    speed-ups for regular usage due to ThreadKilled wait times being rather long.
+
+  * Configuration option `useLogic` is removed. If required, this should
+    be done by a call to the new 'setLogic' function:
+
+        setLogic QF_NRA
+
+  * Configuration option `timeOut` is removed. This was rarely used, and the solver
+    support was rather sketchy. We now have a better mechanism in the query mode
+    for timeouts, where it really matters. Please get in touch if you relied on
+    this old mechanism. Correspondingly, the functions `isTheorem`, `isSatisfiable`,
+    `isTheoremWith` and `isSatisfiableWith` had their time-out arguments removed
+    and return types simplified.
+
+  * The function 'isSatisfiableInCurrentPath' is removed. Proper queries should be used
+    for what this function tentatively attempted to provide. Please get in touch
+    if you relied on this function and want to restructure your code to use proper queries.
+
+  * Configuration option 'smtFile' is removed. Instead use 'transcript' now, which
+    provides a much more detailed output that is directly loadable to a solver
+    and has an accurate account of precisely what SBV sent.
+
+  * Enumerations are now much easier to use symbolically, with the addition
+    of the template-haskell splice mkSymbolicEnumeration. See "Data/SBV/Examples/Misc/Enumerate.hs"
+    for an example.
+
+  * Thanks to Kanishka Azimi, our external test suite is now run by
+    Tasty! Kanishka modernized the test suite, and reworked the
+    infrastructure that was showing its age. Thanks!
+
+  * The function pConstrain and the Data.SBV.Tools.ExpectedValue are
+    removed. Probabilistic constraints were rarely used, and if
+    necessary can be implemented outside of SBV. If you were using
+    this feature, please get in contact.
+
+  * SArray and SFunArray has been reworked, and they no longer take
+    and initial value. Similarly resetArray has been removed, as it
+    did not really do what it advertised. If an initial value is needed,
+    it is best to code this explicitly in your model.
 
 ### Version 6.1, 2017-05-26
 
@@ -54,6 +172,9 @@
     Currently, only Z3 supports pseudo-booleans directly. For all other solvers,
     SBV will translate these to equivalent terms that do not require special
     functions.
+
+  * The function getModel has been renamed to getAssignment. (The former name is
+    now available as a query command.)
 
   * Export `SolverCapabilities` from `Data.SBV.Internals`, in case users want access.
 

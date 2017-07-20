@@ -1,0 +1,18 @@
+INPUTS
+  s0 :: SWord8, aliasing "y"
+CONSTANTS
+  s_2 = False :: Bool
+  s_1 = True :: Bool
+  s1 = 9 :: Word8
+TABLES
+ARRAYS
+UNINTERPRETED CONSTANTS
+USER GIVEN CODE SEGMENTS
+AXIOMS
+DEFINE
+  s2 :: SWord8 = s0 * s0
+  s3 :: SWord8 = s1 - s2
+CONSTRAINTS
+ASSERTIONS
+OUTPUTS
+  s3

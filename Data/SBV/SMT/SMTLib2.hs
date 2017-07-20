@@ -1,4 +1,4 @@
-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
 -- |
 -- Module      :  Data.SBV.SMT.SMTLib2
 -- Copyright   :  (c) Levent Erkok
@@ -9,15 +9,11 @@
 -- Conversion of symbolic programs to SMTLib format, Using v2 of the standard
 -----------------------------------------------------------------------------
 {-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE TupleSections #-}
 
-module Data.SBV.SMT.SMTLib2(cvt, addNonEqConstraints) where
+module Data.SBV.SMT.SMTLib2(cvt, cvtInc) where
 
-import Data.Bits     (bit)
-import Data.Function (on)
-import Data.Ord      (comparing)
-import Data.List     (intercalate, partition, groupBy, sortBy)
-import Data.Maybe    (mapMaybe)
+import Data.Bits  (bit)
+import Data.List  (intercalate, partition)
 
 import qualified Data.Foldable as F (toList)
 import qualified Data.Map      as M
@@ -25,77 +21,17 @@ import qualified Data.IntMap   as IM
 import qualified Data.Set      as Set
 
 import Data.SBV.Core.Data
+import Data.SBV.SMT.Utils
+import Data.SBV.Control.Types
 
 import Data.SBV.Utils.PrettyNum (smtRoundingMode, cwToSMTLib)
-
--- | Add constraints to generate /new/ models. This function is used to query the SMT-solver, while
--- disallowing a previous model.
-addNonEqConstraints :: RoundingMode -> [(Quantifier, NamedSymVar)] -> [[(String, CW)]] -> Maybe [String]
-addNonEqConstraints rm qinps allNonEqConstraints
-  | null allNonEqConstraints
-  = Just []
-  | null refutedModel
-  = Nothing
-  | True
-  = Just $ "; --- refuted-models ---" : refutedModel
- where refutedModel = concatMap (nonEqs rm . map intName) nonEqConstraints
-       aliasTable   = map (\(_, (x, y)) -> (y, x)) qinps
-       intName (s, c)
-          | Just sw <- s `lookup` aliasTable = (show sw, c)
-          | True                             = (s, c)
-       -- with existentials, we only add top-level existentials to the refuted-models list
-       nonEqConstraints = filter (not . null) $ map (filter (\(s, _) -> s `elem` topUnivs)) allNonEqConstraints
-       topUnivs = [s | (_, (_, s)) <- takeWhile (\p -> fst p == EX) qinps]
-
-nonEqs :: RoundingMode -> [(String, CW)] -> [String]
-nonEqs rm scs = format $ interp ps ++ disallow (map eqClass uninterpClasses)
-  where isFree (KUserSort _ (Left _)) = True
-        isFree _                      = False
-        (ups, ps) = partition (isFree . kindOf . snd) scs
-        format []     =  []
-        format [m]    =  ["(assert " ++ m ++ ")"]
-        format (m:ms) =  ["(assert (or " ++ m]
-                      ++ map ("            " ++) ms
-                      ++ ["        ))"]
-        -- Regular (or interpreted) sorts simply get a constraint that we disallow the current assignment
-        interp = map $ nonEq rm
-        -- Determine the equivalence classes of uninterpreted sorts:
-        uninterpClasses = filter (\l -> length l > 1) -- Only need this class if it has at least two members
-                        . map (map fst)               -- throw away sorts, we only need the names
-                        . groupBy ((==) `on` snd)     -- make sure they belong to the same sort and have the same value
-                        . sortBy (comparing snd)      -- sort them according to their sorts first
-                        $ ups                         -- take the uninterpreted sorts
-        -- Uninterpreted sorts get a constraint that says the equivalence classes as determined by the solver are disallowed:
-        eqClass :: [String] -> String
-        eqClass [] = error "SBV.allSat.nonEqs: Impossible happened, disallow received an empty list"
-        eqClass cs = "(= " ++ unwords cs ++ ")"
-        -- Now, take the conjunction of equivalence classes and assert it's negation:
-        disallow = map $ \ec -> "(not " ++ ec ++ ")"
-
-nonEq :: RoundingMode -> (String, CW) -> String
-nonEq rm (s, c) = "(not (= " ++ s ++ " " ++ cvtCW rm c ++ "))"
 
 tbd :: String -> a
 tbd e = error $ "SBV.SMTLib2: Not-yet-supported: " ++ e
 
 -- | Translate a problem into an SMTLib2 script
-cvt :: Set.Set Kind                 -- ^ kinds used
-    -> Bool                         -- ^ is this a sat problem?
-    -> [String]                     -- ^ extra comments to place on top
-    -> [(Quantifier, NamedSymVar)]  -- ^ inputs
-    -> [Either SW (SW, [SW])]       -- ^ skolemized version inputs
-    -> [(SW, CW)]                   -- ^ constants
-    -> [((Int, Kind, Kind), [SW])]  -- ^ auto-generated tables
-    -> [(Int, ArrayInfo)]           -- ^ user specified arrays
-    -> [(String, SBVType)]          -- ^ uninterpreted functions/constants
-    -> [(String, [String])]         -- ^ user given axioms
-    -> SBVPgm                       -- ^ assignments
-    -> [(Maybe String, SW)]         -- ^ extra constraints
-    -> SW                           -- ^ output variable
-    -> SMTConfig                    -- ^ configuration
-    -> CaseCond                     -- ^ case analysis data
-    -> [String]
-cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm asgnsSeq) cstrs out config caseCond = pgm
+cvt :: SMTLibConverter [String]
+cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm asgnsSeq) cstrs out cfg = pgm
   where hasInteger     = KUnbounded `Set.member` kindInfo
         hasReal        = KReal      `Set.member` kindInfo
         hasFloat       = KFloat     `Set.member` kindInfo
@@ -103,26 +39,36 @@ cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm a
         hasBVs         = not $ null [() | KBounded{} <- Set.toList kindInfo]
         usorts         = [(s, dt) | KUserSort s dt <- Set.toList kindInfo]
         hasNonBVArrays = (not . null) [() | (_, (_, (k1, k2), _)) <- arrs, not (isBounded k1 && isBounded k2)]
-        rm             = roundingMode config
-        solverCaps     = capabilities (solver config)
+        rm             = roundingMode cfg
+        solverCaps     = capabilities (solver cfg)
 
         -- Determining the logic is surprisingly tricky!
         logic
-           | Just l <- useLogic config
+           -- user told us what to do: so just take it:
+           | Just l <- case [l | SetLogic l <- solverSetOptions cfg] of
+                         []  -> Nothing
+                         [l] -> Just l
+                         ls  -> error $ unlines [ ""
+                                                , "*** Only one setOption call to 'SetLogic' is allowed, found: " ++ show (length ls)
+                                                , "***  " ++ unwords (map show ls)
+                                                ]
            = ["(set-logic " ++ show l ++ ") ; NB. User specified."]
-           | hasDouble || hasFloat    -- NB. We don't check for quantifiers here, we probably should..
-           = if hasBVs
-             then ["(set-logic QF_FPBV)"]
-             else ["(set-logic QF_FP)"]
+
+           -- Otherwise, we try to determine the most suitable logic.
+           -- NB. This isn't really fool proof!
+           | hasDouble || hasFloat
+           = if hasInteger || not (null foralls)
+             then ["(set-logic ALL)"]
+             else if hasBVs
+                  then ["(set-logic QF_FPBV)"]
+                  else ["(set-logic QF_FP)"]
            | hasInteger || hasReal || not (null usorts) || hasNonBVArrays
            = let why | hasInteger        = "has unbounded values"
                      | hasReal           = "has algebraic reals"
                      | not (null usorts) = "has user-defined sorts"
                      | hasNonBVArrays    = "has non-bitvector arrays"
                      | True              = "cannot determine the SMTLib-logic to use"
-             in case mbDefaultLogic solverCaps hasReal of
-                  Nothing -> ["; " ++ why ++ ", no logic specified."]
-                  Just l  -> ["(set-logic " ++ l ++ "); " ++ why ++ ", using solver-default logic."]
+             in ["(set-logic ALL) ; "  ++ why ++ ", using catch-all."]
            | True
            = ["(set-logic " ++ qs ++ as ++ ufs ++ "BV)"]
           where qs  | null foralls && null axs = "QF_"  -- axioms are likely to contain quantifiers
@@ -132,24 +78,24 @@ cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm a
                 ufs | null uis && null tbls    = ""     -- we represent tables as UFs
                     | True                     = "UF"
 
-        getModels
-          | supportsProduceModels solverCaps = ["(set-option :produce-models true)"]
-          | True                             = []
+        -- SBV always requires the production of models!
+        getModels   = ["(set-option :produce-models true)"]
 
-        unsatCore
-          | not (getUnsatCore config)     = []
-          | supportsUnsatCores solverCaps = ["(set-option :produce-unsat-cores true)"]
-          | True                          = error $ "SBV: unsat cores are requested, but the backend solver " ++ show (solver config) ++ " doesn't support them!"
+        -- process all other settings we're given
+        userSettings = concatMap opts $ solverSetOptions cfg
+           where opts SetLogic{} = []     -- processed already
+                 opts o          = [setSMTOption o]
 
-        pgm  =  ["; Automatically generated by SBV. Do not edit."]
-             ++ map ("; " ++) comments
-             ++ getModels
-             ++ unsatCore
-             ++ logic
+        settings =  userSettings        -- NB. Make sure this comes first!
+                 ++ getModels
+                 ++ logic
+
+        pgm  =  map ("; " ++) comments
+             ++ settings
              ++ [ "; --- uninterpreted sorts ---" ]
              ++ concatMap declSort usorts
              ++ [ "; --- literal constants ---" ]
-             ++ concatMap declConst consts
+             ++ map (declConst cfg) consts
              ++ [ "; --- skolem constants ---" ]
              ++ [ "(declare-fun " ++ show s ++ " " ++ swFunType ss s ++ ")" ++ userName s | Right (s, ss) <- skolemInps]
              ++ [ "; --- constant tables ---" ]
@@ -169,7 +115,7 @@ cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm a
                 | not (null foralls)
                 ]
 
-             ++ concatMap mkAssign asgns
+             ++ map mkAssign asgns
 
              ++ delayedAsserts delayedEqualities
 
@@ -236,20 +182,9 @@ cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm a
            where finals  = cstrs' ++ maybe [] (\r -> [(Nothing, r)]) mbO
 
                  cstrs' =  [(mbNm, c') | (mbNm, c) <- cstrs, Just c' <- [pos c]]
-                        ++ condAsserts
 
-                 condAsserts = map (Nothing,) $ case caseCond of
-                                                    NoCase         -> []
-                                                    CasePath ss    -> mapMaybe pos ss
-                                                    CaseVac  ss _  -> mapMaybe pos ss
-                                                    CaseCov  ss qq -> mapMaybe pos ss ++ mapMaybe neg qq
-                                                    CstrVac        -> []
-                                                    Opt gs         -> map mkGoal gs
-
-                 mbO | CstrVac     <- caseCond = pos trueSW -- always a SAT call!
-                     | CaseVac _ s <- caseCond = pos s      -- always a SAT call!
-                     | isSat                   = pos out
-                     | True                    = neg out
+                 mbO | isSat = pos out
+                     | True  = neg out
 
                  neg s
                   | s == trueSW  = Just $ cvtSW skolemMap falseSW
@@ -261,11 +196,6 @@ cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm a
                   | s == falseSW = Just $ cvtSW skolemMap falseSW
                   | True         = Just $ cvtSW skolemMap s
 
-                 eq (orig, track) = "(= " ++ cvtSW skolemMap track ++ " " ++ cvtSW skolemMap orig ++ ")"
-                 mkGoal (Minimize   _ ab)   = eq ab
-                 mkGoal (Maximize   _ ab)   = eq ab
-                 mkGoal (AssertSoft _ ab _) = eq ab
-
         skolemMap = M.fromList [(s, ss) | Right (s, ss) <- skolemInps, not (null ss)]
         tableMap  = IM.fromList $ map mkConstTable constTables ++ map mkSkTable skolemTables
           where mkConstTable (((t, _, _), _), _) = (t, "table" ++ show t)
@@ -273,42 +203,64 @@ cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm a
         asgns = F.toList asgnsSeq
 
         mkAssign a
-          | null foralls = mkDef a
-          | True         = [letShift (mkLet a)]
-
-        mkDef (s, SBVApp (Label m) [e]) = emit (s, cvtSW                skolemMap          e) (Just m)
-        mkDef (s, e)                    = emit (s, cvtExp solverCaps rm skolemMap tableMap e) Nothing
+          | null foralls = declDef cfg skolemMap tableMap a
+          | True         = letShift (mkLet a)
 
         mkLet (s, SBVApp (Label m) [e]) = "(let ((" ++ show s ++ " " ++ cvtSW                skolemMap          e ++ ")) ; " ++ m
         mkLet (s, e)                    = "(let ((" ++ show s ++ " " ++ cvtExp solverCaps rm skolemMap tableMap e ++ "))"
 
-        -- does the solver allow define-fun; or do we need declare-fun/assert combo?
-        useDefFun = supportsDefineFun solverCaps
-
-        declConst (s, c) = emit (s, cvtCW rm c) Nothing
-
-        emit (s, def) mbComment
-          | useDefFun = ["(define-fun "   ++ varT ++ " " ++ def ++ ")" ++ cmnt]
-          | True      = [ "(declare-fun " ++ varT ++ ")" ++ cmnt
-                        , "(assert (= "   ++ show s ++ " " ++ def ++ "))"
-                        ]
-          where varT = show s ++ " " ++ swFunType [] s
-                cmnt = maybe "" (" ; " ++) mbComment
-
         userName s = case s `lookup` map snd inputs of
                         Just u  | show s /= u -> " ; tracks user variable " ++ show u
                         _ -> ""
-        -- following sorts are built-in; do not translate them:
-        builtInSort = (`elem` ["RoundingMode"])
-        declSort (s, _)
-          | builtInSort s           = []
-        declSort (s, Left  r ) = ["(declare-sort " ++ s ++ " 0)  ; N.B. Uninterpreted: " ++ r]
-        declSort (s, Right fs) = [ "(declare-datatypes () ((" ++ s ++ " " ++ unwords (map (\c -> "(" ++ c ++ ")") fs) ++ ")))"
-                                 , "(define-fun " ++ s ++ "_constrIndex ((x " ++ s ++ ")) Int"
-                                 ] ++ ["   " ++ body fs (0::Int)] ++ [")"]
-                where body []     _ = ""
-                      body [_]    i = show i
-                      body (c:cs) i = "(ite (= x " ++ c ++ ") " ++ show i ++ " " ++ body cs (i+1) ++ ")"
+
+-- | Declare new sorts
+declSort :: (String, Either String [String]) -> [String]
+declSort (s, _)
+  | s == "RoundingMode" -- built-in-sort; so don't declare.
+  = []
+declSort (s, Left  r ) = ["(declare-sort " ++ s ++ " 0)  ; N.B. Uninterpreted: " ++ r]
+declSort (s, Right fs) = [ "(declare-datatypes () ((" ++ s ++ " " ++ unwords (map (\c -> "(" ++ c ++ ")") fs) ++ ")))"
+                         , "(define-fun " ++ s ++ "_constrIndex ((x " ++ s ++ ")) Int"
+                         ] ++ ["   " ++ body fs (0::Int)] ++ [")"]
+        where body []     _ = ""
+              body [_]    i = show i
+              body (c:cs) i = "(ite (= x " ++ c ++ ") " ++ show i ++ " " ++ body cs (i+1) ++ ")"
+
+-- | Things we do not support in interactive mode, at least for now!
+noInteractive :: [String] -> a
+noInteractive ss = error $ unlines $  ""
+                                   :  "*** Data.SBV: Unsupported interactive/query mode feature."
+                                   :  map ("***  " ++) ss
+                                   ++ ["*** Data.SBV: Please report this as a feature request!"]
+
+-- | Convert in a query context
+cvtInc :: SMTLibIncConverter [String]
+cvtInc inps ks consts (SBVPgm asgnsSeq) cfg =  concatMap declSort                           [(s, dt) | KUserSort s dt <- Set.toList ks]
+                                            ++ map       (declConst cfg)                    consts
+                                            ++ map       declInp                            inps
+                                            ++ map       (declDef   cfg skolemMap tableMap) (F.toList asgnsSeq)
+  where -- NB. The below setting of skolemMap to empty is OK, since we do
+        -- not support queries in the context of skolemized variables
+        skolemMap = M.empty
+        tableMap  = noInteractive ["Programs with constant tabled data"]
+
+        declInp (s, _) = "(declare-fun " ++ show s ++ " () " ++ swType s ++ ")"
+
+declDef :: SMTConfig -> SkolemMap -> TableMap -> (SW, SBVExpr) -> String
+declDef cfg skolemMap tableMap (s, expr) =
+        case expr of
+          SBVApp  (Label m) [e] -> defineFun (s, cvtSW          skolemMap          e) (Just m)
+          e                     -> defineFun (s, cvtExp caps rm skolemMap tableMap e) Nothing
+  where caps = capabilities (solver cfg)
+        rm   = roundingMode cfg
+
+defineFun :: (SW, String) -> Maybe String -> String
+defineFun (s, def) mbComment = "(define-fun "   ++ varT ++ " " ++ def ++ ")" ++ cmnt
+  where varT      = show s ++ " " ++ swFunType [] s
+        cmnt      = maybe "" (" ; " ++) mbComment
+
+declConst :: SMTConfig -> (SW, CW) -> String
+declConst cfg (s, c) = defineFun (s, cvtCW (roundingMode cfg) c) Nothing
 
 declUI :: (String, SBVType) -> [String]
 declUI (i, t) = ["(declare-fun " ++ i ++ " " ++ cvtType t ++ ")"]
@@ -346,16 +298,14 @@ genTableData rm skolemMap (_quantified, args) consts ((i, aknd, _), elts)
 
 -- TODO: We currently do not support non-constant arrays when quantifiers are present, as
 -- we might have to skolemize those. Implement this properly.
--- The difficulty is with the ArrayReset/Mutate/Merge: We have to postpone an init if
+-- The difficulty is with the Mutate/Merge: We have to postpone an init if
 -- the components are themselves postponed, so this cannot be implemented as a simple map.
 declArray :: Bool -> [SW] -> SkolemMap -> (Int, ArrayInfo) -> ([String], [String])
-declArray quantified consts skolemMap (i, (_, (aKnd, bKnd), ctx)) = (adecl : map wrap pre, map snd post)
+declArray quantified consts skolemMap (i, (_, (aKnd, bKnd), ctx)) = (adecl : map (wrap . snd) pre, map snd post)
   where topLevel = not quantified || case ctx of
-                                       ArrayFree Nothing -> True
-                                       ArrayFree (Just sw) -> sw `elem` consts
-                                       ArrayReset _ sw     -> sw `elem` consts
-                                       ArrayMutate _ a b   -> all (`elem` consts) [a, b]
-                                       ArrayMerge c _ _    -> c `elem` consts
+                                       ArrayFree         -> True
+                                       ArrayMutate _ a b -> all (`elem` consts) [a, b]
+                                       ArrayMerge c _ _  -> c `elem` consts
         (pre, post) = partition fst ctxInfo
         nm = "array_" ++ show i
         ssw sw
@@ -365,17 +315,10 @@ declArray quantified consts skolemMap (i, (_, (aKnd, bKnd), ctx)) = (adecl : map
          = tbd "Non-constant array initializer in a quantified context"
         adecl = "(declare-fun " ++ nm ++ " () (Array " ++ smtType aKnd ++ " " ++ smtType bKnd ++ "))"
         ctxInfo = case ctx of
-                    ArrayFree Nothing   -> []
-                    ArrayFree (Just sw) -> declA sw
-                    ArrayReset _ sw     -> declA sw
+                    ArrayFree         -> []
                     ArrayMutate j a b -> [(all (`elem` consts) [a, b], "(= " ++ nm ++ " (store array_" ++ show j ++ " " ++ ssw a ++ " " ++ ssw b ++ "))")]
                     ArrayMerge  t j k -> [(t `elem` consts,            "(= " ++ nm ++ " (ite " ++ ssw t ++ " array_" ++ show j ++ " array_" ++ show k ++ "))")]
-        declA sw = let iv = nm ++ "_freeInitializer"
-                   in [ (True,             "(declare-fun " ++ iv ++ " () " ++ smtType aKnd ++ ")")
-                      , (sw `elem` consts, "(= (select " ++ nm ++ " " ++ iv ++ ") " ++ ssw sw ++ ")")
-                      ]
-        wrap (False, s) = s
-        wrap (True, s)  = "(assert " ++ s ++ ")"
+        wrap s = "(assert " ++ s ++ ")"
 
 swType :: SW -> String
 swType s = smtType (kindOf s)
@@ -496,7 +439,7 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
 
         unintComp o [a, b]
           | KUserSort s (Right _) <- kindOf (head arguments)
-          = let idx v = "(" ++ s ++ "_constrIndex " ++ " " ++ v ++ ")" in "(" ++ o ++ " " ++ idx a ++ " " ++ idx b ++ ")"
+          = let idx v = "(" ++ s ++ "_constrIndex " ++ v ++ ")" in "(" ++ o ++ " " ++ idx a ++ " " ++ idx b ++ ")"
         unintComp o sbvs = error $ "SBV.SMT.SMTLib2.sh.unintComp: Unexpected arguments: "   ++ show (o, sbvs)
 
         lift1  o _ [x]    = "(" ++ o ++ " " ++ x ++ ")"
@@ -815,7 +758,4 @@ reducePB op args = case op of
 -- Add a named annotation
 named :: (Maybe String, String) -> String
 named (Nothing, x) = x
-named (Just nm, x) = "(! " ++ x ++ " :named |" ++ concatMap sanitize nm ++ "|)"
-  where sanitize '|'  = "_bar_"
-        sanitize '\\' = "_backslash_"
-        sanitize c    = [c]
+named (Just nm, x) = annotateWithName nm x

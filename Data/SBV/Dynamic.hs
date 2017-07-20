@@ -20,8 +20,7 @@ module Data.SBV.Dynamic
     SVal
   , HasKind(..), Kind(..), CW(..), CWVal(..), cwToBool
   -- *** Arrays of symbolic values
-  , SArr
-  , readSArr, resetSArr, writeSArr, mergeSArr, newSArr, eqSArr
+  , SArr, readSArr, writeSArr, mergeSArr, newSArr, eqSArr
 
   -- ** Creating a symbolic variable
   , Symbolic
@@ -44,7 +43,7 @@ module Data.SBV.Dynamic
   , svLessThan, svGreaterThan, svLessEq, svGreaterEq
   -- *** Arithmetic operations
   , svPlus, svTimes, svMinus, svUNeg, svAbs
-  , svDivide, svQuot, svRem, svExp
+  , svDivide, svQuot, svRem, svQuotRem, svExp
   , svAddConstant, svIncrement, svDecrement
   -- *** Logical operations
   , svAnd, svOr, svXOr, svNot
@@ -65,7 +64,6 @@ module Data.SBV.Dynamic
   , svBlastLE, svBlastBE
   -- ** Conditionals: Mergeable values
   , svIte, svLazyIte, svSymbolicMerge
-  , svIsSatisfiableInCurrentPath
   -- * Uninterpreted sorts, constants, and functions
   , svUninterpreted
   -- * Properties, proofs, and satisfiability
@@ -86,9 +84,9 @@ module Data.SBV.Dynamic
   , ThmResult(..), SatResult(..), AllSatResult(..), SafeResult(..), OptimizeResult(..), SMTResult(..)
 
   -- ** Programmable model extraction
-  , genParse, getModel, getModelDictionary
+  , genParse, getModelAssignment, getModelDictionary
   -- * SMT Interface: Configurations and solvers
-  , SMTConfig(..), SMTLibVersion(..), SMTLibLogic(..), Logic(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, sbvCurrentSolver, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
+  , SMTConfig(..), SMTLibVersion(..), Solver(..), SMTSolver(..), boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
 
   -- * Symbolic computations
   , outputSVal
@@ -118,7 +116,7 @@ module Data.SBV.Dynamic
   , compileToC, compileToCLib
 
   -- ** Compilation to SMTLib
-  , compileToSMTLib, generateSMTBenchmarks
+  , generateSMTBenchmark
   ) where
 
 import Data.Map (Map)
@@ -140,17 +138,15 @@ import Data.SBV.Compilers.C       (compileToC, compileToCLib)
 
 import Data.SBV.Provers.Prover (boolector, cvc4, yices, z3, mathSAT, abc, defaultSMTCfg)
 import Data.SBV.SMT.SMT        (ThmResult(..), SatResult(..), SafeResult(..), OptimizeResult(..), AllSatResult(..), genParse)
-import Data.SBV                (sbvCurrentSolver, sbvCheckSolverInstallation, defaultSolverConfig, sbvAvailableSolvers)
+import Data.SBV                (sbvCheckSolverInstallation, defaultSolverConfig, sbvAvailableSolvers)
 
 import qualified Data.SBV                as SBV (SBool, proveWithAll, proveWithAny, satWithAll, satWithAny)
 import qualified Data.SBV.Core.Data      as SBV (SBV(..))
-import qualified Data.SBV.Core.Model     as SBV (isSatisfiableInCurrentPath, sbvQuickCheck)
-import qualified Data.SBV.Provers.Prover as SBV (proveWith, satWith, safeWith, allSatWith, compileToSMTLib, generateSMTBenchmarks)
-import qualified Data.SBV.SMT.SMT        as SBV (Modelable(getModel, getModelDictionary))
+import qualified Data.SBV.Core.Model     as SBV (sbvQuickCheck)
+import qualified Data.SBV.Provers.Prover as SBV (proveWith, satWith, safeWith, allSatWith, generateSMTBenchmark)
+import qualified Data.SBV.SMT.SMT        as SBV (Modelable(getModelAssignment, getModelDictionary))
 
--- | Reduce a condition (i.e., try to concretize it) under the given path
-svIsSatisfiableInCurrentPath :: SVal -> Symbolic (Maybe SatResult)
-svIsSatisfiableInCurrentPath = SBV.isSatisfiableInCurrentPath . toSBool
+import Data.Time (NominalDiffTime)
 
 -- | Dynamic variant of quick-check
 svQuickCheck :: Symbolic SVal -> IO Bool
@@ -159,28 +155,11 @@ svQuickCheck = SBV.sbvQuickCheck . fmap toSBool
 toSBool :: SVal -> SBV.SBool
 toSBool = SBV.SBV
 
--- | Compiles to SMT-Lib and returns the resulting program as a string. Useful for saving
--- the result to a file for off-line analysis, for instance if you have an SMT solver that's not natively
--- supported out-of-the box by the SBV library. It takes two arguments:
---
---    * version: The SMTLib-version to produce. Note that we currently only support SMTLib2.
---
---    * isSat  : If 'True', will translate it as a SAT query, i.e., in the positive. If 'False', will
---               translate as a PROVE query, i.e., it will negate the result. (In this case, the check-sat
---               call to the SMT solver will produce UNSAT if the input is a theorem, as usual.)
-compileToSMTLib :: SMTLibVersion   -- ^ If True, output SMT-Lib2, otherwise SMT-Lib1
-                -> Bool            -- ^ If True, translate directly, otherwise negate the goal. (Use True for SAT queries, False for PROVE queries.)
-                -> Symbolic SVal
-                -> IO String
-compileToSMTLib version isSat s = SBV.compileToSMTLib version isSat (fmap toSBool s)
-
--- | Create both SMT-Lib1 and SMT-Lib2 benchmarks. The first argument is the basename of the file,
--- SMT-Lib1 version will be written with suffix ".smt1" and SMT-Lib2 version will be written with
--- suffix ".smt2". The 'Bool' argument controls whether this is a SAT instance, i.e., translate the query
--- directly, or a PROVE instance, i.e., translate the negated query. (See the second boolean argument to
--- 'compileToSMTLib' for details.)
-generateSMTBenchmarks :: Bool -> FilePath -> Symbolic SVal -> IO ()
-generateSMTBenchmarks isSat f s = SBV.generateSMTBenchmarks isSat f (fmap toSBool s)
+-- | Create SMT-Lib benchmarks. The first argument is the basename of the file, we will automatically
+-- add ".smt2" per SMT-Lib2 convention. The 'Bool' argument controls whether this is a SAT instance, i.e.,
+-- translate the query directly, or a PROVE instance, i.e., translate the negated query.
+generateSMTBenchmark :: Bool -> Symbolic SVal -> IO String
+generateSMTBenchmark isSat s = SBV.generateSMTBenchmark isSat (fmap toSBool s)
 
 -- | Proves the predicate using the given SMT-solver
 proveWith :: SMTConfig -> Symbolic SVal -> IO ThmResult
@@ -200,31 +179,31 @@ allSatWith cfg s = SBV.allSatWith cfg (fmap toSBool s)
 
 -- | Prove a property with multiple solvers, running them in separate threads. The
 -- results will be returned in the order produced.
-proveWithAll :: [SMTConfig] -> Symbolic SVal -> IO [(Solver, ThmResult)]
+proveWithAll :: [SMTConfig] -> Symbolic SVal -> IO [(Solver, NominalDiffTime, ThmResult)]
 proveWithAll cfgs s = SBV.proveWithAll cfgs (fmap toSBool s)
 
 -- | Prove a property with multiple solvers, running them in separate
 -- threads. Only the result of the first one to finish will be
 -- returned, remaining threads will be killed.
-proveWithAny :: [SMTConfig] -> Symbolic SVal -> IO (Solver, ThmResult)
+proveWithAny :: [SMTConfig] -> Symbolic SVal -> IO (Solver, NominalDiffTime, ThmResult)
 proveWithAny cfgs s = SBV.proveWithAny cfgs (fmap toSBool s)
 
 -- | Find a satisfying assignment to a property with multiple solvers,
 -- running them in separate threads. The results will be returned in
 -- the order produced.
-satWithAll :: [SMTConfig] -> Symbolic SVal -> IO [(Solver, SatResult)]
+satWithAll :: [SMTConfig] -> Symbolic SVal -> IO [(Solver, NominalDiffTime, SatResult)]
 satWithAll cfgs s = SBV.satWithAll cfgs (fmap toSBool s)
 
 -- | Find a satisfying assignment to a property with multiple solvers,
 -- running them in separate threads. Only the result of the first one
 -- to finish will be returned, remaining threads will be killed.
-satWithAny :: [SMTConfig] -> Symbolic SVal -> IO (Solver, SatResult)
+satWithAny :: [SMTConfig] -> Symbolic SVal -> IO (Solver, NominalDiffTime, SatResult)
 satWithAny cfgs s = SBV.satWithAny cfgs (fmap toSBool s)
 
 -- | Extract a model, the result is a tuple where the first argument (if True)
 -- indicates whether the model was "probable". (i.e., if the solver returned unknown.)
-getModel :: SMTResult -> Either String (Bool, [CW])
-getModel = SBV.getModel
+getModelAssignment :: SMTResult -> Either String (Bool, [CW])
+getModelAssignment = SBV.getModelAssignment
 
 -- | Extract a model dictionary. Extract a dictionary mapping the variables to
 -- their respective values as returned by the SMT solver. Also see `getModelDictionaries`.

@@ -28,25 +28,23 @@ module Data.SBV.Core.Model (
   , oneIf, blastBE, blastLE, fullAdder, fullMultiplier
   , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
   , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
-  , constrain, namedConstraint, pConstrain, tactic, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
+  , sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
   , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, slet
   , sRealToSInteger, label
   , sAssert
   , liftQRem, liftDMod, symbolicMergeWithKind
   , genLiteral, genFromCW, genMkSymVar
-  , isSatisfiableInCurrentPath
   , sbvQuickCheck
   )
   where
 
 import Control.Monad        (when, unless, mplus)
-import Control.Monad.Reader (ask)
-import Control.Monad.Trans  (liftIO)
 
 import GHC.Generics (U1(..), M1(..), (:*:)(..), K1(..))
 import qualified GHC.Generics as G
-import GHC.Stack.Compat
+
+import GHC.Stack
 
 import Data.Array      (Array, Ix, listArray, elems, bounds, rangeSize)
 import Data.Bits       (Bits(..))
@@ -59,15 +57,14 @@ import Test.QuickCheck                         (Testable(..), Arbitrary(..))
 import qualified Test.QuickCheck.Test    as QC (isSuccess)
 import qualified Test.QuickCheck         as QC (quickCheckResult, counterexample)
 import qualified Test.QuickCheck.Monadic as QC (monadicIO, run, assert, pre, monitor)
-import System.Random
 
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Data
 import Data.SBV.Core.Symbolic
 import Data.SBV.Core.Operations
 
-import Data.SBV.Provers.Prover (isVacuous, prove, defaultSMTCfg, internalSATCheck)
-import Data.SBV.SMT.SMT        (ThmResult, SatResult(..), showModel)
+import Data.SBV.Provers.Prover (defaultSMTCfg)
+import Data.SBV.SMT.SMT        (showModel)
 
 import Data.SBV.Utils.Boolean
 
@@ -427,7 +424,6 @@ instance EqSymbolic (SBV a) where
           isConc (SBV (SVal _ (Left _))) = True
           isConc _                       = False
 
-
 instance SymWord a => OrdSymbolic (SBV a) where
   SBV x .<  SBV y = SBV (svLessThan x y)
   SBV x .<= SBV y = SBV (svLessEq x y)
@@ -542,15 +538,6 @@ instance SIntegral Int16
 instance SIntegral Int32
 instance SIntegral Int64
 instance SIntegral Integer
-
--- Boolean combinators
-instance Boolean SBool where
-  true  = literal True
-  false = literal False
-  bnot (SBV b) = SBV (svNot b)
-  SBV a &&& SBV b = SBV (svAnd a b)
-  SBV a ||| SBV b = SBV (svOr a b)
-  SBV a <+> SBV b = SBV (svXOr a b)
 
 -- | Returns 1 if the boolean is true, otherwise 0.
 oneIf :: (Num a, SymWord a) => SBool -> SBV a
@@ -1478,10 +1465,9 @@ instance SymWord b => Mergeable (SArray a b) where
 -- force equality can be defined, any non-toy instance
 -- will suffer from efficiency issues; so we don't define it
 instance SymArray SFunArray where
-  newArray _                                  = newArray_ -- the name is irrelevant in this case
-  newArray_     mbiVal                        = declNewSFunArray mbiVal
+  newArray nm                                 = declNewSFunArray (Just nm)
+  newArray_                                   = declNewSFunArray Nothing
   readArray     (SFunArray f)                 = f
-  resetArray    (SFunArray _) a               = SFunArray $ const a
   writeArray    (SFunArray f) a b             = SFunArray (\a' -> ite (a .== a') b (f a'))
   mergeArrays t (SFunArray g)   (SFunArray h) = SFunArray (\x -> ite t (g x) (h x))
 
@@ -1524,9 +1510,11 @@ instance HasKind a => Uninterpreted (SBV a) where
      | Just (_, v) <- mbCgData = v
      | True                    = SBV $ SVal ka $ Right $ cache result
     where ka = kindOf (undefined :: a)
-          result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st v
-                    | True = do newUninterpreted st nm (SBVType [ka]) (fst `fmap` mbCgData)
-                                newExpr st ka $ SBVApp (Uninterpreted nm) []
+          result st = do isSMT <- inSMTMode st
+                         case (isSMT, mbCgData) of
+                           (True, Just (_, v)) -> sbvToSW st v
+                           _                   -> do newUninterpreted st nm (SBVType [ka]) (fst `fmap` mbCgData)
+                                                     newExpr st ka $ SBVApp (Uninterpreted nm) []
 
 -- Functions of one argument
 instance (SymWord b, HasKind a) => Uninterpreted (SBV b -> SBV a) where
@@ -1538,11 +1526,13 @@ instance (SymWord b, HasKind a) => Uninterpreted (SBV b -> SBV a) where
            = SBV $ SVal ka $ Right $ cache result
            where ka = kindOf (undefined :: a)
                  kb = kindOf (undefined :: b)
-                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0)
-                           | True = do newUninterpreted st nm (SBVType [kb, ka]) (fst `fmap` mbCgData)
-                                       sw0 <- sbvToSW st arg0
-                                       mapM_ forceSWArg [sw0]
-                                       newExpr st ka $ SBVApp (Uninterpreted nm) [sw0]
+                 result st = do isSMT <- inSMTMode st
+                                case (isSMT, mbCgData) of
+                                  (True, Just (_, v)) -> sbvToSW st (v arg0)
+                                  _                   -> do newUninterpreted st nm (SBVType [kb, ka]) (fst `fmap` mbCgData)
+                                                            sw0 <- sbvToSW st arg0
+                                                            mapM_ forceSWArg [sw0]
+                                                            newExpr st ka $ SBVApp (Uninterpreted nm) [sw0]
 
 -- Functions of two arguments
 instance (SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV c -> SBV b -> SBV a) where
@@ -1555,12 +1545,14 @@ instance (SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV c -> SBV b -> S
            where ka = kindOf (undefined :: a)
                  kb = kindOf (undefined :: b)
                  kc = kindOf (undefined :: c)
-                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1)
-                           | True = do newUninterpreted st nm (SBVType [kc, kb, ka]) (fst `fmap` mbCgData)
-                                       sw0 <- sbvToSW st arg0
-                                       sw1 <- sbvToSW st arg1
-                                       mapM_ forceSWArg [sw0, sw1]
-                                       newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1]
+                 result st = do isSMT <- inSMTMode st
+                                case (isSMT, mbCgData) of
+                                  (True, Just (_, v)) -> sbvToSW st (v arg0 arg1)
+                                  _                   -> do newUninterpreted st nm (SBVType [kc, kb, ka]) (fst `fmap` mbCgData)
+                                                            sw0 <- sbvToSW st arg0
+                                                            sw1 <- sbvToSW st arg1
+                                                            mapM_ forceSWArg [sw0, sw1]
+                                                            newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1]
 
 -- Functions of three arguments
 instance (SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV d -> SBV c -> SBV b -> SBV a) where
@@ -1574,13 +1566,15 @@ instance (SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV d ->
                  kb = kindOf (undefined :: b)
                  kc = kindOf (undefined :: c)
                  kd = kindOf (undefined :: d)
-                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2)
-                           | True = do newUninterpreted st nm (SBVType [kd, kc, kb, ka]) (fst `fmap` mbCgData)
-                                       sw0 <- sbvToSW st arg0
-                                       sw1 <- sbvToSW st arg1
-                                       sw2 <- sbvToSW st arg2
-                                       mapM_ forceSWArg [sw0, sw1, sw2]
-                                       newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2]
+                 result st = do isSMT <- inSMTMode st
+                                case (isSMT, mbCgData) of
+                                  (True, Just (_, v)) -> sbvToSW st (v arg0 arg1 arg2)
+                                  _                   -> do newUninterpreted st nm (SBVType [kd, kc, kb, ka]) (fst `fmap` mbCgData)
+                                                            sw0 <- sbvToSW st arg0
+                                                            sw1 <- sbvToSW st arg1
+                                                            sw2 <- sbvToSW st arg2
+                                                            mapM_ forceSWArg [sw0, sw1, sw2]
+                                                            newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2]
 
 -- Functions of four arguments
 instance (SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
@@ -1595,14 +1589,16 @@ instance (SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => Uninterprete
                  kc = kindOf (undefined :: c)
                  kd = kindOf (undefined :: d)
                  ke = kindOf (undefined :: e)
-                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3)
-                           | True = do newUninterpreted st nm (SBVType [ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
-                                       sw0 <- sbvToSW st arg0
-                                       sw1 <- sbvToSW st arg1
-                                       sw2 <- sbvToSW st arg2
-                                       sw3 <- sbvToSW st arg3
-                                       mapM_ forceSWArg [sw0, sw1, sw2, sw3]
-                                       newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3]
+                 result st = do isSMT <- inSMTMode st
+                                case (isSMT, mbCgData) of
+                                  (True, Just (_, v)) -> sbvToSW st (v arg0 arg1 arg2 arg3)
+                                  _                   -> do newUninterpreted st nm (SBVType [ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
+                                                            sw0 <- sbvToSW st arg0
+                                                            sw1 <- sbvToSW st arg1
+                                                            sw2 <- sbvToSW st arg2
+                                                            sw3 <- sbvToSW st arg3
+                                                            mapM_ forceSWArg [sw0, sw1, sw2, sw3]
+                                                            newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3]
 
 -- Functions of five arguments
 instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
@@ -1618,15 +1614,17 @@ instance (SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => U
                  kd = kindOf (undefined :: d)
                  ke = kindOf (undefined :: e)
                  kf = kindOf (undefined :: f)
-                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3 arg4)
-                           | True = do newUninterpreted st nm (SBVType [kf, ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
-                                       sw0 <- sbvToSW st arg0
-                                       sw1 <- sbvToSW st arg1
-                                       sw2 <- sbvToSW st arg2
-                                       sw3 <- sbvToSW st arg3
-                                       sw4 <- sbvToSW st arg4
-                                       mapM_ forceSWArg [sw0, sw1, sw2, sw3, sw4]
-                                       newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4]
+                 result st = do isSMT <- inSMTMode st
+                                case (isSMT, mbCgData) of
+                                  (True, Just (_, v)) -> sbvToSW st (v arg0 arg1 arg2 arg3 arg4)
+                                  _                   -> do newUninterpreted st nm (SBVType [kf, ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
+                                                            sw0 <- sbvToSW st arg0
+                                                            sw1 <- sbvToSW st arg1
+                                                            sw2 <- sbvToSW st arg2
+                                                            sw3 <- sbvToSW st arg3
+                                                            sw4 <- sbvToSW st arg4
+                                                            mapM_ forceSWArg [sw0, sw1, sw2, sw3, sw4]
+                                                            newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4]
 
 -- Functions of six arguments
 instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a) => Uninterpreted (SBV g -> SBV f -> SBV e -> SBV d -> SBV c -> SBV b -> SBV a) where
@@ -1643,16 +1641,18 @@ instance (SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasK
                  ke = kindOf (undefined :: e)
                  kf = kindOf (undefined :: f)
                  kg = kindOf (undefined :: g)
-                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5)
-                           | True = do newUninterpreted st nm (SBVType [kg, kf, ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
-                                       sw0 <- sbvToSW st arg0
-                                       sw1 <- sbvToSW st arg1
-                                       sw2 <- sbvToSW st arg2
-                                       sw3 <- sbvToSW st arg3
-                                       sw4 <- sbvToSW st arg4
-                                       sw5 <- sbvToSW st arg5
-                                       mapM_ forceSWArg [sw0, sw1, sw2, sw3, sw4, sw5]
-                                       newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4, sw5]
+                 result st = do isSMT <- inSMTMode st
+                                case (isSMT, mbCgData) of
+                                  (True, Just (_, v)) -> sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5)
+                                  _                   -> do newUninterpreted st nm (SBVType [kg, kf, ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
+                                                            sw0 <- sbvToSW st arg0
+                                                            sw1 <- sbvToSW st arg1
+                                                            sw2 <- sbvToSW st arg2
+                                                            sw3 <- sbvToSW st arg3
+                                                            sw4 <- sbvToSW st arg4
+                                                            sw5 <- sbvToSW st arg5
+                                                            mapM_ forceSWArg [sw0, sw1, sw2, sw3, sw4, sw5]
+                                                            newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4, sw5]
 
 -- Functions of seven arguments
 instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymWord b, HasKind a)
@@ -1671,17 +1671,19 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
                  kf = kindOf (undefined :: f)
                  kg = kindOf (undefined :: g)
                  kh = kindOf (undefined :: h)
-                 result st | Just (_, v) <- mbCgData, inProofMode st = sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5 arg6)
-                           | True = do newUninterpreted st nm (SBVType [kh, kg, kf, ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
-                                       sw0 <- sbvToSW st arg0
-                                       sw1 <- sbvToSW st arg1
-                                       sw2 <- sbvToSW st arg2
-                                       sw3 <- sbvToSW st arg3
-                                       sw4 <- sbvToSW st arg4
-                                       sw5 <- sbvToSW st arg5
-                                       sw6 <- sbvToSW st arg6
-                                       mapM_ forceSWArg [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
-                                       newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
+                 result st = do isSMT <- inSMTMode st
+                                case (isSMT, mbCgData) of
+                                  (True, Just (_, v)) -> sbvToSW st (v arg0 arg1 arg2 arg3 arg4 arg5 arg6)
+                                  _                   -> do newUninterpreted st nm (SBVType [kh, kg, kf, ke, kd, kc, kb, ka]) (fst `fmap` mbCgData)
+                                                            sw0 <- sbvToSW st arg0
+                                                            sw1 <- sbvToSW st arg1
+                                                            sw2 <- sbvToSW st arg2
+                                                            sw3 <- sbvToSW st arg3
+                                                            sw4 <- sbvToSW st arg4
+                                                            sw5 <- sbvToSW st arg5
+                                                            sw6 <- sbvToSW st arg6
+                                                            mapM_ forceSWArg [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
+                                                            newExpr st ka $ SBVApp (Uninterpreted nm) [sw0, sw1, sw2, sw3, sw4, sw5, sw6]
 
 -- Uncurried functions of two arguments
 instance (SymWord c, SymWord b, HasKind a) => Uninterpreted ((SBV c, SBV b) -> SBV a) where
@@ -1717,56 +1719,11 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
   sbvUninterpret mbCgData nm = let f = sbvUninterpret (uc7 `fmap` mbCgData) nm in \(arg0, arg1, arg2, arg3, arg4, arg5, arg6) -> f arg0 arg1 arg2 arg3 arg4 arg5 arg6
     where uc7 (cs, fn) = (cs, \a b c d e f g -> fn (a, b, c, d, e, f, g))
 
--- | Adding arbitrary constraints. When adding constraints, one has to be careful about
--- making sure they are not inconsistent. The function 'isVacuous' can be use for this purpose.
--- Here is an example. Consider the following predicate:
---
--- >>> let pred = do { x <- forall "x"; constrain $ x .< x; return $ x .>= (5 :: SWord8) }
---
--- This predicate asserts that all 8-bit values are larger than 5, subject to the constraint that the
--- values considered satisfy @x .< x@, i.e., they are less than themselves. Since there are no values that
--- satisfy this constraint, the proof will pass vacuously:
---
--- >>> prove pred
--- Q.E.D.
---
--- We can use 'isVacuous' to make sure to see that the pass was vacuous:
---
--- >>> isVacuous pred
--- True
---
--- While the above example is trivial, things can get complicated if there are multiple constraints with
--- non-straightforward relations; so if constraints are used one should make sure to check the predicate
--- is not vacuously true. Here's an example that is not vacuous:
---
---  >>> let pred' = do { x <- forall "x"; constrain $ x .> 6; return $ x .>= (5 :: SWord8) }
---
--- This time the proof passes as expected:
---
---  >>> prove pred'
---  Q.E.D.
---
--- And the proof is not vacuous:
---
---  >>> isVacuous pred'
---  False
-constrain :: SBool -> Symbolic ()
-constrain c = addConstraint Nothing Nothing c (bnot c)
-
--- | A version of constrain, that also attaches a name. This variant is useful
--- for extracting unsat cores.
-namedConstraint :: String -> SBool -> Symbolic ()
-namedConstraint nm c = addConstraint (Just nm) Nothing c (bnot c)
-
--- | Adding a probabilistic constraint. The 'Double' argument is the probability
--- threshold. Probabilistic constraints are useful for 'genTest' and 'quickCheck'
--- calls where we restrict our attention to /interesting/ parts of the input domain.
-pConstrain :: Double -> SBool -> Symbolic ()
-pConstrain t c = addConstraint Nothing (Just t) c (bnot c)
-
--- | Provide a tactic for the solver engine
-tactic :: Tactic SBool -> Symbolic ()
-tactic t = addSValTactic $ unSBV `fmap` t
+-- | Symbolic computations provide a context for writing symbolic programs.
+instance SolverContext Symbolic where
+   constrain          (SBV c) = imposeConstraint Nothing   c
+   namedConstraint nm (SBV c) = imposeConstraint (Just nm) c
+   setOption o                = addNewSMTOption  o
 
 -- | Introduce a soft assertion, with an optional penalty
 assertSoft :: String -> SBool -> Penalty -> Symbolic ()
@@ -1803,19 +1760,23 @@ instance Testable SBool where
   property s                       = error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show s ++ ")"
 
 instance Testable (Symbolic SBool) where
-   property prop = QC.monadicIO $ do (cond, r, tvals) <- QC.run (newStdGen >>= test)
+   property prop = QC.monadicIO $ do (cond, r, tvals) <- QC.run test
                                      QC.pre cond
                                      unless (r || null tvals) $ QC.monitor (QC.counterexample (complain tvals))
                                      QC.assert r
-     where test g = do (r, Result{resTraces=tvals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic' (Concrete g) prop
-                       let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
-                           cond = all (cwToBool . cval . snd) cstrs
-                       case map fst unints of
-                         [] -> case unliteral r of
-                                 Nothing -> noQC [show r]
-                                 Just b  -> return (cond, b, tvals)
-                         us -> noQC us
+     where test = do (r, Result{resTraces=tvals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic Concrete prop
+
+                     let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
+                         cond = all (cwToBool . cval . snd) cstrs
+
+                     case map fst unints of
+                       [] -> case unliteral r of
+                               Nothing -> noQC [show r]
+                               Just b  -> return (cond, b, tvals)
+                       us -> noQC us
+
            complain qcInfo = showModel defaultSMTCfg (SMTModel [] qcInfo)
+
            noQC us         = error $ "Cannot quick-check in the presence of uninterpreted constants: " ++ intercalate ", " us
 
 -- | Quick check an SBV property. Note that a regular 'quickCheck' call will work just as
@@ -1843,28 +1804,5 @@ slet x f = SBV $ SVal k $ Right $ cache r
                         res  = f xsbv
                     sbvToSW st res
 
--- | Check if a boolean condition is satisfiable in the current state. This function can be useful in contexts where an
--- interpreter implemented on top of SBV needs to decide if a particular stae (represented by the boolean) is reachable
--- in the current if-then-else paths implied by the 'ite' calls. Returns Nothing if not satisfiable, otherwise the
--- satisfying model.
-isSatisfiableInCurrentPath :: SBool -> Symbolic (Maybe SatResult)
-isSatisfiableInCurrentPath cond = do
-       st <- ask
-       let cfg  = fromMaybe defaultSMTCfg (getSBranchRunConfig st)
-           msg  = when (verbose cfg) . putStrLn . ("** " ++)
-           pc   = getPathCondition st
-       check <- liftIO $ internalSATCheck cfg (pc &&& cond) st "isSatisfiableInCurrentPath: Checking satisfiability"
-       let res = case check of
-                   SatResult Satisfiable{}   -> True
-                   SatResult Unsatisfiable{} -> False
-                   _                         -> error $ "isSatisfiableInCurrentPath: Unexpected external result: " ++ show check
-       res `seq` liftIO $ msg $ "isSatisfiableInCurrentPath: Conclusion: " ++ if res then "Satisfiable" else "Unsatisfiable"
-       return $ if res then Just check
-                       else Nothing
-
--- We use 'isVacuous' and 'prove' only for the "test" section in this file, and GHC complains about that. So, this shuts it up.
-__unused :: a
-__unused = error "__unused" (isVacuous :: SBool -> IO Bool) (prove :: SBool -> IO ThmResult)
-
-{-# ANN module   ("HLint: ignore Reduce duplication" :: String)#-}
-{-# ANN module   ("HLint: ignore Eta reduce" :: String)        #-}
+{-# ANN module   ("HLint: ignore Reduce duplication" :: String) #-}
+{-# ANN module   ("HLint: ignore Eta reduce" :: String)         #-}

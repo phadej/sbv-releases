@@ -9,102 +9,136 @@
 -- Abstraction of SMT solvers
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE DefaultSignatures   #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE DefaultSignatures          #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE Rank2Types                 #-}
+{-# LANGUAGE NamedFieldPuns             #-}
 
-module Data.SBV.SMT.SMT where
+module Data.SBV.SMT.SMT (
+       -- * Model extraction
+         Modelable(..)
+       , SatModel(..), genParse
+       , extractModels, getModelValues
+       , getModelDictionaries, getModelUninterpretedValues
+       , displayModels, showModel
+
+       -- * Standard prover engine
+       , standardEngine
+
+       -- * Results of various tasks
+       , ThmResult(..)
+       , SatResult(..)
+       , AllSatResult(..)
+       , SafeResult(..)
+       , OptimizeResult(..)
+       )
+       where
 
 import qualified Control.Exception as C
 
 import Control.Concurrent (newEmptyMVar, takeMVar, putMVar, forkIO)
 import Control.DeepSeq    (NFData(..))
-import Control.Monad      (when, zipWithM)
+import Control.Monad      (zipWithM)
 import Data.Char          (isSpace)
+import Data.Maybe         (fromMaybe)
 import Data.Int           (Int8, Int16, Int32, Int64)
-import Data.Function      (on)
-import Data.List          (intercalate, isPrefixOf, isInfixOf, sortBy)
+import Data.List          (intercalate, isPrefixOf)
 import Data.Word          (Word8, Word16, Word32, Word64)
+
+import Data.IORef (readIORef, writeIORef)
+
+import Data.Time          (getZonedTime, defaultTimeLocale, formatTime, diffUTCTime, getCurrentTime)
+
 import System.Directory   (findExecutable)
 import System.Environment (getEnv)
 import System.Exit        (ExitCode(..))
-import System.IO          (hClose, hFlush, hPutStr, hGetContents, hGetLine)
+import System.IO          (hClose, hFlush, hPutStrLn, hGetContents, hGetLine)
 import System.Process     (runInteractiveProcess, waitForProcess, terminateProcess)
 
 import qualified Data.Map as M
 
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Data
-import Data.SBV.Core.Symbolic (SMTEngine)
+import Data.SBV.Core.Symbolic (SMTEngine, State(..))
 
-import Data.SBV.SMT.SMTLib    (interpretSolverOutput, interpretSolverModelLine, interpretSolverObjectiveLine)
+import Data.SBV.SMT.Utils     (showTimeoutValue, alignPlain, alignDiagnostic, debug, mergeSExpr)
 
 import Data.SBV.Utils.PrettyNum
-import Data.SBV.Utils.Lib             (joinArgs, splitArgs)
-import Data.SBV.Utils.TDiff
+import Data.SBV.Utils.Lib       (joinArgs, splitArgs)
+import Data.SBV.Utils.SExpr     (parenDeficit)
+import Data.SBV.Utils.TDiff     (Timing(..), showTDiff)
+
+import qualified System.Timeout as Timeout (timeout)
 
 -- | Extract the final configuration from a result
 resultConfig :: SMTResult -> SMTConfig
-resultConfig (Unsatisfiable c _) = c
+resultConfig (Unsatisfiable c)   = c
 resultConfig (Satisfiable   c _) = c
 resultConfig (SatExtField   c _) = c
 resultConfig (Unknown       c _) = c
 resultConfig (ProofError    c _) = c
-resultConfig (TimeOut       c  ) = c
 
 -- | A 'prove' call results in a 'ThmResult'
-newtype ThmResult    = ThmResult    SMTResult
+newtype ThmResult = ThmResult SMTResult
+                  deriving NFData
 
 -- | A 'sat' call results in a 'SatResult'
 -- The reason for having a separate 'SatResult' is to have a more meaningful 'Show' instance.
-newtype SatResult    = SatResult    SMTResult
+newtype SatResult = SatResult SMTResult
+                  deriving NFData
 
--- | An 'allSat' call results in a 'AllSatResult'. The boolean says whether
--- we should warn the user about prefix-existentials.
-newtype AllSatResult = AllSatResult (Bool, [SMTResult])
+-- | An 'allSat' call results in a 'AllSatResult'. The first boolean says whether we
+-- hit the max-model limit as we searched. The second boolean says whether
+-- there were prefix-existentials.
+newtype AllSatResult = AllSatResult (Bool, Bool, [SMTResult])
 
 -- | A 'safe' call results in a 'SafeResult'
 newtype SafeResult   = SafeResult   (Maybe String, String, SMTResult)
 
--- | An 'optimize' call results in a 'OptimizeResult'
+-- | An 'optimize' call results in a 'OptimizeResult'. In the 'ParetoResult' case, the boolean is 'True'
+-- if we reached pareto-query limit and so there might be more unqueried results remaining. If 'False',
+-- it means that we have all the pareto fronts returned. See the 'Pareto' 'OptimizeStyle' for details.
 data OptimizeResult = LexicographicResult SMTResult
-                    | ParetoResult        [SMTResult]
+                    | ParetoResult        (Bool, [SMTResult])
                     | IndependentResult   [(String, SMTResult)]
 
--- | User friendly way of printing theorem results
+-- User friendly way of printing theorem results
 instance Show ThmResult where
   show (ThmResult r) = showSMTResult "Q.E.D."
-                                     "Unknown"     "Unknown. Potential counter-example:\n"
+                                     "Unknown"
                                      "Falsifiable" "Falsifiable. Counter-example:\n" "Falsifiable in an extension field:\n" r
 
--- | User friendly way of printing satisfiablity results
+-- User friendly way of printing satisfiablity results
 instance Show SatResult where
   show (SatResult r) = showSMTResult "Unsatisfiable"
-                                     "Unknown"     "Unknown. Potential model:\n"
+                                     "Unknown"
                                      "Satisfiable" "Satisfiable. Model:\n" "Satisfiable in an extension field. Model:\n" r
 
--- | User friendly way of printing safety results
+-- User friendly way of printing safety results
 instance Show SafeResult where
    show (SafeResult (mbLoc, msg, r)) = showSMTResult (tag "No violations detected")
-                                                     (tag "Unknown")  (tag "Unknown. Potential violating model:\n")
+                                                     (tag "Unknown")
                                                      (tag "Violated") (tag "Violated. Model:\n") (tag "Violated in an extension field:\n") r
         where loc   = maybe "" (++ ": ") mbLoc
               tag s = loc ++ msg ++ ": " ++ s
 
--- | The Show instance of AllSatResults. Note that we have to be careful in being lazy enough
+-- The Show instance of AllSatResults. Note that we have to be careful in being lazy enough
 -- as the typical use case is to pull results out as they become available.
 instance Show AllSatResult where
-  show (AllSatResult (e, xs)) = go (0::Int) xs
+  show (AllSatResult (l, e, xs)) = go (0::Int) xs
     where uniqueWarn | e    = " (Unique up to prefix existentials.)"
                      | True = ""
           go c (s:ss) = let c'      = c+1
                             (ok, o) = sh c' s
                         in c' `seq` if ok then o ++ "\n" ++ go c' ss else o
-          go c []     = case c of
-                          0 -> "No solutions found."
-                          1 -> "This is the only solution." ++ uniqueWarn
-                          _ -> "Found " ++ show c ++ " different solutions." ++ uniqueWarn
+          go c []     = case (l, c) of
+                          (True,  _) -> "Search stopped since model count request was reached." ++ uniqueWarn
+                          (False, 0) -> "No solutions found."
+                          (False, 1) -> "This is the only solution." ++ uniqueWarn
+                          (False, _) -> "Found " ++ show c ++ " different solutions." ++ uniqueWarn
           sh i c = (ok, showSMTResult "Unsatisfiable"
-                                      "Unknown" "Unknown. Potential model:\n"
+                                      "Unknown"
                                       ("Solution #" ++ show i ++ ":\nSatisfiable") ("Solution #" ++ show i ++ ":\n")
                                       ("Solution $" ++ show i ++ " in an extension field:\n")
                                       c)
@@ -112,15 +146,18 @@ instance Show AllSatResult where
                            Satisfiable{} -> True
                            _             -> False
 
--- | Show instance for optimization results
+-- Show instance for optimization results
 instance Show OptimizeResult where
   show res = case res of
                LexicographicResult r   -> sh id r
 
                IndependentResult   rs  -> multi "objectives" (map (uncurry shI) rs)
 
-               ParetoResult        [r] -> sh (\s -> "Unique pareto front: " ++ s) r
-               ParetoResult        rs  -> multi "pareto optimal values" (zipWith shP [(1::Int)..] rs)
+               ParetoResult (False, [r]) -> sh (\s -> "Unique pareto front: " ++ s) r
+               ParetoResult (False, rs)  -> multi "pareto optimal values" (zipWith shP [(1::Int)..] rs)
+               ParetoResult (True,  rs)  ->    multi "pareto optimal values" (zipWith shP [(1::Int)..] rs)
+                                           ++ "\n*** Note: Pareto-front extraction was terminated before stream was ended as requested by the user."
+                                           ++ "\n***       There might be other (potentially infinitely more) results."
 
        where multi w [] = "There are no " ++ w ++ " to display models for."
              multi _ xs = intercalate "\n" xs
@@ -130,7 +167,6 @@ instance Show OptimizeResult where
 
              sh tag = showSMTResult (tag "Unsatisfiable.")
                                     (tag "Unknown.")
-                                    (tag "Unknown. Potential model:" ++ "\n")
                                     (tag "Optimal with no assignments.")
                                     (tag "Optimal model:" ++ "\n")
                                     (tag "Optimal in an extension field:" ++ "\n")
@@ -280,9 +316,9 @@ class Modelable a where
   -- | Is there a model?
   modelExists :: a -> Bool
 
-  -- | Extract a model, the result is a tuple where the first argument (if True)
+  -- | Extract assignments of a model, the result is a tuple where the first argument (if True)
   -- indicates whether the model was "probable". (i.e., if the solver returned unknown.)
-  getModel :: SatModel b => a -> Either String (Bool, b)
+  getModelAssignment :: SatModel b => a -> Either String (Bool, b)
 
   -- | Extract a model dictionary. Extract a dictionary mapping the variables to
   -- their respective values as returned by the SMT solver. Also see `getModelDictionaries`.
@@ -300,9 +336,9 @@ class Modelable a where
                                      Just (CW _ (CWUserSort (_, s))) -> Just s
                                      _                               -> Nothing
 
-  -- | A simpler variant of 'getModel' to get a model out without the fuss.
+  -- | A simpler variant of 'getModelAssignment' to get a model out without the fuss.
   extractModel :: SatModel b => a -> Maybe b
-  extractModel a = case getModel a of
+  extractModel a = case getModelAssignment a of
                      Right (_, b) -> Just b
                      _            -> Nothing
 
@@ -313,50 +349,44 @@ class Modelable a where
   getModelObjectiveValue :: String -> a -> Maybe GeneralizedCW
   getModelObjectiveValue v r = v `M.lookup` getModelObjectives r
 
-  -- | Extract unsat core
-  extractUnsatCore :: a -> Maybe [String]
-
 -- | Return all the models from an 'allSat' call, similar to 'extractModel' but
 -- is suitable for the case of multiple results.
 extractModels :: SatModel a => AllSatResult -> [a]
-extractModels (AllSatResult (_, xs)) = [ms | Right (_, ms) <- map getModel xs]
+extractModels (AllSatResult (_, _, xs)) = [ms | Right (_, ms) <- map getModelAssignment xs]
 
 -- | Get dictionaries from an all-sat call. Similar to `getModelDictionary`.
 getModelDictionaries :: AllSatResult -> [M.Map String CW]
-getModelDictionaries (AllSatResult (_, xs)) = map getModelDictionary xs
+getModelDictionaries (AllSatResult (_, _, xs)) = map getModelDictionary xs
 
 -- | Extract value of a variable from an all-sat call. Similar to `getModelValue`.
 getModelValues :: SymWord b => String -> AllSatResult -> [Maybe b]
-getModelValues s (AllSatResult (_, xs)) =  map (s `getModelValue`) xs
+getModelValues s (AllSatResult (_, _, xs)) =  map (s `getModelValue`) xs
 
 -- | Extract value of an uninterpreted variable from an all-sat call. Similar to `getModelUninterpretedValue`.
 getModelUninterpretedValues :: String -> AllSatResult -> [Maybe String]
-getModelUninterpretedValues s (AllSatResult (_, xs)) =  map (s `getModelUninterpretedValue`) xs
+getModelUninterpretedValues s (AllSatResult (_, _, xs)) =  map (s `getModelUninterpretedValue`) xs
 
 -- | 'ThmResult' as a generic model provider
 instance Modelable ThmResult where
-  getModel           (ThmResult r) = getModel r
+  getModelAssignment (ThmResult r) = getModelAssignment r
   modelExists        (ThmResult r) = modelExists r
   getModelDictionary (ThmResult r) = getModelDictionary r
   getModelObjectives (ThmResult r) = getModelObjectives r
-  extractUnsatCore   (ThmResult r) = extractUnsatCore   r
 
 -- | 'SatResult' as a generic model provider
 instance Modelable SatResult where
-  getModel           (SatResult r) = getModel r
+  getModelAssignment (SatResult r) = getModelAssignment r
   modelExists        (SatResult r) = modelExists r
   getModelDictionary (SatResult r) = getModelDictionary r
   getModelObjectives (SatResult r) = getModelObjectives r
-  extractUnsatCore   (SatResult r) = extractUnsatCore   r
 
 -- | 'SMTResult' as a generic model provider
 instance Modelable SMTResult where
-  getModel (Unsatisfiable _ _) = Left "SBV.getModel: Unsatisfiable result"
-  getModel (Satisfiable _ m)   = Right (False, parseModelOut m)
-  getModel (SatExtField _ _)   = Left "SBV.getModel: The model is in an extension field"
-  getModel (Unknown _ m)       = Right (True, parseModelOut m)
-  getModel (ProofError _ s)    = error $ unlines $ "Backend solver complains: " : s
-  getModel (TimeOut _)         = Left "Timeout"
+  getModelAssignment (Unsatisfiable _) = Left "SBV.getModelAssignment: Unsatisfiable result"
+  getModelAssignment (Satisfiable _ m) = Right (False, parseModelOut m)
+  getModelAssignment (SatExtField _ _) = Left "SBV.getModelAssignment: The model is in an extension field"
+  getModelAssignment (Unknown _ m)     = Left $ "SBV.getModelAssignment: Solver state is unknown: " ++ m
+  getModelAssignment (ProofError _ s)  = error $ unlines $ "Backend solver complains: " : s
 
   modelExists Satisfiable{}   = True
   modelExists Unknown{}       = False -- don't risk it
@@ -365,62 +395,43 @@ instance Modelable SMTResult where
   getModelDictionary Unsatisfiable{}   = M.empty
   getModelDictionary (Satisfiable _ m) = M.fromList (modelAssocs m)
   getModelDictionary SatExtField{}     = M.empty
-  getModelDictionary (Unknown _ m)     = M.fromList (modelAssocs m)
+  getModelDictionary Unknown{}         = M.empty
   getModelDictionary ProofError{}      = M.empty
-  getModelDictionary TimeOut{}         = M.empty
 
   getModelObjectives Unsatisfiable{}   = M.empty
   getModelObjectives (Satisfiable _ m) = M.fromList (modelObjectives m)
   getModelObjectives (SatExtField _ m) = M.fromList (modelObjectives m)
-  getModelObjectives (Unknown _ m)     = M.fromList (modelObjectives m)
+  getModelObjectives Unknown{}         = M.empty
   getModelObjectives ProofError{}      = M.empty
-  getModelObjectives TimeOut{}         = M.empty
-
-  extractUnsatCore (Unsatisfiable _ uc) = uc
-  extractUnsatCore Satisfiable{}        = Nothing
-  extractUnsatCore SatExtField{}        = Nothing
-  extractUnsatCore Unknown{}            = Nothing
-  extractUnsatCore ProofError{}         = Nothing
-  extractUnsatCore TimeOut{}            = Nothing
 
 -- | Extract a model out, will throw error if parsing is unsuccessful
 parseModelOut :: SatModel a => SMTModel -> a
 parseModelOut m = case parseCWs [c | (_, c) <- modelAssocs m] of
                    Just (x, []) -> x
-                   Just (_, ys) -> error $ "SBV.getModel: Partially constructed model; remaining elements: " ++ show ys
-                   Nothing      -> error $ "SBV.getModel: Cannot construct a model from: " ++ show m
+                   Just (_, ys) -> error $ "SBV.parseModelOut: Partially constructed model; remaining elements: " ++ show ys
+                   Nothing      -> error $ "SBV.parseModelOut: Cannot construct a model from: " ++ show m
 
 -- | Given an 'allSat' call, we typically want to iterate over it and print the results in sequence. The
 -- 'displayModels' function automates this task by calling 'disp' on each result, consecutively. The first
 -- 'Int' argument to 'disp' 'is the current model number. The second argument is a tuple, where the first
 -- element indicates whether the model is alleged (i.e., if the solver is not sure, returing Unknown)
 displayModels :: SatModel a => (Int -> (Bool, a) -> IO ()) -> AllSatResult -> IO Int
-displayModels disp (AllSatResult (_, ms)) = do
-    inds <- zipWithM display [a | Right a <- map (getModel . SatResult) ms] [(1::Int)..]
+displayModels disp (AllSatResult (_, _, ms)) = do
+    inds <- zipWithM display [a | Right a <- map (getModelAssignment . SatResult) ms] [(1::Int)..]
     return $ last (0:inds)
   where display r i = disp i r >> return i
 
 -- | Show an SMTResult; generic version
-showSMTResult :: String -> String -> String -> String -> String -> String -> SMTResult -> String
-showSMTResult unsatMsg unkMsg unkMsgModel satMsg satMsgModel satExtMsg result = case result of
-  Unsatisfiable _ mbUC          -> unsatMsg ++ showUC mbUC
+showSMTResult :: String -> String -> String -> String -> String -> SMTResult -> String
+showSMTResult unsatMsg unkMsg satMsg satMsgModel satExtMsg result = case result of
+  Unsatisfiable _               -> unsatMsg
   Satisfiable _ (SMTModel _ []) -> satMsg
   Satisfiable _ m               -> satMsgModel ++ showModel cfg m
   SatExtField _ (SMTModel b _)  -> satExtMsg   ++ showModelDictionary cfg b
-  Unknown     _ (SMTModel _ []) -> unkMsg
-  Unknown     _ m               -> unkMsgModel ++ showModel cfg m
+  Unknown     _ r               -> unkMsg ++ ".\n" ++ "  Reason: " `alignPlain` r
   ProofError  _ []              -> "*** An error occurred. No additional information available. Try running in verbose mode"
   ProofError  _ ls              -> "*** An error occurred.\n" ++ intercalate "\n" (map ("***  " ++) ls)
-  TimeOut     _                 -> "*** Timeout"
  where cfg = resultConfig result
-
-       showUC Nothing   = ""
-       showUC (Just []) = dot ++ "[No unsat core received. Have you labeled relevant assertions?]"
-       showUC (Just xs) = intercalate "\n" $ (dot ++ "Unsat core:") : map ("  " ++) xs
-
-       dot = case reverse unsatMsg of
-               ('.':_) -> " "
-               _       -> ". "
 
 -- | Show a model in human readable form. Ignore bindings to those variables that start
 -- with "__internal_sbv_" and also those marked as "nonModelVar" in the config; as these are only for internal purposes
@@ -467,210 +478,391 @@ shCW = sh . printBase
         sh 16 = hexS
         sh n  = \w -> show w ++ " -- Ignoring unsupported printBase " ++ show n ++ ", use 2, 10, or 16."
 
--- | Print uninterpreted function values from models. Very, very crude..
-shUI :: (String, [String]) -> [String]
-shUI (flong, cases) = ("  -- uninterpreted: " ++ f) : map shC cases
-  where tf = dropWhile (/= '_') flong
-        f  =  if null tf then flong else tail tf
-        shC s = "       " ++ s
-
--- | Print uninterpreted array values from models. Very, very crude..
-shUA :: (String, [String]) -> [String]
-shUA (f, cases) = ("  -- array: " ++ f) : map shC cases
-  where shC s = "       " ++ s
-
 -- | Helper function to spin off to an SMT solver.
-pipeProcess :: SMTConfig -> String -> [String] -> SMTScript -> (String -> String) -> IO (Either String [String])
-pipeProcess cfg execName opts script cleanErrs = do
-        let nm = show (name (solver cfg))
-        mbExecPath <- findExecutable execName
-        case mbExecPath of
-          Nothing       -> return $ Left $ "Unable to locate executable for " ++ nm
-                                        ++ "\nExecutable specified: " ++ show execName
-          Just execPath ->
-                   do solverResult <- dispatchSolver cfg execPath opts script
-                      case solverResult of
-                        Left s                          -> return $ Left s
-                        Right (ec, contents, allErrors) ->
-                          let errors = dropWhile isSpace (cleanErrs allErrors)
-                          in case (null errors, ec) of
-                                (True, ExitSuccess)  -> return $ Right $ map clean (filter (not . null) (lines contents))
-                                (_, ec')             -> let errors' = if null errors
-                                                                      then (if null (dropWhile isSpace contents)
-                                                                            then "(No error message printed on stderr by the executable.)"
-                                                                            else contents)
-                                                                      else errors
-                                                            finalEC = case (ec', ec) of
-                                                                        (ExitFailure n, _) -> n
-                                                                        (_, ExitFailure n) -> n
-                                                                        _                  -> 0 -- can happen if ExitSuccess but there is output on stderr
-                                                        in return $ Left $  "Failed to complete the call to " ++ nm
-                                                                         ++ "\nExecutable   : " ++ show execPath
-                                                                         ++ "\nOptions      : " ++ joinArgs opts
-                                                                         ++ "\nExit code    : " ++ show finalEC
-                                                                         ++ "\nSolver output: "
-                                                                         ++ "\n" ++ line ++ "\n"
-                                                                         ++ intercalate "\n" (filter (not . null) (lines errors'))
-                                                                         ++ "\n" ++ line
-                                                                         ++ "\nGiving up.."
-  where clean = reverse . dropWhile isSpace . reverse . dropWhile isSpace
-        line  = replicate 78 '='
+pipeProcess :: SMTConfig -> State -> String -> [String] -> String -> (State -> IO a) -> IO a
+pipeProcess cfg ctx execName opts pgm continuation = do
+    mbExecPath <- findExecutable execName
+    case mbExecPath of
+      Nothing      -> error $ unlines [ "Unable to locate executable for " ++ show (name (solver cfg))
+                                      , "Executable specified: " ++ show execName
+                                      ]
 
--- | The standard-model that most SMT solvers should happily work with
-standardModel :: (Bool -> [(Quantifier, NamedSymVar)] -> [String] -> SMTModel, SW -> String -> [String])
-standardModel = (standardModelExtractor, standardValueExtractor)
-
--- | Some solvers (Z3) require multiple calls for certain value extractions; as in multi-precision reals. Deal with that here
-standardValueExtractor :: SW -> String -> [String]
-standardValueExtractor _ l = [l]
-
--- | A standard post-processor: Reading the lines of solver output and turning it into a model:
-standardModelExtractor :: Bool -> [(Quantifier, NamedSymVar)] -> [String] -> SMTModel
-standardModelExtractor isSat qinps solverLines = SMTModel { modelObjectives = map snd $ sortByNodeId $ concatMap (interpretSolverObjectiveLine inps) solverLines
-                                                          , modelAssocs     = map snd $ sortByNodeId $ concatMap (interpretSolverModelLine     inps) solverLines
-                                                          }
-         where sortByNodeId :: [(Int, a)] -> [(Int, a)]
-               sortByNodeId = sortBy (compare `on` fst)
-               inps -- for "sat", display the prefix existentials. For completeness, we will drop
-                    -- only the trailing foralls. Exception: Don't drop anything if it's all a sequence of foralls
-                    | isSat = map snd $ if all (== ALL) (map fst qinps)
-                                        then qinps
-                                        else reverse $ dropWhile ((== ALL) . fst) $ reverse qinps
-                    -- for "proof", just display the prefix universals
-                    | True  = map snd $ takeWhile ((== ALL) . fst) qinps
+      Just execPath -> runSolver cfg ctx execPath opts pgm continuation
+                       `C.catches`
+                        [ C.Handler (\(e :: C.ErrorCall)     -> C.throw e)
+                        , C.Handler (\(e :: C.SomeException) -> error $ unlines [ "Failed to start the external solver:\n" ++ show e
+                                                                                , "Make sure you can start " ++ show execPath
+                                                                                , "from the command line without issues."
+                                                                                ])
+                        ]
 
 -- | A standard engine interface. Most solvers follow-suit here in how we "chat" to them..
 standardEngine :: String
                -> String
-               -> (SMTConfig -> SMTConfig)
-               -> ([String] -> Int -> [String])
-               -> (Bool -> [(Quantifier, NamedSymVar)] -> [String] -> SMTModel, SW -> String -> [String])
                -> SMTEngine
-standardEngine envName envOptName modConfig addTimeOut (extractMap, extractValue) cfgIn isSat mbOptInfo qinps skolemMap pgm = do
-
-    let cfg = modConfig cfgIn
-
-    -- If there's an optimization goal, it better be handled by a custom engine!
-    () <- case mbOptInfo of
-            Nothing -> return ()
-            Just _  -> error $ "SBV.standardEngine: Solver: " ++ show (name (solver cfg)) ++ " doesn't support optimization!"
+standardEngine envName envOptName cfg ctx pgm continuation = do
 
     execName <-                    getEnv envName     `C.catch` (\(_ :: C.SomeException) -> return (executable (solver cfg)))
-    execOpts <- (splitArgs `fmap`  getEnv envOptName) `C.catch` (\(_ :: C.SomeException) -> return (options (solver cfg)))
+    execOpts <- (splitArgs `fmap`  getEnv envOptName) `C.catch` (\(_ :: C.SomeException) -> return (options (solver cfg) cfg))
 
-    let cfg'    = cfg {solver = (solver cfg) {executable = execName, options = maybe execOpts (addTimeOut execOpts) (timeOut cfg)}}
-        tweaks  = case solverTweaks cfg' of
-                    [] -> ""
-                    ts -> unlines $ "; --- user given solver tweaks ---" : ts ++ ["; --- end of user given tweaks ---"]
+    let cfg' = cfg {solver = (solver cfg) {executable = execName, options = const execOpts}}
 
-        cont rm = intercalate "\n" $ concatMap extract skolemMap
-           where extract (Left s)        = extractValue s $ "(echo \"((" ++ show s ++ " " ++ mkSkolemZero rm (kindOf s) ++ "))\")"
-                 extract (Right (s, [])) = extractValue s $ "(get-value (" ++ show s ++ "))"
-                 extract (Right (s, ss)) = extractValue s $ "(get-value (" ++ show s ++ concat [' ' : mkSkolemZero rm (kindOf a) | a <- ss] ++ "))"
-
-        script = SMTScript {scriptBody = tweaks ++ pgm, scriptModel = Just (cont (roundingMode cfg))}
-
-        -- standard engines only return one result ever
-        wrap x = [x]
-
-    standardSolver cfg' script id (wrap . ProofError cfg') (wrap . interpretSolverOutput cfg' (extractMap isSat qinps))
+    standardSolver cfg' ctx pgm continuation
 
 -- | A standard solver interface. If the solver is SMT-Lib compliant, then this function should suffice in
 -- communicating with it.
-standardSolver :: SMTConfig -> SMTScript -> (String -> String) -> ([String] -> a) -> ([String] -> a) -> IO a
-standardSolver config script cleanErrs failure success = do
-    let msg      = when (verbose config) . putStrLn . ("** " ++)
+standardSolver :: SMTConfig       -- ^ The currrent configuration
+               -> State           -- ^ Context in which we are running
+               -> String          -- ^ The program
+               -> (State -> IO a) -- ^ The continuation
+               -> IO a
+standardSolver config ctx pgm continuation = do
+    let msg s    = debug config ["** " ++ s]
         smtSolver= solver config
         exec     = executable smtSolver
-        opts     = options smtSolver
-        isTiming = timing config
-        nmSolver = show (name smtSolver)
-    msg $ "Calling: " ++ show (exec ++ (if null opts then "" else " ") ++ joinArgs opts)
-    case smtFile config of
-      Nothing -> return ()
-      Just f  -> do msg $ "Saving the generated script in file: " ++ show f
-                    writeFile f (scriptBody script ++ intercalate "\n" ("" : optimizeArgs config ++ [satCmd config]))
-    contents <- timeIf isTiming (WorkByProver nmSolver) $ pipeProcess config exec opts script cleanErrs
-    msg $ nmSolver ++ " output:\n" ++ either id (intercalate "\n") contents
-    case contents of
-      Left e   -> return $ failure (lines e)
-      Right xs -> return $ success (mergeSExpr xs)
+        opts     = options smtSolver config
+    msg $ "Calling: "  ++ (exec ++ (if null opts then "" else " ") ++ joinArgs opts)
+    rnf pgm `seq` pipeProcess config ctx exec opts pgm continuation
 
--- | Wrap the solver call to protect against any exceptions
-dispatchSolver :: SMTConfig -> FilePath -> [String] -> SMTScript -> IO (Either String (ExitCode, String, String))
-dispatchSolver cfg execPath opts script = rnf script `seq` (Right `fmap` runSolver cfg execPath opts script) `C.catch` (\(e::C.SomeException) -> bad (show e))
-  where bad s = return $ Left $ unlines [ "Failed to start the external solver: " ++ s
-                                        , "Make sure you can start " ++ show execPath
-                                        , "from the command line without issues."
-                                        ]
+-- | An internal type to track of solver interactions
+data SolverLine = SolverRegular   String  -- ^ All is well
+                | SolverTimeout   String  -- ^ Timeout expired
+                | SolverException String  -- ^ Something else went wrong
 
--- | A variant of 'readProcessWithExitCode'; except it knows about continuation strings
--- and can speak SMT-Lib2 (just a little).
-runSolver :: SMTConfig -> FilePath -> [String] -> SMTScript -> IO (ExitCode, String, String)
-runSolver cfg execPath opts script
- = do (send, ask, cleanUp, pid) <- do
+-- | A variant of 'readProcessWithExitCode'; except it deals with SBV continuations
+runSolver :: SMTConfig -> State -> FilePath -> [String] -> String -> (State -> IO a) -> IO a
+runSolver cfg ctx execPath opts pgm continuation
+ = do let nm  = show (name (solver cfg))
+          msg = debug cfg . map ("*** " ++)
+
+      (send, ask, getResponseFromSolver, terminateSolver, cleanUp, pid) <- do
                 (inh, outh, errh, pid) <- runInteractiveProcess execPath opts Nothing Nothing
-                let send l    = hPutStr inh (l ++ "\n") >> hFlush inh
-                    recv      = hGetLine outh
-                    ask l     = send l >> recv
-                    cleanUp response
-                        = do hClose inh
-                             outMVar <- newEmptyMVar
-                             out <- hGetContents outh
-                             _ <- forkIO $ C.evaluate (length out) >> putMVar outMVar ()
-                             err <- hGetContents errh
-                             _ <- forkIO $ C.evaluate (length err) >> putMVar outMVar ()
-                             takeMVar outMVar
-                             takeMVar outMVar
-                             hClose outh
-                             hClose errh
-                             ex <- waitForProcess pid
-                             return $ case response of
-                                        Nothing        -> (ex, out, err)
-                                        Just (r, vals) -> -- if the status is unknown, prepare for the possibility of not having a model
-                                                          -- TBD: This is rather crude and potentially Z3 specific
-                                                          let finalOut = intercalate "\n" (r : vals)
-                                                              notAvail = "model is not available" `isInfixOf` (finalOut ++ out ++ err)
-                                                          in if "unknown" `isPrefixOf` r && notAvail
-                                                             then (ExitSuccess, "unknown"              , "")
-                                                             else (ex,          finalOut ++ "\n" ++ out, err)
-                return (send, ask, cleanUp, pid)
-      let executeSolver = do mapM_ send (lines (scriptBody script))
-                             mapM_ send (optimizeArgs cfg)
-                             response <- case scriptModel script of
-                                           Nothing -> do send $ satCmd cfg
-                                                         return Nothing
-                                           Just ls -> do r    <- ask $ satCmd cfg
-                                                         vals <- case () of
-                                                                    () | any (`isPrefixOf` r) ["sat", "unknown"]
-                                                                       -> do let mls = lines ls
-                                                                             when (verbose cfg) $ do putStrLn "** Sending the following model extraction commands:"
-                                                                                                     mapM_ putStrLn mls
-                                                                             mapM ask mls
-                                                                    () | getUnsatCore cfg && "unsat" `isPrefixOf` r
-                                                                       -> do when (verbose cfg) $ putStrLn "** Querying for unsat cores"
-                                                                             mapM ask ["(get-unsat-core)"]
-                                                                    () -> return []
-                                                         return $ Just (r, vals)
-                             cleanUp response
-      executeSolver `C.onException`  (terminateProcess pid >> waitForProcess pid)
 
--- | In case the SMT-Lib solver returns a response over multiple lines, compress them so we have
--- each S-Expression spanning only a single line. We'll ignore things like parentheses inside quotes
--- etc., as it should not be an issue
-mergeSExpr :: [String] -> [String]
-mergeSExpr []       = []
-mergeSExpr (x:xs)
- | d == 0 = x : mergeSExpr xs
- | True   = let (f, r) = grab d xs in unwords (x:f) : mergeSExpr r
- where d = parenDiff x
-       parenDiff :: String -> Int
-       parenDiff = go 0
-         where go i ""       = i
-               go i ('(':cs) = let i'= i+1 in i' `seq` go i' cs
-               go i (')':cs) = let i'= i-1 in i' `seq` go i' cs
-               go i (_  :cs) = go i cs
-       grab i ls
-         | i <= 0    = ([], ls)
-       grab _ []     = ([], [])
-       grab i (l:ls) = let (a, b) = grab (i+parenDiff l) ls in (l:a, b)
+                let -- send a command down, but check that we're balanced in parens. If we aren't
+                    -- this is most likely an SBV bug.
+                    send :: Maybe Int -> String -> IO ()
+                    send mbTimeOut command
+                      | parenDeficit command /= 0
+                      = error $ unlines [ ""
+                                        , "*** Data.SBV: Unbalanced input detected."
+                                        , "***"
+                                        , "***   Sending: " ++ command
+                                        , "***"
+                                        , "*** This is most likely an SBV bug. Please report!"
+                                        ]
+                      | True
+                      = do hPutStrLn inh command
+                           hFlush inh
+                           recordTranscript (transcript cfg) $ Left (command, mbTimeOut)
+
+                    -- Send a line, get a whole s-expr. We ignore the pathetic case that there might be a string with an unbalanced parentheses in it in a response.
+                    ask :: Maybe Int -> String -> IO String
+                    ask mbTimeOut command =
+                                  -- solvers don't respond to empty lines or comments; we just pass back
+                                  -- success in these cases to keep the illusion of everything has a response
+                                  let cmd = dropWhile isSpace command
+                                  in if null cmd || ";" `isPrefixOf` cmd
+                                     then return "success"
+                                     else do send mbTimeOut command
+                                             getResponseFromSolver (Just command) mbTimeOut
+
+                    -- Get a response from the solver, with an optional time-out on how long
+                    -- to wait. Note that there's *always* a time-out of 5 seconds once we get the
+                    -- first line of response, as while the solver might take it's time to respond,
+                    -- once it starts responding successive lines should come quickly.
+                    getResponseFromSolver :: Maybe String -> Maybe Int -> IO String
+                    getResponseFromSolver mbCommand mbTimeOut = do
+                                response <- go True 0 []
+                                let collated = intercalate "\n" $ reverse response
+                                recordTranscript (transcript cfg) $ Right collated
+                                return collated
+
+                      where safeGetLine isFirst h =
+                                         let timeOutToUse | isFirst = mbTimeOut
+                                                          | True    = Just 5000000
+                                             timeOutMsg t | isFirst = "User specified timeout of " ++ showTimeoutValue t ++ " exceeded."
+                                                          | True    = "A multiline complete response wasn't received before " ++ showTimeoutValue t ++ " exceeded."
+                                         in case timeOutToUse of
+                                              Nothing -> SolverRegular <$> hGetLine h
+                                              Just t  -> do r <- Timeout.timeout t (hGetLine h)
+                                                            case r of
+                                                              Just l  -> return $ SolverRegular l
+                                                              Nothing -> return $ SolverTimeout $ timeOutMsg t
+
+                            go isFirst i sofar = do
+                                            errln <- safeGetLine isFirst outh `C.catch` (\(e :: C.SomeException) -> return (SolverException (show e)))
+                                            case errln of
+                                              SolverRegular ln -> let need  = i + parenDeficit ln
+                                                                      -- make sure we get *something*
+                                                                      empty = case dropWhile isSpace ln of
+                                                                                []      -> True
+                                                                                (';':_) -> True   -- yes this does happen! I've seen z3 print out comments on stderr.
+                                                                                _       -> False
+                                                                  in case (empty, need <= 0) of
+                                                                        (True, _)      -> do debug cfg ["[SKIP] " `alignPlain` ln]
+                                                                                             go isFirst need sofar
+                                                                        (False, False) -> go False   need (ln:sofar)
+                                                                        (False, True)  -> return (ln:sofar)
+
+                                              SolverException e -> error $ unlines $ [""
+                                                                                     , "*** Error     : " ++ e
+                                                                                     , "*** Executable: " ++ execPath
+                                                                                     , "*** Options   : " ++ joinArgs opts
+                                                                                     ]
+                                                                                  ++ [ "*** Request   : " `alignDiagnostic` command                 | Just command <- [mbCommand]]
+                                                                                  ++ [ "*** Response  : " `alignDiagnostic` unlines (reverse sofar) | not $ null sofar           ]
+                                                                                  ++ [ "***"
+                                                                                     , "*** Giving up!"
+                                                                                     ]
+
+                                              SolverTimeout e -> do terminateProcess pid -- NB. Do not *wait* for the process, just quit.
+                                                                    error $ unlines $ [ ""
+                                                                                      , "*** Data.SBV: Timeout."
+                                                                                      , "***"
+                                                                                      , "***   " ++ e
+                                                                                      ]
+                                                                                   ++ [ "***   Response so far: " `alignDiagnostic` unlines (reverse sofar) | not $ null sofar]
+                                                                                   ++ [ "***   Last command sent was: " `alignDiagnostic` command | Just command <- [mbCommand]]
+                                                                                   ++ [ "***   Run with 'verbose=True' for further information" | not (verbose cfg)]
+                                                                                   ++ [ "***"
+                                                                                      , "*** Giving up!"
+                                                                                      ]
+
+                    terminateSolver = do hClose inh
+                                         outMVar <- newEmptyMVar
+                                         out <- hGetContents outh `C.catch`  (\(e :: C.SomeException) -> return (show e))
+                                         _ <- forkIO $ C.evaluate (length out) >> putMVar outMVar ()
+                                         err <- hGetContents errh `C.catch`  (\(e :: C.SomeException) -> return (show e))
+                                         _ <- forkIO $ C.evaluate (length err) >> putMVar outMVar ()
+                                         takeMVar outMVar
+                                         takeMVar outMVar
+                                         hClose outh `C.catch`  (\(_ :: C.SomeException) -> return ())
+                                         hClose errh `C.catch`  (\(_ :: C.SomeException) -> return ())
+                                         ex <- waitForProcess pid `C.catch` (\(_ :: C.SomeException) -> return (ExitFailure (-999)))
+                                         return (out, err, ex)
+
+                    cleanUp
+                      = do (out, err, ex) <- terminateSolver
+
+                           msg $   [ "Solver   : " ++ nm
+                                   , "Exit code: " ++ show ex
+                                   ]
+                                ++ [ "Std-out  : " ++ intercalate "\n           " (lines out) | not (null out)]
+                                ++ [ "Std-err  : " ++ intercalate "\n           " (lines err) | not (null err)]
+
+                           case ex of
+                             ExitSuccess -> return ()
+                             _           -> if ignoreExitCode cfg
+                                               then msg ["Ignoring non-zero exit code of " ++ show ex ++ " per user request!"]
+                                               else error $ unlines $  [ ""
+                                                                       , "*** Failed to complete the call to " ++ nm ++ ":"
+                                                                       , "*** Executable   : " ++ execPath
+                                                                       , "*** Options      : " ++ joinArgs opts
+                                                                       , "*** Exit code    : " ++ show ex
+                                                                       ]
+                                                                    ++ [ "*** Std-out      : " ++ intercalate "\n                   " (lines out)]
+                                                                    ++ [ "*** Std-err      : " ++ intercalate "\n                   " (lines err)]
+                                                                    ++ ["Giving up.."]
+                return (send, ask, getResponseFromSolver, terminateSolver, cleanUp, pid)
+
+      let executeSolver = do let sendAndGetSuccess :: Maybe Int -> String -> IO ()
+                                 sendAndGetSuccess mbTimeOut l
+                                   -- The pathetic case when the solver doesn't support queries, so we pretend it responded "success"
+                                   -- Currently ABC is the only such solver. Filed a request for ABC at: https://bitbucket.org/alanmi/abc/issues/70/
+                                   | not (supportsCustomQueries (capabilities (solver cfg)))
+                                   = do send mbTimeOut l
+                                        debug cfg ["[ISSUE] " `alignPlain` l]
+                                   | True
+                                   = do r <- ask mbTimeOut l
+                                        case words r of
+                                          ["success"] -> debug cfg ["[GOOD] " `alignPlain` l]
+                                          _           -> do debug cfg ["[FAIL] " `alignPlain` l]
+
+                                                            let isOption = "(set-option" `isPrefixOf` dropWhile isSpace l
+
+                                                                reason | isOption = [ "*** Backend solver reports it does not support this option."
+                                                                                    , "*** Please report this as a bug/feature request with the solver!"
+                                                                                    ]
+                                                                       | True     = [ "*** Failed to establish solver context. Running in debug mode might provide"
+                                                                                    , "*** more information. Please report this as an issue!"
+                                                                                    ]
+
+                                                            -- put a sync point here before we die so we consume everything
+                                                            mbExtras <- (Right <$> getResponseFromSolver Nothing (Just 5000000)) `C.catch` (\(e :: C.SomeException) -> return (Left (show e)))
+
+                                                            -- Ignore any exceptions from last sync, pointless.
+                                                            let extras = case mbExtras of
+                                                                           Left _   -> []
+                                                                           Right xs -> xs
+
+                                                            (outOrig, errOrig, ex) <- terminateSolver
+                                                            let out = intercalate "\n" . lines $ outOrig
+                                                                err = intercalate "\n" . lines $ errOrig
+
+                                                            error $ unlines $  [""
+                                                                               , "*** Data.SBV: Unexpected non-success response from " ++ nm ++ ":"
+                                                                               , "***"
+                                                                               , "***    Sent      : " `alignDiagnostic` l
+                                                                               , "***    Expected  : success"
+                                                                               , "***    Received  : " `alignDiagnostic` (r ++ "\n" ++ extras)
+                                                                               ]
+                                                                            ++ [ "***    Stdout    : " `alignDiagnostic` out | not $ null out]
+                                                                            ++ [ "***    Stderr    : " `alignDiagnostic` err | not $ null err]
+                                                                            ++ [ "***    Exit code : " ++ show ex
+                                                                               , "***"
+                                                                               , "***    Executable: " ++ execPath
+                                                                               , "***    Options   : " ++ joinArgs opts
+                                                                               , "***"
+                                                                               ]
+                                                                              ++ reason
+
+                             -- Mark in the log, mostly.
+                             sendAndGetSuccess Nothing "; Automatically generated by SBV. Do not edit."
+
+                             -- First check that the solver supports :print-success
+                             let backend = name $ solver cfg
+                             if not (supportsCustomQueries (capabilities (solver cfg)))
+                                then debug cfg ["** Skipping heart-beat for the solver " ++ show backend]
+                                else do let heartbeat = "(set-option :print-success true)"
+                                        r <- ask (Just 5000000) heartbeat  -- Give the solver 5s to respond, this should be plenty enough!
+                                        case words r of
+                                          ["success"]     -> debug cfg ["[GOOD] " ++ heartbeat]
+                                          ["unsupported"] -> error $ unlines [ ""
+                                                                             , "*** Backend solver (" ++  show backend ++ ") does not support the command:"
+                                                                             , "***"
+                                                                             , "***     (set-option :print-success true)"
+                                                                             , "***"
+                                                                             , "*** SBV relies on this feature to coordinate communication!"
+                                                                             , "*** Please request this as a feature!"
+                                                                             ]
+                                          _               -> error $ unlines [ ""
+                                                                             , "*** Data.SBV: Failed to initiate contact with the solver!"
+                                                                             , "***"
+                                                                             , "***   Sent    : " ++ heartbeat
+                                                                             , "***   Expected: success"
+                                                                             , "***   Received: " ++ r
+                                                                             , "***"
+                                                                             , "*** Try running in debug mode for further information."
+                                                                             ]
+
+                             -- For push/pop support, we require :global-declarations to be true. But not all solvers
+                             -- support this. Issue it if supported. (If not, we'll reject pop calls.)
+                             if not (supportsGlobalDecls (capabilities (solver cfg)))
+                                then debug cfg [ "** Backend solver " ++ show backend ++ " does not support global decls."
+                                               , "** Some incremental calls, such as pop, will be limited."
+                                               ]
+                                else sendAndGetSuccess Nothing "(set-option :global-declarations true)"
+
+                             -- Now dump the program!
+                             mapM_ (sendAndGetSuccess Nothing) (mergeSExpr (lines pgm))
+
+                             -- Prepare the query context and ship it off
+                             let qs = QueryState { queryAsk                 = ask
+                                                 , querySend                = send
+                                                 , queryRetrieveResponse    = getResponseFromSolver Nothing
+                                                 , queryConfig              = cfg
+                                                 , queryTerminate           = cleanUp
+                                                 , queryTimeOutValue        = Nothing
+                                                 , queryAssertionStackDepth = 0
+                                                 }
+                                 qsp = queryState ctx
+
+                             mbQS <- readIORef qsp
+
+                             case mbQS of
+                               Nothing -> writeIORef qsp (Just qs)
+                               Just _  -> error $ unlines [ ""
+                                                          , "Data.SBV: Impossible happened, query-state was already set."
+                                                          , "Please report this as a bug!"
+                                                          ]
+
+                             -- off we go!
+                             continuation ctx
+
+      -- NB. Don't use 'bracket' here, as it wouldn't have access to the exception.
+      let launchSolver = do startTranscript    (transcript cfg) cfg
+                            r <- executeSolver
+                            finalizeTranscript (transcript cfg) Nothing
+                            recordEndTime      cfg ctx
+                            return r
+
+      launchSolver `C.catch` (\(e :: C.SomeException) -> do terminateProcess pid
+                                                            ec <- waitForProcess pid
+                                                            recordException    (transcript cfg) (show e)
+                                                            finalizeTranscript (transcript cfg) (Just ec)
+                                                            recordEndTime      cfg ctx
+                                                            C.throwIO e)
+
+-- | Compute and report the end time
+recordEndTime :: SMTConfig -> State -> IO ()
+recordEndTime SMTConfig{timing} state = case timing of
+                                           NoTiming        -> return ()
+                                           PrintTiming     -> do e <- elapsed
+                                                                 putStrLn $ "*** SBV: Elapsed time: " ++ showTDiff e
+                                           SaveTiming here -> writeIORef here =<< elapsed
+  where elapsed = getCurrentTime >>= \end -> return $ diffUTCTime end (startTime state)
+
+-- | Start a transcript file, if requested.
+startTranscript :: Maybe FilePath -> SMTConfig -> IO ()
+startTranscript Nothing  _   = return ()
+startTranscript (Just f) cfg = do ts <- show <$> getZonedTime
+                                  mbExecPath <- findExecutable (executable (solver cfg))
+                                  writeFile f $ start ts mbExecPath
+  where SMTSolver{name, options} = solver cfg
+        start ts mbPath = unlines [ ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
+                                  , ";;; SBV: Starting at " ++ ts
+                                  , ";;;"
+                                  , ";;;           Solver    : " ++ show name
+                                  , ";;;           Executable: " ++ fromMaybe "Unable to locate the executable" mbPath
+                                  , ";;;           Options   : " ++ unwords (options cfg)
+                                  , ";;;"
+                                  , ";;; This file is an auto-generated loadable SMT-Lib file."
+                                  , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
+                                  , ""
+                                  ]
+
+-- | Finish up the transcript file.
+finalizeTranscript :: Maybe FilePath -> Maybe ExitCode -> IO ()
+finalizeTranscript Nothing  _    = return ()
+finalizeTranscript (Just f) mbEC = do ts <- show <$> getZonedTime
+                                      appendFile f $ end ts
+  where end ts = unlines $ [ ""
+                           , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
+                           , ";;;"
+                           , ";;; SBV: Finished at " ++ ts
+                           ]
+                       ++  [ ";;;\n;;; Exit code: " ++ show ec | Just ec <- [mbEC] ]
+                       ++  [ ";;;"
+                           , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
+                           ]
+
+-- If requested, record in the transcript file
+recordTranscript :: Maybe FilePath -> Either (String, Maybe Int) String -> IO ()
+recordTranscript Nothing  _ = return ()
+recordTranscript (Just f) m = do tsPre <- formatTime defaultTimeLocale "; [%T%Q" <$> getZonedTime
+                                 let ts = take 15 $ tsPre ++ repeat '0'
+                                 case m of
+                                   Left  (sent, mbTimeOut) -> appendFile f $ unlines $ (ts ++ "] " ++ to mbTimeOut ++ "Sending:") : lines sent
+                                   Right recv              -> appendFile f $ unlines $ case lines (dropWhile isSpace recv) of
+                                                                                        []  -> [ts ++ "] Received: <NO RESPONSE>"]  -- can't really happen.
+                                                                                        [x] -> [ts ++ "] Received: " ++ x]
+                                                                                        xs  -> (ts ++ "] Received: ") : map (";   " ++) xs
+        where to Nothing  = ""
+              to (Just i) = "[Timeout: " ++ showTimeoutValue i ++ "] "
+{-# INLINE recordTranscript #-}
+
+-- Record the exception
+recordException :: Maybe FilePath -> String -> IO ()
+recordException Nothing  _ = return ()
+recordException (Just f) m = do ts <- show <$> getZonedTime
+                                appendFile f $ exc ts
+  where exc ts = unlines $ [ ""
+                           , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
+                           , ";;;"
+                           , ";;; SBV: Caught an exception at " ++ ts
+                           , ";;;"
+                           ]
+                        ++ [ ";;;   " ++ l | l <- dropWhile null (lines m) ]
+                        ++ [ ";;;"
+                           , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
+                           ]

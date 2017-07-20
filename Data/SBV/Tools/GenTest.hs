@@ -19,7 +19,6 @@ import Data.Char     (isAlpha, toUpper)
 import Data.Function (on)
 import Data.List     (intercalate, groupBy)
 import Data.Maybe    (fromMaybe)
-import System.Random
 
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Data
@@ -38,20 +37,19 @@ getTestValues (TV vs) = vs
 -- | Generate a set of concrete test values from a symbolic program. The output
 -- can be rendered as test vectors in different languages as necessary. Use the
 -- function 'output' call to indicate what fields should be in the test result.
--- (Also see 'constrain' and 'pConstrain' for filtering acceptable test values.)
+-- (Also see 'constrain' for filtering acceptable test values.)
 genTest :: Outputtable a => Int -> Symbolic a -> IO TestVectors
 genTest n m = gen 0 []
   where gen i sofar
          | i == n = return $ TV $ reverse sofar
-         | True   = do g <- newStdGen
-                       t <- tc g
+         | True   = do t <- tc
                        gen (i+1) (t:sofar)
-        tc g = do (_, Result _ tvals _ _ cs _ _ _ _ _ cstrs _ _ _ os) <- runSymbolic' (Concrete g) (m >>= output)
-                  let cval = fromMaybe (error "Cannot generate tests in the presence of uninterpeted constants!") . (`lookup` cs)
-                      cond = all (cwToBool . cval . snd) cstrs
-                  if cond
-                     then return (map snd tvals, map cval os)
-                     else tc g  -- try again, with the same set of constraints
+        tc = do (_, Result {resTraces=tvals, resConsts=cs, resConstraints=cstrs, resOutputs=os}) <- runSymbolic Concrete (m >>= output)
+                let cval = fromMaybe (error "Cannot generate tests in the presence of uninterpeted constants!") . (`lookup` cs)
+                    cond = all (cwToBool . cval . snd) cstrs
+                if cond
+                   then return (map snd tvals, map cval os)
+                   else tc   -- try again, with the same set of constraints
 
 -- | Test output style
 data TestStyle = Haskell String                     -- ^ As a Haskell value with given name
@@ -298,7 +296,7 @@ forte vname bigEndian ss vs = intercalate "\n" $ [ "// Automatically generated b
         form []     [] = []
         form []     bs = error $ "SBV.renderTest: Mismatched index in stream, extra " ++ show (length bs) ++ " bit(s) remain."
         form (i:is) bs
-          | length bs < i = error $ "SBV.renderTest: Mismatched index in stream, was looking for " ++ show i ++ " bit(s), but only " ++ show i ++ " remains."
+          | length bs < i = error $ "SBV.renderTest: Mismatched index in stream, was looking for " ++ show i ++ " bit(s), but only " ++ show bs ++ " remains."
           | i == 1        = let b:r = bs
                                 v   = if b == '1' then "T" else "F"
                             in v : form is r
