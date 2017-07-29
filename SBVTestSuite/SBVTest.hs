@@ -2,7 +2,10 @@
 module Main(main) where
 
 import Test.Tasty
-import System.Environment (lookupEnv)
+
+import Utils.SBVTestFramework (getTestEnvironment, TestEnvironment(..), TravisOS(..), pickTests)
+
+import System.Exit (exitSuccess)
 
 import qualified TestSuite.Arrays.Memory
 import qualified TestSuite.Basics.AllSat
@@ -58,6 +61,7 @@ import qualified TestSuite.Puzzles.Sudoku
 import qualified TestSuite.Puzzles.Temperature
 import qualified TestSuite.Puzzles.U2Bridge
 import qualified TestSuite.Queries.BasicQuery
+import qualified TestSuite.Queries.BadOption
 import qualified TestSuite.Queries.Enums
 import qualified TestSuite.Queries.FreshVars
 import qualified TestSuite.Queries.Int_ABC
@@ -66,6 +70,7 @@ import qualified TestSuite.Queries.Int_CVC4
 import qualified TestSuite.Queries.Int_Mathsat
 import qualified TestSuite.Queries.Int_Yices
 import qualified TestSuite.Queries.Int_Z3
+import qualified TestSuite.Queries.Interpolants
 import qualified TestSuite.Queries.Uninterpreted
 import qualified TestSuite.Uninterpreted.AUF
 import qualified TestSuite.Uninterpreted.Axioms
@@ -73,18 +78,30 @@ import qualified TestSuite.Uninterpreted.Function
 import qualified TestSuite.Uninterpreted.Sort
 import qualified TestSuite.Uninterpreted.Uninterpreted
 
+-- On Travis, the build machines are subject to time-out limits. So, we cannot really run
+-- everything yet remain within the timeout bounds. Here, we randomly pick a subset; with
+-- the hope that over many runs this tests larger parts of the test-suite.
+travisFilter :: TravisOS -> TestTree -> IO TestTree
+travisFilter te tt = do putStrLn $ "Travis: Reducing tests by " ++ show (100-p) ++ "% for running on " ++ show te
+                        pickTests p tt
+  where p = case te of
+              TravisLinux   ->  30
+              TravisOSX     ->  10
+              TravisWindows -> 100   -- Travis doesn't actually have Windows, just keep this at 100 for now.
+
 main :: IO ()
-main = do mbTravis <- lookupEnv "SBV_UNDER_TRAVIS"
+main = do testEnv <- getTestEnvironment
 
-          isTravis <- case mbTravis of
-                        Just "yes" -> do putStrLn "SBVTests: Running on Travis"
-                                         return True
-                        _          -> do putStrLn "SBVTests: Not running on Travis"
-                                         return False
+          putStrLn $ "SBVTest: Test platform: " ++ show testEnv
 
-          let testCases = [tc | (canRunOnTravis, tc) <- allTests, not isTravis || canRunOnTravis]
+          let allTestCases       = testGroup "Tests" [tc | (_,    tc) <- allTests]
+              allTravisTestCases = testGroup "Tests" [tc | (True, tc) <- allTests]
 
-          defaultMain $ testGroup "Tests" testCases
+          case testEnv of
+            TestEnvLocal     -> defaultMain allTestCases
+            TestEnvTravis os -> defaultMain =<< travisFilter os allTravisTestCases
+            TestEnvUnknown   -> do putStrLn "Unknown test environment, skipping tests"
+                                   exitSuccess
 
 -- If the first  Bool is True, then that test can run on Travis
 allTests :: [(Bool, TestTree)]
@@ -142,6 +159,7 @@ allTests = [ (True,  TestSuite.Arrays.Memory.tests)
            , (True,  TestSuite.Puzzles.Temperature.tests)
            , (True,  TestSuite.Puzzles.U2Bridge.tests)
            , (False, TestSuite.Queries.BasicQuery.tests)
+           , (False, TestSuite.Queries.BadOption.tests)
            , (True,  TestSuite.Queries.Enums.tests)
            , (True,  TestSuite.Queries.FreshVars.tests)
            , (False, TestSuite.Queries.Int_ABC.tests)
@@ -150,6 +168,7 @@ allTests = [ (True,  TestSuite.Arrays.Memory.tests)
            , (False, TestSuite.Queries.Int_Mathsat.tests)
            , (False, TestSuite.Queries.Int_Yices.tests)
            , (True,  TestSuite.Queries.Int_Z3.tests)
+           , (True,  TestSuite.Queries.Interpolants.tests)
            , (True,  TestSuite.Queries.Uninterpreted.tests)
            , (True,  TestSuite.Uninterpreted.AUF.tests)
            , (True,  TestSuite.Uninterpreted.Axioms.tests)

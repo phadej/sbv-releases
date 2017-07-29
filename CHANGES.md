@@ -1,7 +1,20 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 7.0, 2017-07-19
+* Latest Hackage released version: 7.1, 2017-07-29
+
+### Version 7.1, 2017-07-29
+  
+  * Add support for 'getInterpolant' in Query mode.
+
+  * Support for SMT-results that can contain multi-line strings, which
+    is rare but it does happen. Previously SBV incorrectly interpreted such
+    responses to be erroneous.
+
+  * Many improvements to build infrastructure and code clean-up.
+
+  * Fix a bug in the implementation of `svSetBit`. Thanks to Robert Dockins
+    for the report.
 
 ### Version 7.0, Released 2017-07-19
 

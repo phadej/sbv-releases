@@ -19,7 +19,7 @@
 module Data.SBV.Control.Query (
        send, ask, retrieveResponse
      , CheckSatResult(..), checkSat, checkSatUsing, checkSatAssuming, checkSatAssumingWithUnsatisfiableSet
-     , getUnsatCore, getProof, getAssignment, getOption, freshVar, freshVar_, push, pop, getAssertionStackDepth
+     , getUnsatCore, getProof, getInterpolant, getAssignment, getOption, freshVar, freshVar_, push, pop, getAssertionStackDepth
      , inNewAssertionStack, echo, caseSplit, resetAssertions, exit, getAssertions, getValue, getUninterpretedValue, getModel, getSMTResult
      , getLexicographicOptResults, getIndependentOptResults, getParetoOptResults, getAllSatResult, getUnknownReason
      , SMTOption(..), SMTInfoFlag(..), SMTErrorBehavior(..), SMTReasonUnknown(..), SMTInfoResponse(..), getInfo
@@ -83,12 +83,18 @@ stringsOf (EApp ss)     = concatMap stringsOf ss
 serialize :: Bool -> SExpr -> String
 serialize removeQuotes = go
   where go (ECon s)      = if removeQuotes then unQuote s else s
-        go (ENum (i, _)) = show i
-        go (EReal   r)   = show r
-        go (EFloat  f)   = show f
-        go (EDouble d)   = show d
+        go (ENum (i, _)) = shNN i
+        go (EReal   r)   = shNN r
+        go (EFloat  f)   = shNN f
+        go (EDouble d)   = shNN d
         go (EApp [x])    = go x
         go (EApp ss)     = "(" ++ unwords (map go ss) ++ ")"
+
+        -- be careful with negative number printing in SMT-Lib..
+        shNN :: (Show a, Num a, Ord a) => a -> String
+        shNN i
+          | i < 0 = "(- " ++ show (-i) ++ ")"
+          | True  = show i
 
 -- | Ask solver for info.
 getInfo :: SMTInfoFlag -> Query SMTInfoResponse
@@ -143,6 +149,7 @@ getOption f = case f undefined of
                  ProduceAssertions{}         -> askFor "ProduceAssertions"         ":produce-assertions"          $ bool       ProduceAssertions
                  ProduceAssignments{}        -> askFor "ProduceAssignments"        ":produce-assignments"         $ bool       ProduceAssignments
                  ProduceProofs{}             -> askFor "ProduceProofs"             ":produce-proofs"              $ bool       ProduceProofs
+                 ProduceInterpolants{}       -> askFor "ProduceInterpolants"       ":produce-interpolants"        $ bool       ProduceInterpolants
                  ProduceUnsatAssumptions{}   -> askFor "ProduceUnsatAssumptions"   ":produce-unsat-assumptions"   $ bool       ProduceUnsatAssumptions
                  ProduceUnsatCores{}         -> askFor "ProduceUnsatCores"         ":produce-unsat-cores"         $ bool       ProduceUnsatCores
                  RandomSeed{}                -> askFor "RandomSeed"                ":random-seed"                 $ integer    RandomSeed
@@ -569,7 +576,7 @@ getProof = do
                                   , ""
                                   , "       setOption $ ProduceProofs True"
                                   , ""
-                                  , "to make sure the solver is ready for producing proofs."
+                                  , "to make sure the solver is ready for producing proofs,"
                                   , "and that there is a proof by first issuing a 'checkSat' call."
                                   ]
 
@@ -579,6 +586,56 @@ getProof = do
         -- we only care about the fact that we can parse the output, so the
         -- result of parsing is ignored.
         parse r bad $ \_ -> return r
+
+-- | Retrieve interpolants after an 'Unsat' result is obtained. Note you must have arranged for
+-- interpolants to be produced first (/via/ @'setOption' $ 'ProduceInterpolants' 'True'@)
+-- for this call to not error out!
+--
+-- To get an interpolant for a pair of formulas @A@ and @B@, use a 'namedConstraint' to attach
+-- names to @A@ and @B@. Then call 'getInterpolant' @[\"A\", \"B\"]@, assuming those are the names
+-- you gave to the formulas.
+--
+-- An interpolant for @A@ and @B@ is a formula @I@ such that:
+--
+-- @
+--        A ==> I
+--    and B ==> not I
+-- @
+--
+-- That is, it's evidence that @A@ and @B@ cannot be true together
+-- since @A@ implies @I@ but @B@ implies @not I@; establishing that @A@ and @B@ cannot
+-- be satisfied at the same time. Furthermore, @I@ will have only the symbols that are common
+-- to @A@ and @B@.
+--
+-- Interpolants generalize to sequences: If you pass more than two formulas, then you will get
+-- a sequence of interpolants. In general, for @N@ formulas that are not satisfiable together, you will be
+-- returned @N-1@ interpolants. If formulas are @A1 .. An@, then interpolants will be @I1 .. I(N-1)@, such
+-- that @A1 ==> I1@, @A2 /\\ I1 ==> I2@, @A3 /\\ I2 ==> I3@, ..., and finally @AN ===> not I(N-1)@.
+--
+-- Currently, SBV only returns simple and sequence interpolants, and does not support tree-interpolants.
+-- If you need these, please get in touch. Furthermore, the result will be a list of mere strings representing the
+-- interpolating formulas, as opposed to a more structured type. Please get in touch if you use this function and can
+-- suggest a better API.
+getInterpolant :: [String] -> Query [String]
+getInterpolant fs
+  | length fs < 2
+  = error $ "SBV.getInterpolant requires at least two named constraints, received: " ++ show fs
+  | True
+  = do let bar s = '|' : s ++ "|"
+           cmd = "(get-interpolant " ++ unwords (map bar fs) ++ ")"
+           bad = unexpected "getInterpolant" cmd "a get-interpolant response"
+                          $ Just [ "Make sure you use:"
+                                 , ""
+                                 , "       setOption $ ProduceInterpolants True"
+                                 , ""
+                                 , "to make sure the solver is ready for producing interpolants,"
+                                 , "and that you have named the formulas with calls to 'namedConstraint'."
+                                 ]
+
+       r <- ask cmd
+
+       parse r bad $ \case EApp (ECon "interpolants" : es) -> return $ map (serialize False) es
+                           _                               -> bad r Nothing
 
 -- | Retrieve assertions. Note you must have arranged for
 -- assertions to be available first (/via/ @'setOption' $ 'ProduceAssertions' 'True'@)
@@ -631,7 +688,18 @@ getAssignment = do
         parse r bad $ \case EApp ps | Just vs <- mapM grab ps -> return vs
                             _                                 -> bad r Nothing
 
--- | Make an assignment. The type 'Assignment' is abstract, see 'success' for an example use case.
+-- | Make an assignment. The type 'Assignment' is abstract, the result is typically passed
+-- to 'mkSMTResult':
+--
+-- @ mkSMTResult [ a |-> 332
+--             , b |-> 2.3
+--             , c |-> True
+--             ]
+-- @
+--
+-- End users should use 'getModel' for automatically constructing models from the current solver state.
+-- However, an explicit 'Assignment' might be handy in complex scenarios where a model needs to be
+-- created manually.
 infix 1 |->
 (|->) :: SymWord a => SBV a -> a -> Assignment
 SBV a |-> v = case literal v of

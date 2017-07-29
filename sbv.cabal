@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       7.0
+Version:       7.1
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -106,6 +106,7 @@ Library
                   , Data.SBV.Examples.Queries.GuessNumber
                   , Data.SBV.Examples.Queries.CaseSplit
                   , Data.SBV.Examples.Queries.Enums
+                  , Data.SBV.Examples.Queries.Interpolants
                   , Data.SBV.Examples.Uninterpreted.AUF
                   , Data.SBV.Examples.Uninterpreted.Deduce
                   , Data.SBV.Examples.Uninterpreted.Function
@@ -217,6 +218,7 @@ Test-Suite SBVTest
                   , TestSuite.Puzzles.Temperature
                   , TestSuite.Puzzles.U2Bridge
                   , TestSuite.Queries.BasicQuery
+                  , TestSuite.Queries.BadOption
                   , TestSuite.Queries.Enums
                   , TestSuite.Queries.FreshVars
                   , TestSuite.Queries.Int_ABC
@@ -225,6 +227,7 @@ Test-Suite SBVTest
                   , TestSuite.Queries.Int_Mathsat
                   , TestSuite.Queries.Int_Yices
                   , TestSuite.Queries.Int_Z3
+                  , TestSuite.Queries.Interpolants
                   , TestSuite.Queries.Uninterpreted
                   , TestSuite.Uninterpreted.AUF
                   , TestSuite.Uninterpreted.Axioms
@@ -233,15 +236,30 @@ Test-Suite SBVTest
                   , TestSuite.Uninterpreted.Uninterpreted
 
 Test-Suite SBVDocTest
-    Build-Depends:    base, doctest >= 0.9, Glob >= 0.7
+    Build-Depends:    base, directory, filepath, random
+                    , doctest      >= 0.9
+                    , Glob         >= 0.7
+                    , bytestring   >= 0.9
+                    , tasty        >= 0.11.2.3
+                    , tasty-golden >= 2.3.1.1
+                    , tasty-hunit  >= 0.9.2
+                    , sbv
     default-language: Haskell2010
     Hs-Source-Dirs  : SBVTestSuite
     main-is:          SBVDocTest.hs
+    Other-modules   : Utils.SBVTestFramework
     type:             exitcode-stdio-1.0
 
 Test-Suite SBVHLint
-    build-depends:    base, hlint >= 2.0.9
+    build-depends:    base, directory, filepath, random
+                    , hlint        >= 2.0.9
+                    , bytestring   >= 0.9
+                    , tasty        >= 0.11.2.3
+                    , tasty-golden >= 2.3.1.1
+                    , tasty-hunit  >= 0.9.2
+                    , sbv
     default-language: Haskell2010
     hs-source-dirs:   SBVTestSuite
+    Other-modules   : Utils.SBVTestFramework
     main-is:          SBVHLint.hs
     type:             exitcode-stdio-1.0
