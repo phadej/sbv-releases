@@ -19,7 +19,7 @@ module Utils.SBVTestFramework (
         , goldenString
         , goldenVsStringShow
         , goldenCapturedIO
-        , TravisOS(..), TestEnvironment(..), getTestEnvironment
+        , CIOS(..), TestEnvironment(..), getTestEnvironment
         , pickTests
         -- module exports to simplify life
         , module Test.Tasty
@@ -30,18 +30,23 @@ module Utils.SBVTestFramework (
 import qualified Control.Exception as C
 
 import qualified Data.ByteString.Lazy.Char8 as LBC
+import qualified Data.ByteString as BS
 
 import System.Directory   (removeFile)
 import System.Environment (lookupEnv)
 
 import Test.Tasty         (testGroup, TestTree, TestName)
-import Test.Tasty.Golden  (goldenVsString, goldenVsFile)
 import Test.Tasty.HUnit   (assert, Assertion, testCase)
+
+import Test.Tasty.Golden           (goldenVsString)
+import Test.Tasty.Golden.Advanced  (goldenTest)
 
 import Test.Tasty.Runners hiding (Result)
 import System.Random (randomRIO)
 
 import Data.SBV
+
+import Data.Char (chr, ord, isDigit)
 
 import Data.Maybe(fromMaybe, catMaybes)
 
@@ -50,28 +55,37 @@ import System.FilePath ((</>), (<.>))
 import Data.SBV.Internals (runSymbolic, Symbolic, Result, SBVRunMode(..), IStage(..))
 
 ---------------------------------------------------------------------------------------
--- Test environment
-data TravisOS = TravisLinux
-              | TravisOSX
-              | TravisWindows    -- Travis actually doesn't support windows yet. This is "reserved" for future
-              deriving Show
+-- Test environment; continuous integration
+data CIOS = CILinux
+          | CIOSX
+          | CIWindows
+          deriving Show
 
 data TestEnvironment = TestEnvLocal
-                     | TestEnvTravis TravisOS
+                     | TestEnvCI CIOS
                      | TestEnvUnknown
                      deriving Show
 
-getTestEnvironment :: IO TestEnvironment
-getTestEnvironment = do mbTestEnv <- lookupEnv "SBV_TEST_ENVIRONMENT"
+getTestEnvironment :: IO (TestEnvironment, Int)
+getTestEnvironment = do mbTestEnv  <- lookupEnv "SBV_TEST_ENVIRONMENT"
+                        mbTestPerc <- lookupEnv "SBV_HEAVYTEST_PERCENTAGE"
 
-                        case mbTestEnv of
-                          Just "local" -> return   TestEnvLocal
-                          Just "linux" -> return $ TestEnvTravis TravisLinux
-                          Just "osx"   -> return $ TestEnvTravis TravisOSX
-                          Just "win"   -> return $ TestEnvTravis TravisWindows
-                          Just other   -> do putStrLn $ "Ignoring unexpected test env value: " ++ show other
-                                             return TestEnvUnknown
-                          Nothing      -> return TestEnvUnknown
+                        env <- case mbTestEnv of
+                                 Just "local" -> return   TestEnvLocal
+                                 Just "linux" -> return $ TestEnvCI CILinux
+                                 Just "osx"   -> return $ TestEnvCI CIOSX
+                                 Just "win"   -> return $ TestEnvCI CIWindows
+                                 Just other   -> do putStrLn $ "Ignoring unexpected test env value: " ++ show other
+                                                    return TestEnvUnknown
+                                 Nothing      -> return TestEnvUnknown
+
+                        perc <- case mbTestPerc of
+                                 Just n | all isDigit n -> return (read n)
+                                 Just n                 -> do putStrLn $ "Ignoring unexpected test percentage value: " ++ show n
+                                                              return 100
+                                 Nothing                -> return 100
+
+                        return (env, perc)
 
 -- | Checks that a particular result shows as @s@
 showsAs :: Show a => a -> String -> Assertion
@@ -87,11 +101,34 @@ goldenVsStringShow :: Show a => TestName -> IO a -> TestTree
 goldenVsStringShow n res = goldenVsString n (goldFile n) (fmap (LBC.pack . show) res)
 
 goldenCapturedIO :: TestName -> (FilePath -> IO ()) -> TestTree
-goldenCapturedIO n res = goldenVsFile n gf gfTmp (rm gfTmp >> res gfTmp)
+goldenCapturedIO n res = doTheDiff n gf gfTmp (rm gfTmp >> res gfTmp)
   where gf    = goldFile n
         gfTmp = gf ++ "_temp"
 
         rm f = removeFile f `C.catch` (\(_ :: C.SomeException) -> return ())
+
+-- | When comparing ignore \r's for windows's sake
+doTheDiff :: TestName -> FilePath -> FilePath -> IO () -> TestTree
+doTheDiff nm ref new act = goldenTest nm (BS.readFile ref) (act >> BS.readFile new) cmp upd
+   where upd = BS.writeFile ref
+
+         cmp :: BS.ByteString -> BS.ByteString -> IO (Maybe String)
+         cmp x y
+          | cleanUp x == cleanUp y = return Nothing
+          | True                   = return $ Just $ unlines $ [ "Discrepancy found. Expected: " ++ ref
+                                                                 , "============================================"
+                                                                 ]
+                                                              ++ lines xs
+                                                              ++ [ "Got: " ++ new
+                                                                 , "============================================"
+                                                                 ]
+                                                              ++ lines ys
+          where xs = map (chr . fromIntegral) $ BS.unpack x
+                ys = map (chr . fromIntegral) $ BS.unpack y
+
+         -- deal with insane Windows \r stuff
+         cleanUp = BS.filter (/= slashr)
+         slashr  = fromIntegral (ord '\r')
 
 -- | Count the number of models
 numberOfModels :: Provable a => a -> IO Int

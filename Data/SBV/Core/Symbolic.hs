@@ -9,18 +9,19 @@
 -- Symbolic values
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE    GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE    TypeSynonymInstances       #-}
-{-# LANGUAGE    TypeOperators              #-}
-{-# LANGUAGE    MultiParamTypeClasses      #-}
-{-# LANGUAGE    ScopedTypeVariables        #-}
-{-# LANGUAGE    FlexibleInstances          #-}
-{-# LANGUAGE    PatternGuards              #-}
-{-# LANGUAGE    NamedFieldPuns             #-}
+{-# LANGUAGE    CPP                        #-}
 {-# LANGUAGE    DeriveDataTypeable         #-}
 {-# LANGUAGE    DeriveFunctor              #-}
+{-# LANGUAGE    FlexibleInstances          #-}
+{-# LANGUAGE    GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE    MultiParamTypeClasses      #-}
+{-# LANGUAGE    NamedFieldPuns             #-}
+{-# LANGUAGE    PatternGuards              #-}
 {-# LANGUAGE    Rank2Types                 #-}
-{-# LANGUAGE    CPP                        #-}
+{-# LANGUAGE    ScopedTypeVariables        #-}
+{-# LANGUAGE    TupleSections              #-}
+{-# LANGUAGE    TypeOperators              #-}
+{-# LANGUAGE    TypeSynonymInstances       #-}
 {-# OPTIONS_GHC -fno-warn-orphans          #-}
 
 module Data.SBV.Core.Symbolic
@@ -54,6 +55,7 @@ module Data.SBV.Core.Symbolic
   , SArr(..), readSArr, writeSArr, mergeSArr, newSArr, eqSArr
   ) where
 
+import Control.Arrow            (first, second, (***))
 import Control.DeepSeq          (NFData(..))
 import Control.Monad            (when, unless)
 import Control.Monad.Reader     (MonadReader, ReaderT, ask, runReaderT)
@@ -136,8 +138,8 @@ data Op = Plus
         | Or
         | XOr
         | Not
-        | Shl Int
-        | Shr Int
+        | Shl
+        | Shr
         | Rol Int
         | Ror Int
         | Extract Int Int                       -- Extract i j: extract bits i to j. Least significant bit is 0 (big-endian)
@@ -219,8 +221,8 @@ data PBOp = PB_AtMost  Int        -- ^ At most k
 -- Show instance for 'Op'. Note that this is largely for debugging purposes, not used
 -- for being read by any tool.
 instance Show Op where
-  show (Shl i) = "<<"  ++ show i
-  show (Shr i) = ">>"  ++ show i
+  show Shl    = "<<"
+  show Shr    = ">>"
   show (Rol i) = "<<<" ++ show i
   show (Ror i) = ">>>" ++ show i
   show (Extract i j) = "choose [" ++ show i ++ ":" ++ show j ++ "]"
@@ -281,8 +283,8 @@ reorder s = case s of
 -- Show instance for 'SBVExpr'. Again, only for debugging purposes.
 instance Show SBVExpr where
   show (SBVApp Ite [t, a, b])             = unwords ["if", show t, "then", show a, "else", show b]
-  show (SBVApp (Shl i) [a])               = unwords [show a, "<<", show i]
-  show (SBVApp (Shr i) [a])               = unwords [show a, ">>", show i]
+  show (SBVApp Shl     [a, i])            = unwords [show a, "<<", show i]
+  show (SBVApp Shr     [a, i])            = unwords [show a, ">>", show i]
   show (SBVApp (Rol i) [a])               = unwords [show a, "<<<", show i]
   show (SBVApp (Ror i) [a])               = unwords [show a, ">>>", show i]
   show (SBVApp (PseudoBoolean pb) args)   = unwords (show pb : map show args)
@@ -352,19 +354,19 @@ instance NFData a => NFData (Objective a) where
    rnf (AssertSoft s a p) = rnf s `seq` rnf a `seq` rnf p `seq` ()
 
 -- | Result of running a symbolic computation
-data Result = Result { reskinds       :: Set.Set Kind                    -- ^ kinds used in the program
-                     , resTraces      :: [(String, CW)]                  -- ^ quick-check counter-example information (if any)
-                     , resUISegs      :: [(String, [String])]            -- ^ uninterpeted code segments
-                     , resInputs      :: [(Quantifier, NamedSymVar)]     -- ^ inputs (possibly existential)
-                     , resConsts      :: [(SW, CW)]                      -- ^ constants
-                     , resTables      :: [((Int, Kind, Kind), [SW])]     -- ^ tables (automatically constructed) (tableno, index-type, result-type) elts
-                     , resArrays      :: [(Int, ArrayInfo)]              -- ^ arrays (user specified)
-                     , resUIConsts    :: [(String, SBVType)]             -- ^ uninterpreted constants
-                     , resAxioms      :: [(String, [String])]            -- ^ axioms
-                     , resAsgns       :: SBVPgm                          -- ^ assignments
-                     , resConstraints :: [(Maybe String, SW)]            -- ^ additional constraints (boolean)
-                     , resAssertions  :: [(String, Maybe CallStack, SW)] -- ^ assertions
-                     , resOutputs     :: [SW]                            -- ^ outputs
+data Result = Result { reskinds       :: Set.Set Kind                                     -- ^ kinds used in the program
+                     , resTraces      :: [(String, CW)]                                   -- ^ quick-check counter-example information (if any)
+                     , resUISegs      :: [(String, [String])]                             -- ^ uninterpeted code segments
+                     , resInputs      :: ([(Quantifier, NamedSymVar)], [NamedSymVar])     -- ^ inputs (possibly existential) + tracker vars
+                     , resConsts      :: [(SW, CW)]                                       -- ^ constants
+                     , resTables      :: [((Int, Kind, Kind), [SW])]                      -- ^ tables (automatically constructed) (tableno, index-type, result-type) elts
+                     , resArrays      :: [(Int, ArrayInfo)]                               -- ^ arrays (user specified)
+                     , resUIConsts    :: [(String, SBVType)]                              -- ^ uninterpreted constants
+                     , resAxioms      :: [(String, [String])]                             -- ^ axioms
+                     , resAsgns       :: SBVPgm                                           -- ^ assignments
+                     , resConstraints :: [(Maybe String, SW)]                             -- ^ additional constraints (boolean)
+                     , resAssertions  :: [(String, Maybe CallStack, SW)]                  -- ^ assertions
+                     , resOutputs     :: [SW]                                             -- ^ outputs
                      }
 
 -- Show instance for 'Result'. Only for debugging purposes.
@@ -378,7 +380,8 @@ instance Show Result where
   show (Result kinds _ cgs is cs ts as uis axs xs cstrs asserts os) = intercalate "\n" $
                    (if null usorts then [] else "SORTS" : map ("  " ++) usorts)
                 ++ ["INPUTS"]
-                ++ map shn is
+                ++ map shn (fst is)
+                ++ (if null (snd is) then [] else "TRACKER VARS" : map (shn . (EX,)) (snd is))
                 ++ ["CONSTANTS"]
                 ++ map shc cs
                 ++ ["TABLES"]
@@ -545,7 +548,7 @@ data State  = State { pathCond     :: SVal                             -- ^ kind
                     , rctr         :: IORef Int
                     , rUsedKinds   :: IORef KindSet
                     , rUsedLbls    :: IORef (Set.Set String)
-                    , rinps        :: IORef [(Quantifier, NamedSymVar)]
+                    , rinps        :: IORef ([(Quantifier, NamedSymVar)], [NamedSymVar]) -- User defined, and internal existential
                     , rConstraints :: IORef [(Maybe String, SW)]
                     , routs        :: IORef [SW]
                     , rtblMap      :: IORef TableMap
@@ -678,7 +681,7 @@ internalVariable st k = do (sw, nm) <- newSW st k
                                      SMTMode    _ False _ -> ALL
                                      CodeGen              -> ALL
                                      Concrete{}           -> ALL
-                           modifyState st rinps ((q, (sw, "__internal_sbv_" ++ nm)):)
+                           modifyState st rinps (first ((:) (q, (sw, "__internal_sbv_" ++ nm))))
                                      $ noInteractive [ "Internal variable creation:"
                                                      , "  Named: " ++ nm
                                                      ]
@@ -802,7 +805,19 @@ newtype Symbolic a = Symbolic (ReaderT State IO a)
 -- @randomCW@ is used for generating random values for this variable
 -- when used for 'quickCheck' or 'genTest' purposes.
 svMkSymVar :: Maybe Quantifier -> Kind -> Maybe String -> State -> IO SVal
-svMkSymVar mbQ k mbNm st = do
+svMkSymVar = svMkSymVarGen False
+
+-- | Create an existentially quantified tracker variable
+svMkTrackerVar :: Kind -> String -> State -> IO SVal
+svMkTrackerVar k nm = svMkSymVarGen True (Just EX) k (Just nm)
+
+-- | Create a symbolic value, based on the quantifier we have. If an
+-- explicit quantifier is given, we just use that. If not, then we
+-- pick the quantifier appropriately based on the run-mode.
+-- @randomCW@ is used for generating random values for this variable
+-- when used for 'quickCheck' or 'genTest' purposes.
+svMkSymVarGen :: Bool -> Maybe Quantifier -> Kind -> Maybe String -> State -> IO SVal
+svMkSymVarGen isTracker mbQ k mbNm st = do
         rm <- readIORef (runMode st)
 
         let varInfo = case mbNm of
@@ -817,7 +832,7 @@ svMkSymVar mbQ k mbNm st = do
 
             mkS q = do (sw, internalName) <- newSW st k
                        let nm = fromMaybe internalName mbNm
-                       introduceUserName st nm k q sw
+                       introduceUserName st isTracker nm k q sw
 
             mkC   = do cw <- randomCW k
                        do registerKind st k
@@ -835,22 +850,28 @@ svMkSymVar mbQ k mbNm st = do
           (_      ,  Concrete{})       -> noUI mkC
 
 -- | Introduce a new user name. We die if repeated.
-introduceUserName :: State -> String -> Kind -> Quantifier -> SW -> IO SVal
-introduceUserName st nm k q sw = do is <- readIORef (rinps st)
-                                    if nm `elem` [n | (_, (_, n)) <- is]
-                                       then error $ "SBV: Repeated user given name: " ++ show nm ++ ". Please use unique names."
-                                       else do let newInp olds = case q of
-                                                                   EX  -> (sw, nm) : olds
-                                                                   ALL -> noInteractive [ "Adding a new universally quantified: "
-                                                                                        , "  Name      : " ++ show nm
-                                                                                        , "  Kind      : " ++ show k
-                                                                                        , "  Quantifier: Universal"
-                                                                                        , "  Node      : " ++ show sw
-                                                                                        , "Only existential variables are supported in query mode."
-                                                                                        ]
-                                               modifyState st rinps ((q, (sw, nm)):)
-                                                         $ modifyIncState st rNewInps newInp
-                                               return $ SVal k $ Right $ cache (const (return sw))
+introduceUserName :: State -> Bool -> String -> Kind -> Quantifier -> SW -> IO SVal
+introduceUserName st isTracker nm k q sw = do
+        (is, ints) <- readIORef (rinps st)
+        if nm `elem` [n | (_, (_, n)) <- is] ++ [n | (_, n) <- ints]
+           then error $ "SBV: Repeated user given name: " ++ show nm ++ ". Please use unique names."
+           else if isTracker && q == ALL
+                then error $ "SBV: Impossible happened! A universally quantified tracker variable is being introduced: " ++ show nm
+                else do let newInp olds = case q of
+                                           EX  -> (sw, nm) : olds
+                                           ALL -> noInteractive [ "Adding a new universally quantified variable: "
+                                                                , "  Name      : " ++ show nm
+                                                                , "  Kind      : " ++ show k
+                                                                , "  Quantifier: Universal"
+                                                                , "  Node      : " ++ show sw
+                                                                , "Only existential variables are supported in query mode."
+                                                                ]
+                        if isTracker
+                           then modifyState st rinps (second ((:) (sw, nm)))
+                                          $ noInteractive ["Adding a new tracker variable in interactive mode: " ++ show nm]
+                           else modifyState st rinps (first ((:) (q, (sw, nm))))
+                                          $ modifyIncState st rNewInps newInp
+                        return $ SVal k $ Right $ cache (const (return sw))
 
 -- | Add a user specified axiom to the generated SMT-Lib file. The first argument is a mere
 -- string, use for commenting purposes. The second argument is intended to hold the multiple-lines
@@ -876,7 +897,7 @@ runSymbolic currentRunMode (Symbolic c) = do
    pgm       <- newIORef (SBVPgm S.empty)
    emap      <- newIORef Map.empty
    cmap      <- newIORef Map.empty
-   inps      <- newIORef []
+   inps      <- newIORef ([], [])
    outs      <- newIORef []
    tables    <- newIORef Map.empty
    arrays    <- newIORef IMap.empty
@@ -938,7 +959,7 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
                                        , rAsserts=asserts, rUsedKinds=usedKinds, rCgMap=cgs, rCInfo=cInfo, rConstraints=cstrs
                                        } = do
    SBVPgm rpgm  <- readIORef pgm
-   inpsO <- reverse <$> readIORef inps
+   inpsO <- (reverse *** reverse) <$> readIORef inps
    outsO <- reverse <$> readIORef outs
    let swap  (a, b)              = (b, a)
        swapc ((_, a), b)         = (b, a)
@@ -986,7 +1007,7 @@ addSValOptGoal obj = do st <- ask
 
                         -- create the tracking variable here for the metric
                         let mkGoal nm orig = liftIO $ do origSW  <- svToSW st orig
-                                                         track   <- svMkSymVar (Just EX) (kindOf orig) (Just nm) st
+                                                         track   <- svMkTrackerVar (kindOf orig) nm st
                                                          trackSW <- svToSW st track
                                                          return (origSW, trackSW)
 

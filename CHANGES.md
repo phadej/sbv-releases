@@ -1,7 +1,31 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 7.1, 2017-07-29
+* Latest Hackage released version: 7.2, 2017-08-29
+
+### Version 7.2, 2017-08-29
+
+  * Reworked implementation of shifts and rotates: When a signed quantity was
+    being shifted right by more than its size, SBV used to return 0. Robert Dockins pointed
+    out that the correct answer is actually -1 in such cases. The new implementation
+    merges the dynamic and typed interfaces, and drops support for non-constant shifts
+    of unbounded integers, which is not supported by SMTLib. Thanks to Robert for
+    reporting the issue and identifying the root cause.
+
+  * Rework how quantifiers are handled: We now generate separte asserts for
+    prefix-existentials. This allows for better (smaller) quantified code, while
+    preserving semantics.
+
+  * Rework the interaction between quantifiers and optimization routines.
+    Optimization routines now properly handle quantified formulas, so long as the
+    quantified metric does not involve any universal quantification itself. Thanks
+    to Matthew Danish for reporting the issue.
+  
+  * Development/Infrastructure: Lots of work around the continuous integration
+    for SBV. We now build/test on Linux/Mac/Windows on every commit. Thanks to
+    Travis/Appveyor for providing free remote infrastructure. There are still
+    gotchas and some reductions in tests due to host capacity issues. If you
+    would like to be involved and improve the test suite, please get in touch!
 
 ### Version 7.1, 2017-07-29
   

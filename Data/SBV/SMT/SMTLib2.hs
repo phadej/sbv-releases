@@ -31,7 +31,7 @@ tbd e = error $ "SBV.SMTLib2: Not-yet-supported: " ++ e
 
 -- | Translate a problem into an SMTLib2 script
 cvt :: SMTLibConverter [String]
-cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm asgnsSeq) cstrs out cfg = pgm
+cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs uis axs (SBVPgm asgnsSeq) cstrs out cfg = pgm
   where hasInteger     = KUnbounded `Set.member` kindInfo
         hasReal        = KReal      `Set.member` kindInfo
         hasFloat       = KFloat     `Set.member` kindInfo
@@ -98,6 +98,8 @@ cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm a
              ++ map (declConst cfg) consts
              ++ [ "; --- skolem constants ---" ]
              ++ [ "(declare-fun " ++ show s ++ " " ++ swFunType ss s ++ ")" ++ userName s | Right (s, ss) <- skolemInps]
+             ++ [ "; --- optimization tracker variables ---" | not (null trackerVars) ]
+             ++ [ "(declare-fun " ++ show s ++ " " ++ swFunType [] s ++ ") ; tracks " ++ nm | (s, nm) <- trackerVars]
              ++ [ "; --- constant tables ---" ]
              ++ concatMap constTable constTables
              ++ [ "; --- skolemized tables ---" ]
@@ -108,22 +110,33 @@ cvt kindInfo isSat comments inputs skolemInps consts tbls arrs uis axs (SBVPgm a
              ++ concatMap declUI uis
              ++ [ "; --- user given axioms ---" ]
              ++ map declAx axs
-
              ++ [ "; --- formula ---" ]
+
+             ++ map (declDef cfg skolemMap tableMap) preQuantifierAssigns
              ++ ["(assert (forall (" ++ intercalate "\n                 "
                                         ["(" ++ show s ++ " " ++ swType s ++ ")" | s <- foralls] ++ ")"
                 | not (null foralls)
                 ]
-
-             ++ map mkAssign asgns
+             ++ map mkAssign postQuantifierAssigns
 
              ++ delayedAsserts delayedEqualities
 
              ++ finalAssert
 
+        -- identify the assignments that can come before the first quantifier
+        (preQuantifierAssigns, postQuantifierAssigns)
+           | null foralls
+           = ([], asgns)  -- the apparent "switch" here is OK; rest of the code works correctly if there are no foralls.
+           | True
+           = span pre asgns
+           where first      = nodeId (minimum foralls)
+                 pre (s, _) = nodeId s < first
+
+                 nodeId (SW _ n) = n
+
         noOfCloseParens
           | null foralls = 0
-          | True         = length asgns + 2 + (if null delayedEqualities then 0 else 1)
+          | True         = length postQuantifierAssigns + 2 + (if null delayedEqualities then 0 else 1)
 
         foralls    = [s | Left s <- skolemInps]
         forallArgs = concatMap ((" " ++) . show) foralls
@@ -485,25 +498,19 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         sh (SBVApp (Extract i j) [a]) | ensureBV = "((_ extract " ++ show i ++ " " ++ show j ++ ") " ++ ssw a ++ ")"
 
         sh (SBVApp (Rol i) [a])
-           | bvOp  = rot  ssw "rotate_left"  i a
-           | intOp = sh (SBVApp (Shl i) [a])       -- Haskell treats rotateL as shiftL for unbounded values
+           | bvOp  = rot ssw "rotate_left"  i a
            | True  = bad
 
         sh (SBVApp (Ror i) [a])
            | bvOp  = rot  ssw "rotate_right" i a
-           | intOp = sh (SBVApp (Shr i) [a])     -- Haskell treats rotateR as shiftR for unbounded values
            | True  = bad
 
-        sh (SBVApp (Shl i) [a])
-           | bvOp   = shft rm ssw "bvshl"  "bvshl"  i a
-           | i < 0  = sh (SBVApp (Shr (-i)) [a])  -- flip sign/direction
-           | intOp  = "(* " ++ ssw a ++ " " ++ show (bit i :: Integer) ++ ")"  -- Implement shiftL by multiplication by 2^i
+        sh (SBVApp Shl [a, i])
+           | bvOp   = shft ssw "bvshl"  "bvshl" a i
            | True   = bad
 
-        sh (SBVApp (Shr i) [a])
-           | bvOp  = shft rm ssw "bvlshr" "bvashr" i a
-           | i < 0 = sh (SBVApp (Shl (-i)) [a])  -- flip sign/direction
-           | intOp = "(div " ++ ssw a ++ " " ++ show (bit i :: Integer) ++ ")"  -- Implement shiftR by division by 2^i
+        sh (SBVApp Shr [a, i])
+           | bvOp  = shft ssw "bvlshr" "bvashr" a i
            | True  = bad
 
         sh (SBVApp op args)
@@ -670,11 +677,9 @@ handleFPCast kFrom kTo rm input
 rot :: (SW -> String) -> String -> Int -> SW -> String
 rot ssw o c x = "((_ " ++ o ++ " " ++ show c ++ ") " ++ ssw x ++ ")"
 
-shft :: RoundingMode -> (SW -> String) -> String -> String -> Int -> SW -> String
-shft rm ssw oW oS c x = "(" ++ o ++ " " ++ ssw x ++ " " ++ cvtCW rm c' ++ ")"
-   where s  = hasSign x
-         c' = mkConstCW (kindOf x) c
-         o  = if s then oS else oW
+shft :: (SW -> String) -> String -> String -> SW -> SW -> String
+shft ssw oW oS x c = "(" ++ o ++ " " ++ ssw x ++ " " ++ ssw c ++ ")"
+   where o = if hasSign x then oS else oW
 
 -- Various casts
 handleKindCast :: Kind -> Kind -> String -> String

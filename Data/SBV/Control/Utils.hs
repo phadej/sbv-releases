@@ -9,17 +9,18 @@
 -- Query related utils.
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE BangPatterns          #-}
-{-# LANGUAGE DefaultSignatures     #-}
-{-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE NamedFieldPuns        #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE    BangPatterns          #-}
+{-# LANGUAGE    DefaultSignatures     #-}
+{-# LANGUAGE    LambdaCase            #-}
+{-# LANGUAGE    NamedFieldPuns        #-}
+{-# LANGUAGE    ScopedTypeVariables   #-}
+{-# LANGUAGE    TupleSections         #-}
 {-# OPTIONS_GHC -fno-warn-orphans  #-}
 
 module Data.SBV.Control.Utils (
        io
      , ask, send, getValue, getUninterpretedValue, getValueCW, getUnsatAssumptions, SMTValue(..)
-     , getQueryState, modifyQueryState, getConfig, getObjectives, getSBVAssertions, getQuantifiedInputs
+     , getQueryState, modifyQueryState, getConfig, getObjectives, getSBVAssertions, getSBVPgm, getQuantifiedInputs
      , checkSat, checkSatUsing, getAllSatResult
      , inNewContext, freshVar, freshVar_
      , parse
@@ -32,6 +33,7 @@ module Data.SBV.Control.Utils (
 
 import Data.List  (sortBy, elemIndex, partition, groupBy, tails)
 
+import Data.Char     (isPunctuation, isSpace)
 import Data.Ord      (comparing)
 import Data.Function (on)
 
@@ -53,7 +55,7 @@ import Data.SBV.Core.Data     ( SW(..), CW(..), SBV, AlgReal, sbvToSW, kindOf, K
                               , QueryState(..), SVal(..), Quantifier(..), cache
                               , newExpr, SBVExpr(..), Op(..), FPOp(..), SBV(..)
                               , SolverContext(..), SBool, Objective(..), SolverCapabilities(..), capabilities
-                              , Result(..), SMTProblem(..), trueSW, SymWord(..)
+                              , Result(..), SMTProblem(..), trueSW, SymWord(..), SBVPgm(..)
                               )
 import Data.SBV.Core.Symbolic (IncState(..), withNewIncState, State(..), svToSW, registerLabel, svMkSymVar)
 
@@ -100,6 +102,11 @@ getConfig = queryConfig <$> getQueryState
 getObjectives :: Query [Objective (SW, SW)]
 getObjectives = do State{rOptGoals} <- get
                    io $ reverse <$> readIORef rOptGoals
+
+-- | Get the program
+getSBVPgm :: Query SBVPgm
+getSBVPgm = do State{spgm} <- get
+               io $ readIORef spgm
 
 -- | Get the assertions put in via 'sAssert'
 getSBVAssertions :: Query [(String, Maybe CallStack, SW)]
@@ -201,7 +208,13 @@ send requireSuccess s = do
                          _           -> do case queryTimeOutValue of
                                              Nothing -> queryDebug ["[FAIL] " `alignPlain` s]
                                              Just i  -> queryDebug [("[FAIL, TimeOut: " ++ showTimeoutValue i ++ "]  ") `alignPlain` s]
-                                           unexpected "Command" s "success" Nothing r Nothing
+
+
+                                           let cmd = case words (dropWhile (\c -> isSpace c || isPunctuation c) s) of
+                                                       (c:_) -> c
+                                                       _     -> "Command"
+
+                                           unexpected cmd s "success" Nothing r Nothing
 
                else io $ querySend queryTimeOutValue s  -- fire and forget. if you use this, you're on your own!
 
@@ -385,10 +398,18 @@ checkSatUsing cmd = do let bad = unexpected "checkSat" cmd "one of sat/unsat/unk
                                            ECon "unknown" -> return Unk
                                            _              -> bad r Nothing
 
--- | What are the top level inputs?
+-- | What are the top level inputs? Trackers are returned as top level existentials
 getQuantifiedInputs :: Query [(Quantifier, NamedSymVar)]
 getQuantifiedInputs = do State{rinps} <- get
-                         liftIO $ reverse <$> readIORef rinps
+                         (rQinps, rTrackers) <- liftIO $ readIORef rinps
+
+                         let qinps    = reverse rQinps
+                             trackers = map (EX,) $ reverse rTrackers
+
+                             -- separate the existential prefix, which will go first
+                             (preQs, postQs) = span (\(q, _) -> q == EX) qinps
+
+                         return $ preQs ++ trackers ++ postQs
 
 -- | Repeatedly issue check-sat, after refuting the previous model.
 -- The bool is true if the model is unique upto prefix existentials.
@@ -583,7 +604,7 @@ runProofOn config isSat comments res@(Result ki _qcInfo _codeSegs is consts tbls
                  go ((ALL, (v, _)):rest) (us, sofar) = go rest (v:us, Left v : sofar)
                  go ((EX,  (v, _)):rest) (us, sofar) = go rest (us,   Right (v, reverse us) : sofar)
 
-         qinps      = if isSat then is else map flipQ is
+         qinps      = if isSat then fst is else map flipQ (fst is)
          skolemMap  = skolemize qinps
 
          o = case outputs of
