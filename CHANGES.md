@@ -1,7 +1,14 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 7.2, 2017-08-29
+* Latest Hackage released version: 7.3, 2017-09-06
+
+### Version 7.3, 2017-09-06
+
+  * Query mode: Add support for arrays in query mode. Thanks to Brad Hardy for
+    providing the use-case and debugging help.
+
+  * Query mode: Add support for tables. (As used by 'select' calls.)
 
 ### Version 7.2, 2017-08-29
 
@@ -40,7 +47,7 @@
   * Fix a bug in the implementation of `svSetBit`. Thanks to Robert Dockins
     for the report.
 
-### Version 7.0, Released 2017-07-19
+### Version 7.0, 2017-07-19
 
   * NB. SBV now requires GHC >= 8.0.1 to compile. If you are stuck with an older
     version of GHC, please get in contact.

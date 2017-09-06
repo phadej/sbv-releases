@@ -512,6 +512,8 @@ isCodeGenMode State{runMode} = do rm <- readIORef runMode
 data IncState = IncState { rNewInps   :: IORef [NamedSymVar]   -- always existential!
                          , rNewKinds  :: IORef KindSet
                          , rNewConsts :: IORef CnstMap
+                         , rNewArrs   :: IORef ArrayMap
+                         , rNewTbls   :: IORef TableMap
                          , rNewAsgns  :: IORef SBVPgm
                          }
 
@@ -521,10 +523,14 @@ newIncState = do
         is  <- newIORef []
         ks  <- newIORef Set.empty
         nc  <- newIORef Map.empty
+        am  <- newIORef IMap.empty
+        tm  <- newIORef Map.empty
         pgm <- newIORef (SBVPgm S.empty)
         return IncState { rNewInps   = is
                         , rNewKinds  = ks
                         , rNewConsts = nc
+                        , rNewArrs   = am
+                        , rNewTbls   = tm
                         , rNewAsgns  = pgm
                         }
 
@@ -757,13 +763,9 @@ getTableIndex st at rt elts = do
   tblMap <- readIORef (rtblMap st)
   case key `Map.lookup` tblMap of
     Just i -> return i
-    _      -> do let i = Map.size tblMap
-                 modifyState st rtblMap (Map.insert key i)
-                            $ noInteractive [ "Creation of a new table:"
-                                            , "   Index kind: " ++ show at
-                                            , "   Value kind: " ++ show rt
-                                            , "   Elements  : " ++ unwords (map show elts)
-                                            ]
+    _      -> do let i   = Map.size tblMap
+                     upd = Map.insert key i
+                 modifyState st rtblMap upd $ modifyIncState st rNewTbls upd
                  return i
 
 -- | Create a new expression; hash-cons as necessary
@@ -1066,11 +1068,9 @@ writeSArr (SArr ainfo f) a b = SArr ainfo $ cache g
                   addr <- svToSW st a
                   val  <- svToSW st b
                   amap <- readIORef (rArrayMap st)
-                  let j = IMap.size amap
-                  j `seq` modifyState st rArrayMap (IMap.insert j ("array_" ++ show j, ainfo, ArrayMutate arr addr val))
-                                      (noInteractive [ "An array update:"
-                                                     , "  Array info: " ++ show ainfo
-                                                     ])
+                  let j   = IMap.size amap
+                      upd = IMap.insert j ("array_" ++ show j, ainfo, ArrayMutate arr addr val)
+                  j `seq` modifyState st rArrayMap upd $ modifyIncState st rNewArrs upd
                   return j
 
 -- | Merge two given arrays on the symbolic condition
@@ -1082,11 +1082,9 @@ mergeSArr t (SArr ainfo a) (SArr _ b) = SArr ainfo $ cache h
                   bi <- uncacheAI b st
                   ts <- svToSW st t
                   amap <- readIORef (rArrayMap st)
-                  let k = IMap.size amap
-                  k `seq` modifyState st rArrayMap (IMap.insert k ("array_" ++ show k, ainfo, ArrayMerge ts ai bi))
-                                      (noInteractive [ "An array merge:"
-                                                     , "  Array info: " ++ show ainfo
-                                                     ])
+                  let k   = IMap.size amap
+                      upd = IMap.insert k ("array_" ++ show k, ainfo, ArrayMerge ts ai bi)
+                  k `seq` modifyState st rArrayMap upd $ modifyIncState st rNewArrs upd
                   return k
 
 -- | Create a named new array, with an optional initial value
@@ -1096,12 +1094,8 @@ newSArr ainfo mkNm = do
     amap <- liftIO $ readIORef $ rArrayMap st
     let i = IMap.size amap
         nm = mkNm i
-    actx <- liftIO $ return ArrayFree
-    liftIO $ modifyState st rArrayMap (IMap.insert i (nm, ainfo, actx))
-                       $ noInteractive [ "A new array creation:"
-                                       , "  Array info: " ++ show ainfo
-                                       , "  Named     : " ++ show nm
-                                       ]
+        upd = IMap.insert i (nm, ainfo, ArrayFree)
+    liftIO $ modifyState st rArrayMap upd $ modifyIncState st rNewArrs upd
     return $ SArr ainfo $ cache $ const $ return i
 
 -- | Compare two arrays for equality
