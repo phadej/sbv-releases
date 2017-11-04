@@ -35,7 +35,7 @@ import Control.Monad.State.Lazy (get)
 
 import Data.IORef    (readIORef)
 
-import Data.List     (unzip3, intercalate, nubBy, sortBy, elemIndex)
+import Data.List     (unzip3, intercalate, nubBy, sortBy)
 import Data.Maybe    (listToMaybe, catMaybes)
 import Data.Function (on)
 
@@ -317,40 +317,24 @@ getObjectiveValues = do let cmd = "(get-objectives)"
         getObjValue :: (forall a. Maybe [String] -> Query a) -> [NamedSymVar] -> SExpr -> Query (Maybe (String, GeneralizedCW))
         getObjValue bailOut inputs expr =
                 case expr of
-                  EApp [_]          -> return Nothing  -- Happens when a soft-assertion has no associated group.
-                  EApp [ECon nm, v] -> case listToMaybe [p | p@(sw, _) <- inputs, show sw == nm] of
-                                         Nothing               -> return Nothing -- Happens when the soft assertion has a group-id that's not one of the input names
-                                         Just (sw, actualName) -> grab sw v >>= \val -> return $ Just (actualName, val)
-                  _                 -> dontUnderstand (show expr)
+                  EApp [_]                                       -> return Nothing            -- Happens when a soft-assertion has no associated group.
+                  EApp [ECon nm, v]                              -> locate nm v               -- Regular case
+                  EApp [EApp [ECon "bvadd", ECon nm, ENum _], v] -> locate nm v               -- Happens when we "adjust" a signed-bounded objective
+                  _                                              -> dontUnderstand (show expr)
 
-          where dontUnderstand s = bailOut $ Just [ "Unable to understand solver output."
+          where locate nm v = case listToMaybe [p | p@(sw, _) <- inputs, show sw == nm] of
+                                Nothing               -> return Nothing -- Happens when the soft assertion has a group-id that's not one of the input names
+                                Just (sw, actualName) -> grab sw v >>= \val -> return $ Just (actualName, val)
+
+                dontUnderstand s = bailOut $ Just [ "Unable to understand solver output."
                                                   , "While trying to process: " ++ s
                                                   ]
 
                 grab :: SW -> SExpr -> Query GeneralizedCW
-                grab s topExpr = extract topExpr
+                grab s topExpr
+                  | Just v <- recoverKindedValue k topExpr = return $ RegularCW v
+                  | True                                   = ExtendedCW <$> cvt (simplify topExpr)
                   where k = kindOf s
-
-                        -- things that can be printed as "integral" values
-                        isFromInteger sw = or [f sw | f <- [isBoolean, isBounded, isInteger, isReal, isFloat, isDouble]]
-
-                        getUIIndex (KUserSort  _ (Right xs)) i = i `elemIndex` xs
-                        getUIIndex _                         _ = Nothing
-
-                        guard True  v = return v
-                        guard False _ = dontUnderstand (show topExpr)
-
-                        extract (ENum    i) = guard (isFromInteger s) $ RegularCW  $ mkConstCW  k (fst i)
-                        extract (EReal   i) = guard (isReal        s) $ RegularCW  $ CW KReal   (CWAlgReal i)
-                        extract (EFloat  i) = guard (isFloat       s) $ RegularCW  $ CW KFloat  (CWFloat   i)
-                        extract (EDouble i) = guard (isDouble      s) $ RegularCW  $ CW KDouble (CWDouble  i)
-
-                        -- If we have an ECon, it could be uninterpted, or oo/epsilon
-                        extract (ECon i)
-                           | isUninterpreted s = return $ RegularCW  $ CW k (CWUserSort (getUIIndex k i, i))
-
-                        -- Exhausted regular values, look for infinities and such:
-                        extract val         = ExtendedCW <$> cvt (simplify val)
 
                         -- Convert to an extended expression. Hopefully complete!
                         cvt :: SExpr -> Query ExtCW

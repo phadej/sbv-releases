@@ -1,7 +1,23 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 7.3, 2017-09-06
+* Latest Hackage released version: 7.4, 2017-11-03
+
+### Version 7.4, 2017-11-03
+
+  * Export queryDebug from the Control module, allowing custom queries to print
+    debugging messages with the verbose flag is set.
+
+  * Relax value-parsing to allow for non-standard output from solvers. For
+    instance, MathSAT/Yices prints reals as integers when they do not have a
+    fraction. We now support such cases, relaxing the standard slightly. Thanks
+    to Geoffrey Ramseyer for reporting.
+
+  * Fix optimization routines when applied to signed-bitvector goals. Thanks
+    to Anders Kaseorg for reporting. Since SMT-Lib does not distinguish between
+    signed and unsigned bit-vectors, we have to be careful when expressing goals
+    that are over signed values. See https://github.com/LeventErkok/sbv/issues/333
+    for details.
 
 ### Version 7.3, 2017-09-06
 

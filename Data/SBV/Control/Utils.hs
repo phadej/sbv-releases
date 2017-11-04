@@ -28,6 +28,7 @@ module Data.SBV.Control.Utils (
      , timeout
      , queryDebug
      , retrieveResponse
+     , recoverKindedValue
      , runProofOn
      ) where
 
@@ -181,7 +182,9 @@ freshVar :: forall a. SymWord a => String -> Query (SBV a)
 freshVar nm = inNewContext $ fmap SBV . svMkSymVar (Just EX) k (Just nm)
   where k = kindOf (undefined :: a)
 
--- | Internal diagnostic messages.
+-- | If 'verbose' is 'True', print the message, useful for debugging messages
+-- in custom queries. Note that 'redirectVerbose' will be respected: If a
+-- file redirection is given, the output will go to the file.
 queryDebug :: [String] -> Query ()
 queryDebug msgs = do QueryState{queryConfig} <- getQueryState
                      io $ debug queryConfig msgs
@@ -282,12 +285,14 @@ instance SMTValue Word64  where sexprToVal = fromIntegralToVal
 instance SMTValue Integer where sexprToVal = fromIntegralToVal
 
 instance SMTValue Float where
-   sexprToVal (EFloat f) = Just f
-   sexprToVal _          = Nothing
+   sexprToVal (EFloat f)    = Just f
+   sexprToVal (ENum (v, _)) = Just (fromIntegral v)
+   sexprToVal _             = Nothing
 
 instance SMTValue Double where
-   sexprToVal (EDouble f) = Just f
-   sexprToVal _           = Nothing
+   sexprToVal (EDouble f)   = Just f
+   sexprToVal (ENum (v, _)) = Just (fromIntegral v)
+   sexprToVal _             = Nothing
 
 instance SMTValue Bool where
    sexprToVal (ENum (1, _)) = Just True
@@ -295,8 +300,9 @@ instance SMTValue Bool where
    sexprToVal _             = Nothing
 
 instance SMTValue AlgReal where
-   sexprToVal (EReal a) = Just a
-   sexprToVal _         = Nothing
+   sexprToVal (EReal a)     = Just a
+   sexprToVal (ENum (v, _)) = Just (fromIntegral v)
+   sexprToVal _             = Nothing
 
 -- | Get the value of a term.
 getValue :: SMTValue a => SBV a -> Query a
@@ -348,22 +354,27 @@ getValueCWHelper mbi s = do
 
            bad = unexpected "getModel" cmd ("a value binding for kind: " ++ show k) Nothing
 
-           getUIIndex (KUserSort  _ (Right xs)) i = i `elemIndex` xs
-           getUIIndex _                         _ = Nothing
-
        r <- ask cmd
 
-       let isIntegral sw = isBoolean sw || isBounded sw || isInteger sw
-
-           extract (ENum    i) | isIntegral      s = return $ mkConstCW  k (fst i)
-           extract (EReal   i) | isReal          s = return $ CW KReal   (CWAlgReal i)
-           extract (EFloat  i) | isFloat         s = return $ CW KFloat  (CWFloat   i)
-           extract (EDouble i) | isDouble        s = return $ CW KDouble (CWDouble  i)
-           extract (ECon    i) | isUninterpreted s = return $ CW k       (CWUserSort (getUIIndex k i, i))
-           extract _                               = bad r Nothing
-
-       parse r bad $ \case EApp [EApp [ECon v, val]] | v == nm -> extract val
+       parse r bad $ \case EApp [EApp [ECon v, val]] | v == nm -> case recoverKindedValue (kindOf s) val of
+                                                                    Just cw -> return cw
+                                                                    Nothing -> bad r Nothing
                            _                                   -> bad r Nothing
+
+-- | Recover a given solver-printed value with a possible interpretation
+recoverKindedValue :: Kind -> SExpr -> Maybe CW
+recoverKindedValue k e = case e of
+                           ENum    i | isIntegralLike    -> Just $ mkConstCW k (fst i)
+                           EReal   i | isReal          k -> Just $ CW KReal    (CWAlgReal i)
+                           EFloat  i | isFloat         k -> Just $ CW KFloat   (CWFloat   i)
+                           EDouble i | isDouble        k -> Just $ CW KDouble  (CWDouble  i)
+                           ECon    i | isUninterpreted k -> Just $ CW k        (CWUserSort (getUIIndex k i, i))
+                           _                             -> Nothing
+  where isIntegralLike = or [f k | f <- [isBoolean, isBounded, isInteger, isReal, isFloat, isDouble]]
+
+        getUIIndex (KUserSort  _ (Right xs)) i = i `elemIndex` xs
+        getUIIndex _                         _ = Nothing
+
 
 -- | Get the value of a term. If the kind is Real and solver supports decimal approximations,
 -- we will "squash" the representations.
