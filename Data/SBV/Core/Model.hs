@@ -27,11 +27,9 @@
 {-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
 
 module Data.SBV.Core.Model (
-    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertSoft, SIntegral
-  , ite, iteLazy, sTestBit, sExtractBits, sPopCount, setBitTo, sFromIntegral
-  , sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, (.^)
-  , oneIf, blastBE, blastLE, fullAdder, fullMultiplier
-  , lsb, msb, genVar, genVar_, forall, forall_, exists, exists_
+    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertSoft, SIntegral, SFiniteBits(..)
+  , ite, iteLazy, sFromIntegral, sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, (.^)
+  , oneIf, genVar, genVar_, forall, forall_, exists, exists_
   , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
   , sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
@@ -72,12 +70,6 @@ import Data.SBV.Provers.Prover (defaultSMTCfg)
 import Data.SBV.SMT.SMT        (showModel)
 
 import Data.SBV.Utils.Boolean
-
--- | Newer versions of GHC (Starting with 7.8 I think), distinguishes between FiniteBits and Bits classes.
--- We should really use FiniteBitSize for SBV which would make things better. In the interim, just work
--- around pesky warnings..
-ghcBitSize :: Bits a => a -> Int
-ghcBitSize x = fromMaybe (error "SBV.ghcBitSize: Unexpected non-finite usage!") (bitSizeMaybe x)
 
 mkSymOpSC :: (SW -> SW -> Maybe SW) -> Op -> State -> Kind -> SW -> SW -> IO SW
 mkSymOpSC shortCut op st k a b = maybe (newExpr st k (SBVApp op [a, b])) return (shortCut a b)
@@ -530,7 +522,7 @@ instance (OrdSymbolic a, OrdSymbolic b, OrdSymbolic c, OrdSymbolic d, OrdSymboli
 -- @
 --
 -- It is similar to the standard 'Integral' class, except ranging over symbolic instances.
-class (SymWord a, Num a, Bits a) => SIntegral a
+class (SymWord a, Num a, Bits a, Integral a) => SIntegral a
 
 -- 'SIntegral' Instances, skips Real/Float/Bool
 instance SIntegral Word8
@@ -542,6 +534,127 @@ instance SIntegral Int16
 instance SIntegral Int32
 instance SIntegral Int64
 instance SIntegral Integer
+
+-- | Finite bit-length symbolic values. Essentially the same as 'SIntegral', but further leaves out 'Integer'. Loosely
+-- based on Haskell's 'FiniteBits' class, but with more methods defined and structured differently to fit into the
+-- symbolic world view. Minimal complete definition: 'sFiniteBitSize'.
+class (SymWord a, Num a, Bits a) => SFiniteBits a where
+    -- | Bit size.
+    sFiniteBitSize      :: SBV a -> Int
+    -- | Least significant bit of a word, always stored at index 0.
+    lsb                 :: SBV a -> SBool
+    -- | Most significant bit of a word, always stored at the last position.
+    msb                 :: SBV a -> SBool
+    -- | Big-endian blasting of a word into its bits.
+    blastBE             :: SBV a -> [SBool]
+    -- | Little-endian blasting of a word into its bits.
+    blastLE             :: SBV a -> [SBool]
+    -- | Reconstruct from given bits, given in little-endian.
+    fromBitsBE          :: [SBool] -> SBV a
+    -- | Reconstruct from given bits, given in little-endian.
+    fromBitsLE          :: [SBool] -> SBV a
+    -- | Replacement for 'testBit', returning 'SBool' instead of 'Bool'.
+    sTestBit            :: SBV a -> Int -> SBool
+    -- | Variant of 'sTestBit', where we want to extract multiple bit positions.
+    sExtractBits        :: SBV a -> [Int] -> [SBool]
+    -- | Variant of 'popCount', returning a symbolic value.
+    sPopCount           :: SBV a -> SWord8
+    -- | A combo of 'setBit' and 'clearBit', when the bit to be set is symbolic.
+    setBitTo            :: SBV a -> Int -> SBool -> SBV a
+    -- | Full adder, returns carry-out from the addition. Only for unsigned quantities.
+    fullAdder           :: SBV a -> SBV a -> (SBool, SBV a)
+    -- | Full multipler, returns both high and low-order bits. Only for unsigned quantities.
+    fullMultiplier      :: SBV a -> SBV a -> (SBV a, SBV a)
+    -- | Count leading zeros in a word, big-endian interpretation.
+    sCountLeadingZeros  :: SBV a -> SWord8
+    -- | Count trailing zeros in a word, big-endian interpretation.
+    sCountTrailingZeros :: SBV a -> SWord8
+
+    -- Default implementations
+    lsb (SBV v) = SBV (svTestBit v 0)
+    msb x       = sTestBit x (sFiniteBitSize x - 1)
+
+    blastBE   = reverse . blastLE
+    blastLE x = map (sTestBit x) [0 .. intSizeOf x - 1]
+
+    fromBitsBE = fromBitsLE . reverse
+    fromBitsLE bs
+       | length bs /= w
+       = error $ "SBV.SFiniteBits.fromBitsLE/BE: Expected: " ++ show w ++ " bits, received: " ++ show (length bs)
+       | True
+       = result
+       where w = sFiniteBitSize result
+             result = go 0 0 bs
+
+             go !acc _  []     = acc
+             go !acc !i (x:xs) = go (ite x (setBit acc i) acc) (i+1) xs
+
+    sTestBit (SBV x) i = SBV (svTestBit x i)
+    sExtractBits x     = map (sTestBit x)
+
+    -- NB. 'sPopCount' returns an 'SWord8', which can overflow when used on quantities that have
+    -- more than 255 bits. For the regular interface, this suffices for all types we support.
+    -- For the Dynamic interface, if we ever implement this, this will fail for bit-vectors
+    -- larger than that many bits. The alternative would be to return SInteger here, but that
+    -- seems a total overkill for most use cases. If such is required, users are encouraged
+    -- to define their own variants, which is rather easy.
+    sPopCount x
+      | isConcrete x  = go 0 x
+      | True          = sum [ite b 1 0 | b <- blastLE x]
+      where -- concrete case
+            go !c 0 = c
+            go !c w = go (c+1) (w .&. (w-1))
+
+    setBitTo x i b = ite b (setBit x i) (clearBit x i)
+
+    fullAdder a b
+      | isSigned a = error "fullAdder: only works on unsigned numbers"
+      | True       = (a .> s ||| b .> s, s)
+      where s = a + b
+
+    -- N.B. The higher-order bits are determined using a simple shift-add multiplier,
+    -- thus involving bit-blasting. It'd be naive to expect SMT solvers to deal efficiently
+    -- with properties involving this function, at least with the current state of the art.
+    fullMultiplier a b
+      | isSigned a = error "fullMultiplier: only works on unsigned numbers"
+      | True       = (go (sFiniteBitSize a) 0 a, a*b)
+      where go 0 p _ = p
+            go n p x = let (c, p')  = ite (lsb x) (fullAdder p b) (false, p)
+                           (o, p'') = shiftIn c p'
+                           (_, x')  = shiftIn o x
+                       in go (n-1) p'' x'
+            shiftIn k v = (lsb v, mask .|. (v `shiftR` 1))
+               where mask = ite k (bit (sFiniteBitSize v - 1)) 0
+
+    -- See the note for 'sPopCount' for a comment on why we return 'SWord8'
+    sCountLeadingZeros x = fromIntegral m - go m
+      where m = sFiniteBitSize x - 1
+
+            -- NB. When i is 0 below, which happens when x is 0 as we count all the way down,
+            -- we return -1, which is equal to 2^n-1, giving us: n-1-(2^n-1) = n-2^n = n, as required, i.e., the bit-size.
+            go :: Int -> SWord8
+            go i | i < 0 = i8
+                 | True  = ite (sTestBit x i) i8 (go (i-1))
+               where i8 = literal (fromIntegral i :: Word8)
+
+    -- See the note for 'sPopCount' for a comment on why we return 'SWord8'
+    sCountTrailingZeros x = go 0
+       where m = sFiniteBitSize x
+
+             go :: Int -> SWord8
+             go i | i >= m = i8
+                  | True   = ite (sTestBit x i) i8 (go (i+1))
+                where i8 = literal (fromIntegral i :: Word8)
+
+-- 'SIntegral' Instances, skips Real/Float/Bool/Integer
+instance SFiniteBits Word8  where sFiniteBitSize _ =  8
+instance SFiniteBits Word16 where sFiniteBitSize _ = 16
+instance SFiniteBits Word32 where sFiniteBitSize _ = 32
+instance SFiniteBits Word64 where sFiniteBitSize _ = 64
+instance SFiniteBits Int8   where sFiniteBitSize _ =  8
+instance SFiniteBits Int16  where sFiniteBitSize _ = 16
+instance SFiniteBits Int32  where sFiniteBitSize _ = 32
+instance SFiniteBits Int64  where sFiniteBitSize _ = 64
 
 -- | Returns 1 if the boolean is true, otherwise 0.
 oneIf :: (Num a, SymWord a) => SBool -> SBV a
@@ -671,12 +784,27 @@ instance (Ord a, Num a, SymWord a) => Num (SBV a) where
 
 -- | Symbolic exponentiation using bit blasting and repeated squaring.
 --
--- N.B. The exponent must be unsigned. Signed exponents will be rejected.
+-- N.B. The exponent must be unsigned/bounded if symbolic. Signed exponents will be rejected.
 (.^) :: (Mergeable b, Num b, SIntegral e) => b -> SBV e -> b
-b .^ e | isSigned e = error "(.^): exponentiation only works with unsigned exponents"
-       | True       = product $ zipWith (\use n -> ite use n 1)
-                                        (blastLE e)
-                                        (iterate (\x -> x*x) b)
+b .^ e
+  | isConcrete e, Just (x :: Integer) <- unliteral (sFromIntegral e)
+  = if x >= 0 then let go n v
+                        | n == 0 = 1
+                        | even n =     go (n `div` 2) (v * v)
+                        | True   = v * go (n `div` 2) (v * v)
+                   in  go x b
+              else error $ "(.^): exponentiation: negative exponent: " ++ show x
+  | not (isBounded e) || isSigned e
+  = error $ "(.^): exponentiation only works with unsigned bounded symbolic exponents, kind: " ++ show (kindOf e)
+  | True
+  =  -- NB. We can't simply use sTestBit and blastLE since they have SFiniteBit requirement
+     -- but we want to have SIntegral here only.
+     let SBV expt = e
+         expBit i = SBV (svTestBit expt i)
+         blasted  = map expBit [0 .. intSizeOf e - 1]
+     in product $ zipWith (\use n -> ite use n 1)
+                          blasted
+                          (iterate (\x -> x*x) b)
 
 instance (SymWord a, Fractional a) => Fractional (SBV a) where
   fromRational  = literal . fromRational
@@ -773,40 +901,6 @@ instance (Num a, Bits a, SymWord a) => Bits (SBV a) where
     | True
     = error $ "SBV.popCount: Called on symbolic value: " ++ show x ++ ". Use sPopCount instead."
 
--- | Replacement for 'testBit'. Since 'testBit' requires a 'Bool' to be returned,
--- we cannot implement it for symbolic words. Index 0 is the least-significant bit.
-sTestBit :: SBV a -> Int -> SBool
-sTestBit (SBV x) i = SBV (svTestBit x i)
-
--- | Variant of 'sTestBit', where we want to extract multiple bit positions.
-sExtractBits :: SBV a -> [Int] -> [SBool]
-sExtractBits x = map (sTestBit x)
-
--- | Replacement for 'popCount'. Since 'popCount' returns an 'Int', we cannot implement
--- it for symbolic words. Here, we return an 'SWord8', which can overflow when used on
--- quantities that have more than 255 bits. Currently, that's only the 'SInteger' type
--- that SBV supports, all other types are safe. Even with 'SInteger', this will only
--- overflow if there are at least 256-bits set in the number, and the smallest such
--- number is 2^256-1, which is a pretty darn big number to worry about for practical
--- purposes. In any case, we do not support 'sPopCount' for unbounded symbolic integers,
--- as the only possible implementation wouldn't symbolically terminate. So the only overflow
--- issue is with really-really large concrete 'SInteger' values.
-sPopCount :: (Num a, Bits a, SymWord a) => SBV a -> SWord8
-sPopCount x
-  | isReal x          = error "SBV.sPopCount: Called on a real value" -- can't really happen due to types, but being overcautious
-  | isConcrete x      = go 0 x
-  | not (isBounded x) = error "SBV.sPopCount: Called on an infinite precision symbolic value"
-  | True              = sum [ite b 1 0 | b <- blastLE x]
-  where -- concrete case
-        go !c 0 = c
-        go !c w = go (c+1) (w .&. (w-1))
-
--- | Generalization of 'setBit' based on a symbolic boolean. Note that 'setBit' and
--- 'clearBit' are still available on Symbolic words, this operation comes handy when
--- the condition to set/clear happens to be symbolic.
-setBitTo :: (Num a, Bits a, SymWord a) => SBV a -> Int -> SBool -> SBV a
-setBitTo x i b = ite b (setBit x i) (clearBit x i)
-
 -- | Conversion between integral-symbolic values, akin to Haskell's fromIntegral
 sFromIntegral :: forall a b. (Integral a, HasKind a, Num a, SymWord a, HasKind b, Num b, SymWord b) => SBV a -> SBV b
 sFromIntegral x
@@ -850,13 +944,14 @@ sShiftRight = liftViaSVal svShiftRight
 -- then it explicitly treats its msb as a sign-bit, and uses it as the bit that
 -- gets shifted in. Useful when using the underlying unsigned bit representation to implement
 -- custom signed operations. Note that there is no direct Haskell analogue of this function.
-sSignedShiftArithRight:: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
+sSignedShiftArithRight:: (SFiniteBits a, SIntegral b) => SBV a -> SBV b -> SBV a
 sSignedShiftArithRight x i
   | isSigned i = error "sSignedShiftArithRight: shift amount should be unsigned"
-  | isSigned x = sShiftRight x i
+  | isSigned x = ssa x i
   | True       = ite (msb x)
-                     (complement (sShiftRight (complement x) i))
-                     (sShiftRight x i)
+                     (complement (ssa (complement x) i))
+                     (ssa x i)
+  where ssa = liftViaSVal svShiftRight
 
 -- | Generalization of 'rotateL', when the shift-amount is symbolic. Since Haskell's
 -- 'rotateL' only takes an 'Int' as the shift amount, it cannot be used when we have
@@ -869,57 +964,6 @@ sRotateLeft = liftViaSVal svRotateLeft
 -- a symbolic amount to shift with. The first argument should be a bounded quantity.
 sRotateRight :: (SIntegral a, SIntegral b, SDivisible (SBV b)) => SBV a -> SBV b -> SBV a
 sRotateRight = liftViaSVal svRotateRight
-
--- | Full adder. Returns the carry-out from the addition.
---
--- N.B. Only works for unsigned types. Signed arguments will be rejected.
-fullAdder :: SIntegral a => SBV a -> SBV a -> (SBool, SBV a)
-fullAdder a b
-  | isSigned a = error "fullAdder: only works on unsigned numbers"
-  | True       = (a .> s ||| b .> s, s)
-  where s = a + b
-
--- | Full multiplier: Returns both the high-order and the low-order bits in a tuple,
--- thus fully accounting for the overflow.
---
--- N.B. Only works for unsigned types. Signed arguments will be rejected.
---
--- N.B. The higher-order bits are determined using a simple shift-add multiplier,
--- thus involving bit-blasting. It'd be naive to expect SMT solvers to deal efficiently
--- with properties involving this function, at least with the current state of the art.
-fullMultiplier :: SIntegral a => SBV a -> SBV a -> (SBV a, SBV a)
-fullMultiplier a b
-  | isSigned a = error "fullMultiplier: only works on unsigned numbers"
-  | True       = (go (ghcBitSize a) 0 a, a*b)
-  where go 0 p _ = p
-        go n p x = let (c, p')  = ite (lsb x) (fullAdder p b) (false, p)
-                       (o, p'') = shiftIn c p'
-                       (_, x')  = shiftIn o x
-                   in go (n-1) p'' x'
-        shiftIn k v = (lsb v, mask .|. (v `shiftR` 1))
-           where mask = ite k (bit (ghcBitSize v - 1)) 0
-
--- | Little-endian blasting of a word into its bits. Also see the 'FromBits' class.
-blastLE :: (Num a, Bits a, SymWord a) => SBV a -> [SBool]
-blastLE x
- | isReal x          = error "SBV.blastLE: Called on a real value"
- | not (isBounded x) = error "SBV.blastLE: Called on an infinite precision value"
- | True              = map (sTestBit x) [0 .. intSizeOf x - 1]
-
--- | Big-endian blasting of a word into its bits. Also see the 'FromBits' class.
-blastBE :: (Num a, Bits a, SymWord a) => SBV a -> [SBool]
-blastBE = reverse . blastLE
-
--- | Least significant bit of a word, always stored at index 0.
-lsb :: SBV a -> SBool
-lsb x = sTestBit x 0
-
--- | Most significant bit of a word, always stored at the last position.
-msb :: (Num a, Bits a, SymWord a) => SBV a -> SBool
-msb x
- | isReal x          = error "SBV.msb: Called on a real value"
- | not (isBounded x) = error "SBV.msb: Called on an infinite precision value"
- | True              = sTestBit x (intSizeOf x - 1)
 
 -- Enum instance. These instances are suitable for use with concrete values,
 -- and will be less useful for symbolic values around. Note that `fromEnum` requires
