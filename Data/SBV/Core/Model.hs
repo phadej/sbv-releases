@@ -1748,7 +1748,7 @@ assertSoft nm o p = addSValOptGoal $ unSBV `fmap` AssertSoft nm o p
 -- Minimal complete definition: minimize/maximize.
 --
 -- A good reference on these features is given in the following paper:
--- <http://www.easychair.org/publications/download/Z_-_Maximal_Satisfaction_with_Z3>.
+-- <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/nbjorner-scss2014.pdf>.
 class Metric a where
   -- | Minimize a named metric
   minimize :: String -> a -> Symbolic ()
@@ -1805,7 +1805,7 @@ instance Testable (Symbolic SVal) where
                              return (SBV s :: SBool)
 
 -- | Explicit sharing combinator. The SBV library has internal caching/hash-consing mechanisms
--- built in, based on Andy Gill's type-safe obervable sharing technique (see: <http://ittc.ku.edu/~andygill/paper.php?label=DSLExtract09>).
+-- built in, based on Andy Gill's type-safe obervable sharing technique (see: <http://ku-fpg.github.io/files/Gill-09-TypeSafeReification.pdf>).
 -- However, there might be times where being explicit on the sharing can help, especially in experimental code. The 'slet' combinator
 -- ensures that its first argument is computed once and passed on to its continuation, explicitly indicating the intent of sharing. Most
 -- use cases of the SBV library should simply use Haskell's @let@ construct for this purpose.

@@ -32,7 +32,7 @@ module Data.SBV.Core.Symbolic
   , RoundingMode(..)
   , SBVType(..), newUninterpreted, addAxiom
   , SVal(..)
-  , svMkSymVar
+  , svMkSymVar, sWordN, sWordN_, sIntN, sIntN_
   , ArrayContext(..), ArrayInfo
   , svToSW, svToSymSW, forceSWArg
   , SBVExpr(..), newExpr, isCodeGenMode
@@ -813,6 +813,22 @@ svMkSymVar = svMkSymVarGen False
 svMkTrackerVar :: Kind -> String -> State -> IO SVal
 svMkTrackerVar k nm = svMkSymVarGen True (Just EX) k (Just nm)
 
+-- | Create an N-bit symbolic unsigned named variable
+sWordN :: Int -> String -> Symbolic SVal
+sWordN w nm = ask >>= liftIO . svMkSymVar Nothing (KBounded False w) (Just nm)
+
+-- | Create an N-bit symbolic unsigned unnamed variable
+sWordN_ :: Int -> Symbolic SVal
+sWordN_ w = ask >>= liftIO . svMkSymVar Nothing (KBounded False w) Nothing
+
+-- | Create an N-bit symbolic signed named variable
+sIntN :: Int -> String -> Symbolic SVal
+sIntN w nm = ask >>= liftIO . svMkSymVar Nothing (KBounded True w) (Just nm)
+
+-- | Create an N-bit symbolic signed unnamed variable
+sIntN_ :: Int -> Symbolic SVal
+sIntN_ w = ask >>= liftIO . svMkSymVar Nothing (KBounded True w) Nothing
+
 -- | Create a symbolic value, based on the quantifier we have. If an
 -- explicit quantifier is given, we just use that. If not, then we
 -- pick the quantifier appropriately based on the run-mode.
@@ -967,8 +983,8 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
        swapc ((_, a), b)         = (b, a)
        cmp   (a, _) (b, _)       = a `compare` b
        arrange (i, (at, rt, es)) = ((i, at, rt), es)
-   cnsts <- (sortBy cmp . map swapc . Map.toList) <$> readIORef (rconstMap st)
-   tbls  <- (map arrange . sortBy cmp . map swap . Map.toList) <$> readIORef tables
+   cnsts <- sortBy cmp . map swapc . Map.toList <$> readIORef (rconstMap st)
+   tbls  <- map arrange . sortBy cmp . map swap . Map.toList <$> readIORef tables
    arrs  <- IMap.toAscList <$> readIORef arrays
    unint <- Map.toList <$> readIORef uis
    axs   <- reverse <$> readIORef axioms
@@ -1118,7 +1134,7 @@ eqSArr (SArr _ a) (SArr _ b) = SVal KBool $ Right $ cache c
 -- takes into the account of how symbolic simulation executes.
 --
 -- See Andy Gill's type-safe obervable sharing trick for the inspiration behind
--- this technique: <http://ittc.ku.edu/~andygill/paper.php?label=DSLExtract09>
+-- this technique: <http://ku-fpg.github.io/files/Gill-09-TypeSafeReification.pdf>
 --
 -- Note that this is *not* a general memo utility!
 newtype Cached a = Cached (State -> IO a)
