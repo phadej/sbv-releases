@@ -1,7 +1,63 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 7.6, 2018-03-18
+* Latest Hackage released version: 7.7, 2018-04-29
+
+### Version 7.7, Released 2018-04-29
+
+  * Add support for Symbolic characters ('SChar') and strings ('SString'.)
+    Thanks to Joel Burget for the initial implementation.
+    
+    The 'SChar' type currently corresponds to the Latin-1 character
+    set, and is thus a subset of the Haskell 'Char' type. This is
+    due to the current limitations in SMT-solvers. However, there
+    is a pending SMTLib proposal to support unicode, and SBV will track
+    these changes to have full unicode support: For further details
+    see: http://smtlib.cs.uiowa.edu/theories-UnicodeStrings.shtml
+
+    The 'SString' type is the type of symbolic strings, consisting
+    of characters from the Latin-1 character set currently, just
+    like the planned 'SChar' improvements. Note that an 'SString'
+    is *not* simply a list of 'SChar' values: It is a symbolic
+    type of its own and is processed as a single item. Conversions
+    from list of characters is possible (via the 'implode' function).
+    In the other direction, one cannot generally 'explode' a string,
+    since it may be of arbitrary length and thus we would not know
+    what concrete list to map it to. This is a bit unlike Haskell,
+    but the differences dissipate quickly in general, and the power
+    of being able to deal with a string as a symbolic entity on its
+    own opens up many verification possibilities.
+
+    Note that currently only Z3 and CVC4 has support for this logic,
+    and they do differ in some details. Various character/string
+    operations are supported, including length, concatenation,
+    regular-expression matching, substrig operations, recognizers, etc.
+    If you use this logic, you are likely to find bugs in solvers themselves
+    as support is rather new: Please report.
+
+  * If unsat-core extraction is enabled, SBV now returns the unsat-core
+    directly with in a solver result. Thanks to Ara Adkins for the
+    suggestion.
+
+  * Add 'observe'. This function allows internal expressions to be
+    given values, which will be part of the satisfyin model or
+    the counter-example upon model construction. Useful for tracking
+    expected/returned values. Also works with quickCheck.
+
+  * Revamp Haddock documentation, hopefully easier to follow now.
+
+  * Slightly modify the generated-C headers by removing whitespace.
+    This allows for certain "lint" rules to pass when SBV generated
+    code is used in conjunction with a larger code base. Thanks
+    to Greg Horn for the pull request.
+
+  * Improve implementation of 'svExp' to match that of '.^', making
+    it more defined when the exponent is constant. Thanks to Brian
+    Huffman for the patch.
+
+  * Export the underlying polynomial representation for algorithmic
+    reals from the Internals module for further user processing.
+    Thanks  to Jan Path for the patch.
 
 ### Version 7.6, Released 2018-03-18
 
@@ -18,7 +74,7 @@
   * Remove obsolote references to tactics in a few haddock comments. Thanks
     to Matthew Pickering for reporting.
 
-  * Added logic 'Logic_NONE', to be used in cases where SBV should not
+  * Added logic Logic_NONE, to be used in cases where SBV should not
     try to set the logic. This is useful when there is no viable value to
     set, and the back-end solver doesn't understand the SMT-Lib convention
     of using "ALL" as the logic name. (One example of this is the Yices

@@ -23,6 +23,12 @@ import Utils.SBVTestFramework
 
 import Data.Maybe (fromJust, isJust)
 
+import Data.List (genericIndex, isInfixOf, isPrefixOf, isSuffixOf, genericTake, genericDrop, genericLength)
+
+import qualified Data.Char       as C
+import qualified Data.SBV.Char   as SC
+import qualified Data.SBV.String as SS
+
 -- Test suite
 tests :: TestTree
 tests = testGroup "Arith.NoSolver" $
@@ -62,14 +68,16 @@ tests = testGroup "Arith.NoSolver" $
         ++ genBlasts
         ++ genCounts
         ++ genIntCasts
+        ++ genChars
+        ++ genStrings
 
 genBinTest :: String -> (forall a. (Num a, Bits a) => a -> a -> a) -> [TestTree]
 genBinTest nm op = map mkTest $
-        zipWith pair [(show x, show y, x `op` y) | x <- w8s,  y <- w8s ] [x `op` y | x <- sw8s,  y <- sw8s]
+        zipWith pair [(show x, show y, x `op` y) | x <- w8s,  y <- w8s ] [x `op` y | x <- sw8s,  y <- sw8s ]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- w16s, y <- w16s] [x `op` y | x <- sw16s, y <- sw16s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- w32s, y <- w32s] [x `op` y | x <- sw32s, y <- sw32s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- w64s, y <- w64s] [x `op` y | x <- sw64s, y <- sw64s]
-     ++ zipWith pair [(show x, show y, x `op` y) | x <- i8s,  y <- i8s ] [x `op` y | x <- si8s,  y <- si8s]
+     ++ zipWith pair [(show x, show y, x `op` y) | x <- i8s,  y <- i8s ] [x `op` y | x <- si8s,  y <- si8s ]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- i16s, y <- i16s] [x `op` y | x <- si16s, y <- si16s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- i32s, y <- i32s] [x `op` y | x <- si32s, y <- si32s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- i64s, y <- i64s] [x `op` y | x <- si64s, y <- si64s]
@@ -79,15 +87,17 @@ genBinTest nm op = map mkTest $
 
 genBoolTest :: String -> (forall a. Ord a => a -> a -> Bool) -> (forall a. OrdSymbolic a => a -> a -> SBool) -> [TestTree]
 genBoolTest nm op opS = map mkTest $
-        zipWith pair [(show x, show y, x `op` y) | x <- w8s,  y <- w8s ] [x `opS` y | x <- sw8s,  y <- sw8s]
+        zipWith pair [(show x, show y, x `op` y) | x <- w8s,  y <- w8s ] [x `opS` y | x <- sw8s,  y <- sw8s ]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- w16s, y <- w16s] [x `opS` y | x <- sw16s, y <- sw16s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- w32s, y <- w32s] [x `opS` y | x <- sw32s, y <- sw32s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- w64s, y <- w64s] [x `opS` y | x <- sw64s, y <- sw64s]
-     ++ zipWith pair [(show x, show y, x `op` y) | x <- i8s,  y <- i8s ] [x `opS` y | x <- si8s,  y <- si8s]
+     ++ zipWith pair [(show x, show y, x `op` y) | x <- i8s,  y <- i8s ] [x `opS` y | x <- si8s,  y <- si8s ]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- i16s, y <- i16s] [x `opS` y | x <- si16s, y <- si16s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- i32s, y <- i32s] [x `opS` y | x <- si32s, y <- si32s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- i64s, y <- i64s] [x `opS` y | x <- si64s, y <- si64s]
      ++ zipWith pair [(show x, show y, x `op` y) | x <- iUBs, y <- iUBs] [x `opS` y | x <- siUBs, y <- siUBs]
+     ++ zipWith pair [(show x, show y, x `op` y) | x <- iCs,  y <- iCs ] [x `opS` y | x <- siCs,  y <- siCs ]
+     ++ zipWith pair [(show x, show y, x `op` y) | x <- ss,   y <- ss  ] [x `opS` y | x <- sss,   y <- sss  ]
   where pair (x, y, a) b = (x, y, Just a == unliteral b)
         mkTest (x, y, s) = testCase ("arithCF-" ++ nm ++ "." ++ x ++ "_" ++ y) (s `showsAs` "True")
 
@@ -461,6 +471,129 @@ genFloats = bTests ++ uTests ++ fpTests1 ++ fpTests2 ++ converts
                      , ("fpIsPoint",        fpIsPoint,         \x -> not (isNaN x || isInfinite x))
                      ]
 
+genChars :: [TestTree]
+genChars = map mkTest $  [("ord",           show c, check SC.ord           cord            c) | c <- cs]
+                      ++ [("toLower",       show c, check SC.toLower       C.toLower       c) | c <- cs]
+                      ++ [("toUpper",       show c, check SC.toUpper       C.toUpper       c) | c <- cs, toUpperExceptions c]
+                      ++ [("digitToInt",    show c, check SC.digitToInt    dig2Int         c) | c <- cs, digitToIntRange c]
+                      ++ [("intToDigit",    show c, check SC.intToDigit    int2Dig         c) | c <- [0 .. 15]]
+                      ++ [("isControl",     show c, check SC.isControl     C.isControl     c) | c <- cs]
+                      ++ [("isSpace",       show c, check SC.isSpace       C.isSpace       c) | c <- cs]
+                      ++ [("isLower",       show c, check SC.isLower       C.isLower       c) | c <- cs]
+                      ++ [("isUpper",       show c, check SC.isUpper       C.isUpper       c) | c <- cs]
+                      ++ [("isAlpha",       show c, check SC.isAlpha       C.isAlpha       c) | c <- cs]
+                      ++ [("isAlphaNum",    show c, check SC.isAlphaNum    C.isAlphaNum    c) | c <- cs]
+                      ++ [("isPrint",       show c, check SC.isPrint       C.isPrint       c) | c <- cs]
+                      ++ [("isDigit",       show c, check SC.isDigit       C.isDigit       c) | c <- cs]
+                      ++ [("isOctDigit",    show c, check SC.isOctDigit    C.isOctDigit    c) | c <- cs]
+                      ++ [("isHexDigit",    show c, check SC.isHexDigit    C.isHexDigit    c) | c <- cs]
+                      ++ [("isLetter",      show c, check SC.isLetter      C.isLetter      c) | c <- cs]
+                      ++ [("isMark",        show c, check SC.isMark        C.isMark        c) | c <- cs]
+                      ++ [("isNumber",      show c, check SC.isNumber      C.isNumber      c) | c <- cs]
+                      ++ [("isPunctuation", show c, check SC.isPunctuation C.isPunctuation c) | c <- cs]
+                      ++ [("isSymbol",      show c, check SC.isSymbol      C.isSymbol      c) | c <- cs]
+                      ++ [("isSeparator",   show c, check SC.isSeparator   C.isSeparator   c) | c <- cs]
+                      ++ [("isAscii",       show c, check SC.isAscii       C.isAscii       c) | c <- cs]
+                      ++ [("isLatin1",      show c, check SC.isLatin1      C.isLatin1      c) | c <- cs]
+                      ++ [("isAsciiUpper",  show c, check SC.isAsciiUpper  C.isAsciiUpper  c) | c <- cs]
+                      ++ [("isAsciiLower",  show c, check SC.isAsciiLower  C.isAsciiLower  c) | c <- cs]
+  where toUpperExceptions = (`notElem` "\181\255")
+        digitToIntRange   = (`elem` "0123456789abcdefABCDEF")
+        cord :: Char -> Integer
+        cord = fromIntegral . C.ord
+        dig2Int :: Char -> Integer
+        dig2Int = fromIntegral . C.digitToInt
+        int2Dig :: Integer -> Char
+        int2Dig = C.intToDigit . fromIntegral
+        mkTest (nm, x, t) = testCase ("genChars-" ++ nm ++ "." ++ x) (assert t)
+        check sop cop arg = case unliteral (sop (literal arg)) of
+                              Nothing -> False
+                              Just x  -> x == cop arg
+
+genStrings :: [TestTree]
+genStrings = map mkTest1 (  [("length",        show s,                   check1 SS.length        strLen        s      ) | s <- ss                                                       ]
+                         ++ [("null",          show s,                   check1 SS.null          null          s      ) | s <- ss                                                       ]
+                         ++ [("head",          show s,                   check1 SS.head          head          s      ) | s <- ss, not (null s)                                         ]
+                         ++ [("tail",          show s,                   check1 SS.tail          tail          s      ) | s <- ss, not (null s)                                         ]
+                         ++ [("charToStr",     show c,                   check1 SS.charToStr     (: [])        c      ) | c <- cs                                                       ]
+                         ++ [("implode",       show s,                   checkI SS.implode                     s      ) | s <- ss                                                       ]
+                         ++ [("strToNat",      show s,                   check1 SS.strToNat      strToNat      s      ) | s <- ss                                                       ]
+                         ++ [("natToStr",      show i,                   check1 SS.natToStr      natToStr      i      ) | i <- iUBs                                                     ])
+          ++ map mkTest2 (  [("strToStrAt",    show s, show i,           check2 SS.strToStrAt    strToStrAt    s i    ) | s <- ss, i  <- range s                                        ]
+                         ++ [("strToCharAt",   show s, show i,           check2 SS.strToCharAt   strToCharAt   s i    ) | s <- ss, i  <- range s                                        ]
+                         ++ [("concat",        show s, show s1,          check2 SS.concat        (++)          s s1   ) | s <- ss, s1 <- ss                                             ]
+                         ++ [("isInfixOf",     show s, show s1,          check2 SS.isInfixOf     isInfixOf     s s1   ) | s <- ss, s1 <- ss                                             ]
+                         ++ [("isSuffixOf",    show s, show s1,          check2 SS.isSuffixOf    isSuffixOf    s s1   ) | s <- ss, s1 <- ss                                             ]
+                         ++ [("isPrefixOf",    show s, show s1,          check2 SS.isPrefixOf    isPrefixOf    s s1   ) | s <- ss, s1 <- ss                                             ]
+                         ++ [("take",          show s, show i,           check2 SS.take          genericTake   i s    ) | s <- ss, i <- iUBs                                            ]
+                         ++ [("drop",          show s, show i,           check2 SS.drop          genericDrop   i s    ) | s <- ss, i <- iUBs                                            ]
+                         ++ [("indexOf",       show s, show s1,          check2 SS.indexOf       indexOf       s s1   ) | s <- ss, s1 <- ss                                             ])
+          ++ map mkTest3 (  [("subStr",        show s, show  i, show j,  check3 SS.subStr        subStr        s i  j ) | s <- ss, i  <- range s, j <- range s, i + j <= genericLength s]
+                         ++ [("replace",       show s, show s1, show s2, check3 SS.replace       replace       s s1 s2) | s <- ss, s1 <- ss, s2 <- ss                                   ]
+                         ++ [("offsetIndexOf", show s, show s1, show i,  check3 SS.offsetIndexOf offsetIndexOf s s1 i ) | s <- ss, s1 <- ss, i <- range s                               ])
+  where strLen :: String -> Integer
+        strLen = fromIntegral . length
+
+        strToNat :: String -> Integer
+        strToNat s
+          | all C.isDigit s && not (null s) = read s
+          | True                            = -1
+
+        natToStr :: Integer -> String
+        natToStr i
+          | i >= 0 = show i
+          | True   = ""
+
+        range :: String -> [Integer]
+        range s = map fromIntegral [0 .. length s - 1]
+
+        indexOf :: String -> String -> Integer
+        indexOf s1 s2 = go 0 s1
+          where go i x
+                 | s2 `isPrefixOf` x = i
+                 | True              = case x of
+                                          "" -> -1
+                                          (_:r) -> go (i+1) r
+
+        strToStrAt :: String -> Integer -> String
+        s `strToStrAt` i = [s `strToCharAt` i]
+
+        strToCharAt :: String -> Integer -> Char
+        s `strToCharAt` i = s `genericIndex` i
+
+        subStr :: String -> Integer -> Integer -> String
+        subStr s i j = genericTake j (genericDrop i s)
+
+        replace :: String -> String -> String -> String
+        replace s "" y = y ++ s
+        replace s x  y = go s
+          where go "" = ""
+                go h@(c:rest) | x `isPrefixOf` h = y ++ drop (length x) h
+                              | True             = c : go rest
+
+        offsetIndexOf :: String -> String -> Integer -> Integer
+        offsetIndexOf x y i = case indexOf (genericDrop i x) y of
+                                -1 -> -1
+                                r  -> r+i
+
+        mkTest1 (nm, x, t)       = testCase ("genStrings-" ++ nm ++ "." ++ x)                         (assert t)
+        mkTest2 (nm, x, y, t)    = testCase ("genStrings-" ++ nm ++ "." ++ x ++ "_" ++ y)             (assert t)
+        mkTest3 (nm, x, y, z, t) = testCase ("genStrings-" ++ nm ++ "." ++ x ++ "_" ++ y ++ "_" ++ z) (assert t)
+
+        checkI sop s = case unliteral (sop (map literal s)) of
+                         Nothing -> False
+                         Just x  -> s == x
+
+        check1 sop cop arg            = case unliteral (sop (literal arg)) of
+                                          Nothing -> False
+                                          Just x  -> x == cop arg
+        check2 sop cop arg1 arg2      = case unliteral (sop (literal arg1) (literal arg2)) of
+                                          Nothing -> False
+                                          Just x  -> x == cop arg1 arg2
+        check3 sop cop arg1 arg2 arg3 = case unliteral (sop (literal arg1) (literal arg2) (literal arg3)) of
+                                          Nothing -> False
+                                          Just x  -> x == cop arg1 arg2 arg3
+
 -- Concrete test data
 xsUnsigned :: (Num a, Bounded a) => [a]
 xsUnsigned = take 5 (iterate (1+) minBound) ++ take 5 (iterate (\x -> x-1) maxBound)
@@ -543,3 +676,21 @@ ds = xs ++ map (* (-1)) (filter (not . isNaN) xs) -- -nan is the same as nan
 
 sds :: [SDouble]
 sds = map literal ds
+
+-- Currently we test over all latin-1 characters. But when Unicode comes along, we'll have to be more selective.
+cs :: String
+cs = map C.chr [0..255]
+
+-- For pair character ops, just take a subset
+iCs :: String
+iCs = map C.chr $ [0..5] ++ [98..102] ++ [250..255]
+
+siCs :: [SChar]
+siCs = map literal iCs
+
+-- Ditto for strings, just a few things
+ss :: [String]
+ss = ["", "palTRY", "teSTing", "SBV", "sTRIngs", "123", "surely", "thIS", "hI", "ly", "0"]
+
+sss :: [SString]
+sss = map literal ss

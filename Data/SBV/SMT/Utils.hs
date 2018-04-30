@@ -117,11 +117,10 @@ mergeSExpr (x:xs)
        grab _ []     = ([], [])
        grab i (l:ls) = let (a, b) = grab (i+parenDiff l) ls in (l:a, b)
 
-       skipString ('\\':'"':cs) = skipString cs
-       skipString ('"':'"':cs)  = skipString cs
-       skipString ('"':cs)      = cs
-       skipString (_:cs)        = skipString cs
-       skipString []            = []             -- Oh dear, line finished, but the string didn't. We're in trouble. Ignore!
+       skipString ('"':'"':cs)   = skipString cs
+       skipString ('"':cs)       = cs
+       skipString (_:cs)         = skipString cs
+       skipString []             = []             -- Oh dear, line finished, but the string didn't. We're in trouble. Ignore!
 
        skipBar ('|':cs) = cs
        skipBar (_:cs)   = skipBar cs

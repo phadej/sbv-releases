@@ -53,14 +53,14 @@ tokenize inp = go inp []
                             (pre, '|':rest) -> go rest (pre : sofar)
                             (pre, rest)     -> go rest (pre : sofar)
 
-       go ('"':r) sofar = go rest (show str : sofar)
-           where grabString []            acc = (reverse acc, [])        -- Strictly speaking, this is the unterminated string case; but let's ignore
-                 grabString ('\\':'"':cs) acc = grabString cs ('"':acc)  -- I don't think this is a valid escape actually, but it used to be. Be safe.
-                 grabString ('"' :'"':cs) acc = grabString cs ('"':acc)  -- In SMTLib "" becomes ". Weird escape indeed.
-                 grabString ('"':cs)      acc = (reverse acc, cs)
-                 grabString (c:cs)        acc = grabString cs (c:acc)
+       go ('"':r) sofar = go rest (finalStr : sofar)
+           where grabString []             acc = (reverse acc, [])         -- Strictly speaking, this is the unterminated string case; but let's ignore
+                 grabString ('"' :'"':cs)  acc = grabString cs ('"' :acc)
+                 grabString ('"':cs)       acc = (reverse acc, cs)
+                 grabString (c:cs)         acc = grabString cs (c:acc)
 
                  (str, rest) = grabString r []
+                 finalStr    = '"' : str ++ "\""
 
        go cs sofar = case span (`notElem` stopper) cs of
                        (pre, post) -> go post (pre : sofar)
@@ -74,7 +74,7 @@ tokenize inp = go inp []
 parenDeficit :: String -> Int
 parenDeficit = go 0 . tokenize
   where go :: Int -> [String] -> Int
-        go !balance []          = balance
+        go !balance []           = balance
         go !balance ("(" : rest) = go (balance+1) rest
         go !balance (")" : rest) = go (balance-1) rest
         go !balance (_   : rest) = go balance     rest
@@ -116,6 +116,7 @@ parseSExpr inp = do (sexp, extras) <- parse inpToks
         pTok ('b':'v':r) | not (null r) && all isDigit r = mkNum Nothing               $ readDec (takeWhile (/= '[') r)
         pTok ('#':'b':r)                                 = mkNum (Just (length r))     $ readInt 2 (`elem` "01") (\c -> ord c - ord '0') r
         pTok ('#':'x':r)                                 = mkNum (Just (4 * length r)) $ readHex r
+
         pTok n
           | not (null n) && isDigit (head n)
           = if '.' `elem` n then getReal n

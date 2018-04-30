@@ -35,8 +35,10 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
   where hasInteger     = KUnbounded `Set.member` kindInfo
         hasReal        = KReal      `Set.member` kindInfo
         hasFloat       = KFloat     `Set.member` kindInfo
+        hasString      = KString    `Set.member` kindInfo
+        hasChar        = KChar      `Set.member` kindInfo
         hasDouble      = KDouble    `Set.member` kindInfo
-        hasBVs         = not $ null [() | KBounded{} <- Set.toList kindInfo]
+        hasBVs         = hasChar || not (null [() | KBounded{} <- Set.toList kindInfo])   -- Remember, characters map to Word8
         usorts         = [(s, dt) | KUserSort s dt <- Set.toList kindInfo]
         hasNonBVArrays = (not . null) [() | (_, (_, (k1, k2), _)) <- arrs, not (isBounded k1 && isBounded k2)]
         rm             = roundingMode cfg
@@ -58,6 +60,11 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
 
            -- Otherwise, we try to determine the most suitable logic.
            -- NB. This isn't really fool proof!
+
+           -- we never set QF_S (ALL seems to work better in all cases)
+           | hasString
+           = ["(set-logic ALL)"]
+
            | hasDouble || hasFloat
            = if hasInteger || not (null foralls)
              then ["(set-logic ALL)"]
@@ -361,6 +368,8 @@ smtType KUnbounded      = "Int"
 smtType KReal           = "Real"
 smtType KFloat          = "(_ FloatingPoint  8 24)"
 smtType KDouble         = "(_ FloatingPoint 11 53)"
+smtType KString         = "String"
+smtType KChar           = "(_ BitVec 8)"
 smtType (KUserSort s _) = s
 
 cvtType :: SBVType -> String
@@ -398,6 +407,8 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         doubleOp = any isDouble  arguments
         floatOp  = any isFloat   arguments
         boolOp   = all isBoolean arguments
+        charOp   = all isChar    arguments
+        stringOp = all isString  arguments
 
         bad | intOp = error $ "SBV.SMTLib2: Unsupported operation on unbounded integers: " ++ show expr
             | True  = error $ "SBV.SMTLib2: Unsupported operation on real values: " ++ show expr
@@ -470,6 +481,14 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
           = let idx v = "(" ++ s ++ "_constrIndex " ++ v ++ ")" in "(" ++ o ++ " " ++ idx a ++ " " ++ idx b ++ ")"
         unintComp o sbvs = error $ "SBV.SMT.SMTLib2.sh.unintComp: Unexpected arguments: "   ++ show (o, sbvs)
 
+        -- NB. String comparisons are currently not supported by Z3; but will be with the new logic.
+        stringCmp swap o [a, b]
+          | KString <- kindOf (head arguments)
+          = let [a1, a2] | swap = [b, a]
+                         | True = [a, b]
+            in "(" ++ o ++ " " ++ a1 ++ " " ++ a2 ++ ")"
+        stringCmp _ o sbvs = error $ "SBV.SMT.SMTLib2.sh.stringCmp: Unexpected arguments: " ++ show (o, sbvs)
+
         lift1  o _ [x]    = "(" ++ o ++ " " ++ x ++ ")"
         lift1  o _ sbvs   = error $ "SBV.SMT.SMTLib2.sh.lift1: Unexpected arguments: "   ++ show (o, sbvs)
 
@@ -485,6 +504,8 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                               KReal         -> error "SBV.SMT.SMTLib2.cvtExp: unexpected real valued index"
                               KFloat        -> error "SBV.SMT.SMTLib2.cvtExp: unexpected float valued index"
                               KDouble       -> error "SBV.SMT.SMTLib2.cvtExp: unexpected double valued index"
+                              KChar         -> error "SBV.SMT.SMTLib2.cvtExp: unexpected char valued index"
+                              KString       -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
                               KUserSort s _ -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected uninterpreted valued index: " ++ s
                 lkUp = "(" ++ getTable tableMap t ++ " " ++ ssw i ++ ")"
                 cond
@@ -497,6 +518,8 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                 KReal         -> ("<", "<=")
                                 KFloat        -> ("fp.lt", "fp.leq")
                                 KDouble       -> ("fp.lt", "fp.geq")
+                                KChar         -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
+                                KString       -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
                                 KUserSort s _ -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected uninterpreted valued index: " ++ s
                 mkCnst = cvtCW rm . mkConstCW (kindOf i)
                 le0  = "(" ++ less ++ " " ++ ssw i ++ " " ++ mkCnst 0 ++ ")"
@@ -551,6 +574,10 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
           | True       = reducePB pb args'
           where args' = map ssw args
 
+        -- Note the unfortunate reversal in StrInRe..
+        sh (SBVApp (StrOp (StrInRe r)) args) = "(str.in.re " ++ unwords (map ssw args) ++ " " ++ show r ++ ")"
+        sh (SBVApp (StrOp op)          args) = "(" ++ show op ++ " " ++ unwords (map ssw args) ++ ")"
+
         sh inp@(SBVApp op args)
           | intOp, Just f <- lookup op smtOpIntTable
           = f True (map ssw args)
@@ -562,6 +589,10 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
           = f (any hasSign args) (map ssw args)
           | floatOp || doubleOp, Just f <- lookup op smtOpFloatDoubleTable
           = f (any hasSign args) (map ssw args)
+          | charOp, Just f <- lookup op smtCharTable
+          = f False (map ssw args)
+          | stringOp, Just f <- lookup op smtStringTable
+          = f (map ssw args)
           | Just f <- lookup op uninterpretedTable
           = f (map ssw args)
           | True
@@ -613,7 +644,7 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                     , (LessEq,        lift2Cmp  "<=" "fp.leq")
                                     , (GreaterEq,     lift2Cmp  ">=" "fp.geq")
                                     ]
-                -- equality and comparisons are the only thing that works on uninterpreted sorts
+                -- equality and comparisons are the only thing that works on uninterpreted sorts and pretty much everything else
                 uninterpretedTable = [ (Equal,       lift2S "="        "="        True)
                                      , (NotEqual,    liftNS "distinct" "distinct" True)
                                      , (LessThan,    unintComp "<")
@@ -621,6 +652,24 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                      , (LessEq,      unintComp "<=")
                                      , (GreaterEq,   unintComp ">=")
                                      ]
+                -- For chars, the underlying type is currently SWord8, so we go with the regular bit-vector operations
+                -- TODO: This will change when we move to unicode!
+                smtCharTable = [ (Equal,         eqBV)
+                               , (NotEqual,      neqBV)
+                               , (LessThan,      lift2S  "bvult" (error "smtChar.<: did-not expect signed char here!"))
+                               , (GreaterThan,   lift2S  "bvugt" (error "smtChar.>: did-not expect signed char here!"))
+                               , (LessEq,        lift2S  "bvule" (error "smtChar.<=: did-not expect signed char here!"))
+                               , (GreaterEq,     lift2S  "bvuge" (error "smtChar.>=: did-not expect signed char here!"))
+                               ]
+                -- For strings, equality and comparisons are the only operators
+                -- TODO: The string comparison operators will most likely change with the new theory!
+                smtStringTable = [ (Equal,       lift2S "="        "="        True)
+                                 , (NotEqual,    liftNS "distinct" "distinct" True)
+                                 , (LessThan,    stringCmp False "str.<")
+                                 , (GreaterThan, stringCmp True  "str.<")
+                                 , (LessEq,      stringCmp False "str.<=")
+                                 , (GreaterEq,   stringCmp True  "str.<=")
+                                 ]
 
 -----------------------------------------------------------------------------------------------
 -- Casts supported by SMTLib. (From: <http://smtlib.cs.uiowa.edu/theories-FloatingPoint.shtml>)
@@ -640,7 +689,7 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
 --   ((_ fp.to_ubv m) RoundingMode (_ FloatingPoint eb sb) (_ BitVec m))
 --
 --   ; to signed machine integer, represented as a 2's complement bit vector
---   ((_ fp.to_sbv m) RoundingMode (_ FloatingPoint eb sb) (_ BitVec m)) 
+--   ((_ fp.to_sbv m) RoundingMode (_ FloatingPoint eb sb) (_ BitVec m))
 --
 --   ; to real
 --   (fp.to_real (_ FloatingPoint eb sb) Real)

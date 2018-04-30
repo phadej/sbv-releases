@@ -9,6 +9,7 @@
 -- Number representations in hex/bin
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
@@ -18,7 +19,7 @@ module Data.SBV.Utils.PrettyNum (
       , showSMTFloat, showSMTDouble, smtRoundingMode, cwToSMTLib, mkSkolemZero
       ) where
 
-import Data.Char  (ord, intToDigit)
+import Data.Char  (intToDigit, ord)
 import Data.Int   (Int8, Int16, Int32, Int64)
 import Data.List  (isPrefixOf)
 import Data.Maybe (fromJust, fromMaybe, listToMaybe)
@@ -30,6 +31,8 @@ import Data.Numbers.CrackNum (floatToFP, doubleToFP)
 
 import Data.SBV.Core.Data
 import Data.SBV.Core.AlgReals (algRealToSMTLib2)
+
+import Data.SBV.Utils.Lib (stringToQFS)
 
 -- | PrettyNum class captures printing of numbers in hex and binary formats; also supporting negative numbers.
 --
@@ -46,6 +49,8 @@ class PrettyNum a where
 
 -- Why not default methods? Because defaults need "Integral a" but Bool is not..
 instance PrettyNum Bool where
+  {hexS = show; binS = show; hex = show; bin = show}
+instance PrettyNum String where
   {hexS = show; binS = show; hex = show; bin = show}
 instance PrettyNum Word8 where
   {hexS = shex True True (False,8) ; binS = sbin True True (False,8) ; hex = shex False False (False,8) ; bin = sbin False False (False,8) ;}
@@ -69,25 +74,28 @@ instance PrettyNum Integer where
 instance PrettyNum CW where
   hexS cw | isUninterpreted cw = show cw ++ " :: " ++ show (kindOf cw)
           | isBoolean cw       = hexS (cwToBool cw) ++ " :: Bool"
-          | isFloat cw         = let CWFloat  f  = cwVal cw in show f ++ " :: Float\n"  ++ show (floatToFP f)
-          | isDouble cw        = let CWDouble d  = cwVal cw in show d ++ " :: Double\n" ++ show (doubleToFP d)
+          | isFloat cw         = let CWFloat   f = cwVal cw in show f ++ " :: Float\n"  ++ show (floatToFP f)
+          | isDouble cw        = let CWDouble  d = cwVal cw in show d ++ " :: Double\n" ++ show (doubleToFP d)
           | isReal cw          = let CWAlgReal w = cwVal cw in show w ++ " :: Real"
+          | isString cw        = let CWString  s = cwVal cw in show s ++ " :: String"
           | not (isBounded cw) = let CWInteger w = cwVal cw in shexI True True w
           | True               = let CWInteger w = cwVal cw in shex  True True (hasSign cw, intSizeOf cw) w
 
   binS cw | isUninterpreted cw = show cw  ++ " :: " ++ show (kindOf cw)
           | isBoolean cw       = binS (cwToBool cw)  ++ " :: Bool"
-          | isFloat cw         = let CWFloat  f  = cwVal cw in show f ++ " :: Float\n"  ++ show (floatToFP f)
-          | isDouble cw        = let CWDouble d  = cwVal cw in show d ++ " :: Double\n" ++ show (doubleToFP d)
+          | isFloat cw         = let CWFloat   f = cwVal cw in show f ++ " :: Float\n"  ++ show (floatToFP f)
+          | isDouble cw        = let CWDouble  d = cwVal cw in show d ++ " :: Double\n" ++ show (doubleToFP d)
           | isReal cw          = let CWAlgReal w = cwVal cw in show w ++ " :: Real"
+          | isString cw        = let CWString  s = cwVal cw in show s ++ " :: String"
           | not (isBounded cw) = let CWInteger w = cwVal cw in sbinI True True w
           | True               = let CWInteger w = cwVal cw in sbin  True True (hasSign cw, intSizeOf cw) w
 
   hex cw | isUninterpreted cw = show cw
          | isBoolean cw       = hexS (cwToBool cw) ++ " :: Bool"
-         | isFloat cw         = let CWFloat  f  = cwVal cw in show f
-         | isDouble cw        = let CWDouble d  = cwVal cw in show d
+         | isFloat cw         = let CWFloat   f = cwVal cw in show f
+         | isDouble cw        = let CWDouble  d = cwVal cw in show d
          | isReal cw          = let CWAlgReal w = cwVal cw in show w
+         | isString cw        = let CWString  s = cwVal cw in show s
          | not (isBounded cw) = let CWInteger w = cwVal cw in shexI False False w
          | True               = let CWInteger w = cwVal cw in shex  False False (hasSign cw, intSizeOf cw) w
 
@@ -96,6 +104,7 @@ instance PrettyNum CW where
          | isFloat cw         = let CWFloat  f  = cwVal cw in show f
          | isDouble cw        = let CWDouble d  = cwVal cw in show d
          | isReal cw          = let CWAlgReal w = cwVal cw in show w
+         | isString cw        = let CWString  s = cwVal cw in show s
          | not (isBounded cw) = let CWInteger w = cwVal cw in sbinI False False w
          | True               = let CWInteger w = cwVal cw in sbin  False False (hasSign cw, intSizeOf cw) w
 
@@ -270,6 +279,8 @@ cwToSMTLib rm x
   | hasSign x        , CWInteger  w      <- cwVal x = if w == negate (2 ^ intSizeOf x)
                                                       then mkMinBound (intSizeOf x)
                                                       else negIf (w < 0) $ smtLibHex (intSizeOf x) (abs w)
+  | isChar x         , CWChar c          <- cwVal x = smtLibHex 8 (fromIntegral (ord c))
+  | isString x       , CWString s        <- cwVal x = '\"' : stringToQFS s ++ "\""
   | True = error $ "SBV.cvtCW: Impossible happened: Kind/Value disagreement on: " ++ show (kindOf x, x)
   where roundModeConvert s = fromMaybe s (listToMaybe [smtRoundingMode m | m <- [minBound .. maxBound] :: [RoundingMode], show m == s])
         -- Carefully code hex numbers, SMTLib is picky about lengths of hex constants. For the time
@@ -284,6 +295,7 @@ cwToSMTLib rm x
         negIf :: Bool -> String -> String
         negIf True  a = "(bvneg " ++ a ++ ")"
         negIf False a = a
+
         -- anamoly at the 2's complement min value! Have to use binary notation here
         -- as there is no positive value we can provide to make the bvneg work.. (see above)
         mkMinBound :: Int -> String

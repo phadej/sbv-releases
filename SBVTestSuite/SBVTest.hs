@@ -25,6 +25,7 @@ import qualified TestSuite.Basics.Quantifiers
 import qualified TestSuite.Basics.Recursive
 import qualified TestSuite.Basics.SmallShifts
 import qualified TestSuite.Basics.SquashReals
+import qualified TestSuite.Basics.String
 import qualified TestSuite.Basics.TOut
 import qualified TestSuite.BitPrecise.BitTricks
 import qualified TestSuite.BitPrecise.Legato
@@ -75,7 +76,9 @@ import qualified TestSuite.Queries.Int_Mathsat
 import qualified TestSuite.Queries.Int_Yices
 import qualified TestSuite.Queries.Int_Z3
 import qualified TestSuite.Queries.Interpolants
+import qualified TestSuite.Queries.Strings
 import qualified TestSuite.Queries.Uninterpreted
+import qualified TestSuite.QuickCheck.QC
 import qualified TestSuite.Uninterpreted.AUF
 import qualified TestSuite.Uninterpreted.Axioms
 import qualified TestSuite.Uninterpreted.Function
@@ -122,11 +125,13 @@ localOnlyTests = testGroup "SBVLocalOnlyTests" [
                    , TestSuite.Queries.Int_CVC4.tests
                    , TestSuite.Queries.Int_Mathsat.tests
                    , TestSuite.Queries.Int_Yices.tests
+                   -- quick-check tests take a long time, so just run them locally.
+                   , TestSuite.QuickCheck.QC.tests
                    ]
 
 -- | Remaining tests
 otherTests :: TestTree
-otherTests = testGroup "SBVOtherTests" [
+otherTests = testGroup "SBVTests" [
                  TestSuite.Arrays.Memory.tests
                , TestSuite.Arrays.Query.tests
                , TestSuite.Basics.AllSat.tests
@@ -144,6 +149,7 @@ otherTests = testGroup "SBVOtherTests" [
                , TestSuite.Basics.Recursive.tests
                , TestSuite.Basics.SmallShifts.tests
                , TestSuite.Basics.SquashReals.tests
+               , TestSuite.Basics.String.tests
                , TestSuite.Basics.TOut.tests
                , TestSuite.BitPrecise.BitTricks.tests
                , TestSuite.BitPrecise.Legato.tests
@@ -187,6 +193,7 @@ otherTests = testGroup "SBVOtherTests" [
                , TestSuite.Queries.FreshVars.tests
                , TestSuite.Queries.Int_Z3.tests
                , TestSuite.Queries.Interpolants.tests
+               , TestSuite.Queries.Strings.tests
                , TestSuite.Queries.Uninterpreted.tests
                , TestSuite.Uninterpreted.AUF.tests
                , TestSuite.Uninterpreted.Axioms.tests

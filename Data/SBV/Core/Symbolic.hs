@@ -27,7 +27,7 @@
 module Data.SBV.Core.Symbolic
   ( NodeId(..)
   , SW(..), swKind, trueSW, falseSW
-  , Op(..), PBOp(..), FPOp(..)
+  , Op(..), PBOp(..), FPOp(..), StrOp(..), RegExp(..)
   , Quantifier(..), needsExistentials
   , RoundingMode(..)
   , SBVType(..), newUninterpreted, addAxiom
@@ -43,7 +43,7 @@ module Data.SBV.Core.Symbolic
   , getTableIndex
   , SBVPgm(..), Symbolic, runSymbolic, State(..), withNewIncState, IncState(..), incrementInternalCounter
   , inSMTMode, SBVRunMode(..), IStage(..), Result(..)
-  , registerKind, registerLabel
+  , registerKind, registerLabel, recordObservable
   , addAssertion, addNewSMTOption, imposeConstraint, internalConstraint, internalVariable
   , SMTLibPgm(..), SMTLibVersion(..), smtLibVersionExtension
   , SolverCapabilities(..)
@@ -65,6 +65,7 @@ import Data.Char                (isAlpha, isAlphaNum, toLower)
 import Data.IORef               (IORef, newIORef, readIORef)
 import Data.List                (intercalate, sortBy)
 import Data.Maybe               (isJust, fromJust, fromMaybe)
+import Data.String              (IsString(fromString))
 
 import Data.Time (getCurrentTime, UTCTime)
 
@@ -83,7 +84,8 @@ import System.Mem.StableName
 import Data.SBV.Core.Kind
 import Data.SBV.Core.Concrete
 import Data.SBV.SMT.SMTLibNames
-import Data.SBV.Utils.TDiff(Timing)
+import Data.SBV.Utils.TDiff (Timing)
+import Data.SBV.Utils.Lib   (stringToQFS)
 
 import Data.SBV.Control.Types
 
@@ -152,6 +154,7 @@ data Op = Plus
         | Label String                          -- Essentially no-op; useful for code generation to emit comments.
         | IEEEFP FPOp                           -- Floating-point ops, categorized separately
         | PseudoBoolean PBOp                    -- Pseudo-boolean ops, categorized separately
+        | StrOp StrOp                           -- String ops, categorized separately
         deriving (Eq, Ord)
 
 -- | Floating point operations
@@ -218,6 +221,106 @@ data PBOp = PB_AtMost  Int        -- ^ At most k
           | PB_Eq      [Int] Int  -- ^ Exactly k,  with coefficients given. Generalized PB_Exactly
           deriving (Eq, Ord, Show)
 
+-- | String operations. Note that we do not define `StrAt` as it translates to `StrSubStr` trivially.
+data StrOp = StrConcat       -- ^ Concatenation of one or more strings
+           | StrLen          -- ^ String length
+           | StrUnit         -- ^ Unit string
+           | StrSubstr       -- ^ Retrieves substring of @s@ at @offset@
+           | StrIndexOf      -- ^ Retrieves first position of @sub@ in @s@, @-1@ if there are no occurrences
+           | StrContains     -- ^ Does @s@ contain the substring @sub@?
+           | StrPrefixOf     -- ^ Is @pre@ a prefix of @s@?
+           | StrSuffixOf     -- ^ Is @suf@ a suffix of @s@?
+           | StrReplace      -- ^ Replace the first occurrence of @src@ by @dst@ in @s@
+           | StrStrToNat     -- ^ Retrieve integer encoded by string @s@ (ground rewriting only)
+           | StrNatToStr     -- ^ Retrieve string encoded by integer @i@ (ground rewriting only)
+           | StrInRe RegExp  -- ^ Check if string is in the regular expression
+           deriving (Eq, Ord)
+
+-- | Regular expressions. Note that regular expressions themselves are
+-- concrete, but the `match` function from the 'RegExpMatchable' class
+-- can check membership against a symbolic string/character. Also, we
+-- are preferring a datatype approach here, as opposed to coming up with
+-- some string-representation; there are way too many alternatives
+-- already so inventing one isn't a priority. Please get in touch if you
+-- would like a parser for this type as it might be easier to use.
+data RegExp = Literal String       -- ^ Precisely match the given string
+            | All                  -- ^ Accept every string
+            | None                 -- ^ Accept no strings
+            | Range Char Char      -- ^ Accept range of characters
+            | Conc  [RegExp]       -- ^ Concatenation
+            | KStar RegExp         -- ^ Kleene Star: Zero or more
+            | KPlus RegExp         -- ^ Kleene Plus: One or more
+            | Opt   RegExp         -- ^ Zero or one
+            | Loop  Int Int RegExp -- ^ From @n@ repetitions to @m@ repetitions
+            | Union [RegExp]       -- ^ Union of regular expressions
+            | Inter RegExp RegExp  -- ^ Intersection of regular expressions
+            deriving (Eq, Ord)
+
+-- | With overloaded strings, we can have direct literal regular expressions.
+instance IsString RegExp where
+  fromString = Literal
+
+-- | Regular expressions as a 'Num' instance. Note that
+-- only `+` (union) and `*` (concatenation) make sense.
+instance Num RegExp where
+  -- flatten the concats to make them simpler
+  Conc xs * y = Conc (xs ++ [y])
+  x * Conc ys = Conc (x  :  ys)
+  x * y       = Conc [x, y]
+
+  -- flatten the unions to make them simpler
+  Union xs + y = Union (xs ++ [y])
+  x + Union ys = Union (x  : ys)
+  x + y        = Union [x, y]
+
+  abs         = error "Num.RegExp: no abs method"
+  signum      = error "Num.RegExp: no signum method"
+
+  fromInteger x
+    | x == 0    = None
+    | x == 1    = Literal ""   -- Unit for concatenation is the empty string
+    | True      = error $ "Num.RegExp: Only 0 and 1 makes sense as a reg-exp, no meaning for: " ++ show x
+
+  negate      = error "Num.RegExp: no negate method"
+
+-- | Show instance for `RegExp`. The mapping is done so the outcome matches the
+-- SMTLib string reg-exp operations
+instance Show RegExp where
+  show (Literal s)       = "(str.to.re \"" ++ stringToQFS s ++ "\")"
+  show All               = "re.allchar"
+  show None              = "re.nostr"
+  show (Range ch1 ch2)   = "(re.range \"" ++ stringToQFS [ch1] ++ "\" \"" ++ stringToQFS [ch2] ++ "\")"
+  show (Conc [])         = show (1 :: Integer)
+  show (Conc [x])        = show x
+  show (Conc xs)         = "(re.++ " ++ unwords (map show xs) ++ ")"
+  show (KStar r)         = "(re.* " ++ show r ++ ")"
+  show (KPlus r)         = "(re.+ " ++ show r ++ ")"
+  show (Opt   r)         = "(re.opt " ++ show r ++ ")"
+  show (Loop  lo hi r)
+     | lo >= 0, hi >= lo = "((_ re.loop " ++ show lo ++ " " ++ show hi ++ ") " ++ show r ++ ")"
+     | True              = error $ "Invalid regular-expression Loop with arguments: " ++ show (lo, hi)
+  show (Inter r1 r2)     = "(re.inter " ++ show r1 ++ " " ++ show r2 ++ ")"
+  show (Union [])        = "re.nostr"
+  show (Union [x])       = show x
+  show (Union xs)        = "(re.union " ++ unwords (map show xs) ++ ")"
+
+-- | Show instance for `StrOp`. Note that the mapping here is
+-- important to match the SMTLib equivalents, see here: <https://rise4fun.com/z3/tutorialcontent/sequences>
+instance Show StrOp where
+  show StrConcat   = "str.++"
+  show StrLen      = "str.len"
+  show StrUnit     = "seq.unit"      -- NB. The "seq" prefix is intentional; works uniformly.
+  show StrSubstr   = "str.substr"
+  show StrIndexOf  = "str.indexof"
+  show StrContains = "str.contains"
+  show StrPrefixOf = "str.prefixof"
+  show StrSuffixOf = "str.suffixof"
+  show StrReplace  = "str.replace"
+  show StrStrToNat = "str.to.int"    -- NB. SMTLib uses "int" here though only nats are supported
+  show StrNatToStr = "int.to.str"    -- NB. SMTLib uses "int" here though only nats are supported
+  -- Note the breakage here with respect to argument order. We fix this explicitly later.
+  show (StrInRe s) = "str.in.re " ++ show s
+
 -- Show instance for 'Op'. Note that this is largely for debugging purposes, not used
 -- for being read by any tool.
 instance Show Op where
@@ -236,6 +339,7 @@ instance Show Op where
   show (Label s)         = "[label] " ++ s
   show (IEEEFP w)        = show w
   show (PseudoBoolean p) = show p
+  show (StrOp s)         = show s
   show op
     | Just s <- op `lookup` syms = s
     | True                       = error "impossible happened; can't find op!"
@@ -356,6 +460,7 @@ instance NFData a => NFData (Objective a) where
 -- | Result of running a symbolic computation
 data Result = Result { reskinds       :: Set.Set Kind                                     -- ^ kinds used in the program
                      , resTraces      :: [(String, CW)]                                   -- ^ quick-check counter-example information (if any)
+                     , resObservables :: [(String, SW)]                                   -- ^ observable expressions (part of the model)
                      , resUISegs      :: [(String, [String])]                             -- ^ uninterpeted code segments
                      , resInputs      :: ([(Quantifier, NamedSymVar)], [NamedSymVar])     -- ^ inputs (possibly existential) + tracker vars
                      , resConsts      :: [(SW, CW)]                                       -- ^ constants
@@ -377,7 +482,7 @@ instance Show Result where
   show Result{resConsts=cs, resOutputs=[r]}
     | Just c <- r `lookup` cs
     = show c
-  show (Result kinds _ cgs is cs ts as uis axs xs cstrs asserts os) = intercalate "\n" $
+  show (Result kinds _ _ cgs is cs ts as uis axs xs cstrs asserts os) = intercalate "\n" $
                    (if null usorts then [] else "SORTS" : map ("  " ++) usorts)
                 ++ ["INPUTS"]
                 ++ map shn (fst is)
@@ -551,6 +656,7 @@ data State  = State { pathCond     :: SVal                             -- ^ kind
                     , runMode      :: IORef SBVRunMode
                     , rIncState    :: IORef IncState
                     , rCInfo       :: IORef [(String, CW)]
+                    , rObservables :: IORef [(String, SW)]
                     , rctr         :: IORef Int
                     , rUsedKinds   :: IORef KindSet
                     , rUsedLbls    :: IORef (Set.Set String)
@@ -642,6 +748,10 @@ modifyIncState  :: State -> (IncState -> IORef a) -> (a -> a) -> IO ()
 modifyIncState State{rIncState} field update = do
         incState <- readIORef rIncState
         R.modifyIORef' (field incState) update
+
+-- | Add an observable
+recordObservable :: State -> String -> SW -> IO ()
+recordObservable st nm sw = modifyState st rObservables ((nm, sw):) (return ())
 
 -- | Increment the variable counter
 incrementInternalCounter :: State -> IO Int
@@ -912,6 +1022,7 @@ runSymbolic currentRunMode (Symbolic c) = do
    rm        <- newIORef currentRunMode
    ctr       <- newIORef (-2) -- start from -2; False and True will always occupy the first two elements
    cInfo     <- newIORef []
+   observes  <- newIORef []
    pgm       <- newIORef (SBVPgm S.empty)
    emap      <- newIORef Map.empty
    cmap      <- newIORef Map.empty
@@ -937,6 +1048,7 @@ runSymbolic currentRunMode (Symbolic c) = do
                   , pathCond     = SVal KBool (Left trueCW)
                   , rIncState    = istate
                   , rCInfo       = cInfo
+                  , rObservables = observes
                   , rctr         = ctr
                   , rUsedKinds   = usedKinds
                   , rUsedLbls    = usedLbls
@@ -975,6 +1087,7 @@ runSymbolic currentRunMode (Symbolic c) = do
 extractSymbolicSimulationState :: State -> IO Result
 extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblMap=tables, rArrayMap=arrays, rUIMap=uis, raxioms=axioms
                                        , rAsserts=asserts, rUsedKinds=usedKinds, rCgMap=cgs, rCInfo=cInfo, rConstraints=cstrs
+                                       , rObservables=observes
                                        } = do
    SBVPgm rpgm  <- readIORef pgm
    inpsO <- (reverse *** reverse) <$> readIORef inps
@@ -991,9 +1104,10 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
    knds  <- readIORef usedKinds
    cgMap <- Map.toList <$> readIORef cgs
    traceVals  <- reverse <$> readIORef cInfo
+   observables <- reverse <$> readIORef observes
    extraCstrs <- reverse <$> readIORef cstrs
    assertions <- reverse <$> readIORef asserts
-   return $ Result knds traceVals cgMap inpsO cnsts tbls arrs unint axs (SBVPgm rpgm) extraCstrs assertions outsO
+   return $ Result knds traceVals observables cgMap inpsO cnsts tbls arrs unint axs (SBVPgm rpgm) extraCstrs assertions outsO
 
 -- | Add a new option
 addNewSMTOption :: SMTOption -> Symbolic ()
@@ -1202,11 +1316,12 @@ instance NFData CallStack where
 #endif
 
 instance NFData Result where
-  rnf (Result kindInfo qcInfo cgs inps consts tbls arrs uis axs pgm cstr asserts outs)
-        = rnf kindInfo `seq` rnf qcInfo  `seq` rnf cgs  `seq` rnf inps
-                       `seq` rnf consts  `seq` rnf tbls `seq` rnf arrs
-                       `seq` rnf uis     `seq` rnf axs  `seq` rnf pgm
-                       `seq` rnf cstr    `seq` rnf asserts `seq` rnf outs
+  rnf (Result kindInfo qcInfo obs cgs inps consts tbls arrs uis axs pgm cstr asserts outs)
+        = rnf kindInfo `seq` rnf qcInfo  `seq` rnf obs    `seq` rnf cgs
+                       `seq` rnf inps    `seq` rnf consts `seq` rnf tbls
+                       `seq` rnf arrs    `seq` rnf uis    `seq` rnf axs 
+                       `seq` rnf pgm     `seq` rnf cstr   `seq` rnf asserts
+                       `seq` rnf outs
 instance NFData Kind         where rnf a          = seq a ()
 instance NFData ArrayContext where rnf a          = seq a ()
 instance NFData SW           where rnf a          = seq a ()
@@ -1311,11 +1426,11 @@ data SMTModel = SMTModel {
 -- and build layers of results, if needed. For ordinary uses of the library,
 -- this type should not be needed, instead use the accessor functions on
 -- it. (Custom Show instances and model extractors.)
-data SMTResult = Unsatisfiable SMTConfig           -- ^ Unsatisfiable
-               | Satisfiable   SMTConfig SMTModel  -- ^ Satisfiable with model
-               | SatExtField   SMTConfig SMTModel  -- ^ Prover returned a model, but in an extension field containing Infinite/epsilon
-               | Unknown       SMTConfig String    -- ^ Prover returned unknown, with the given reason
-               | ProofError    SMTConfig [String]  -- ^ Prover errored out
+data SMTResult = Unsatisfiable SMTConfig (Maybe [String]) -- ^ Unsatisfiable. If unsat-cores are enabled, they will be returned in the second parameter.
+               | Satisfiable   SMTConfig SMTModel         -- ^ Satisfiable with model
+               | SatExtField   SMTConfig SMTModel         -- ^ Prover returned a model, but in an extension field containing Infinite/epsilon
+               | Unknown       SMTConfig String           -- ^ Prover returned unknown, with the given reason
+               | ProofError    SMTConfig [String]         -- ^ Prover errored out
 
 -- | A script, to be passed to the solver.
 data SMTScript = SMTScript {

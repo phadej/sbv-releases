@@ -9,18 +9,20 @@
 -- Query related utils.
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE    BangPatterns          #-}
-{-# LANGUAGE    DefaultSignatures     #-}
-{-# LANGUAGE    LambdaCase            #-}
-{-# LANGUAGE    NamedFieldPuns        #-}
-{-# LANGUAGE    ScopedTypeVariables   #-}
-{-# LANGUAGE    TupleSections         #-}
-{-# OPTIONS_GHC -fno-warn-orphans  #-}
+{-# LANGUAGE    BangPatterns         #-}
+{-# LANGUAGE    DefaultSignatures    #-}
+{-# LANGUAGE    LambdaCase           #-}
+{-# LANGUAGE    NamedFieldPuns       #-}
+{-# LANGUAGE    ScopedTypeVariables  #-}
+{-# LANGUAGE    TupleSections        #-}
+{-# LANGUAGE    TypeSynonymInstances #-}
+{-# LANGUAGE    FlexibleInstances    #-}
+{-# OPTIONS_GHC -fno-warn-orphans    #-}
 
 module Data.SBV.Control.Utils (
        io
      , ask, send, getValue, getUninterpretedValue, getValueCW, getUnsatAssumptions, SMTValue(..)
-     , getQueryState, modifyQueryState, getConfig, getObjectives, getSBVAssertions, getSBVPgm, getQuantifiedInputs
+     , getQueryState, modifyQueryState, getConfig, getObjectives, getSBVAssertions, getSBVPgm, getQuantifiedInputs, getObservables
      , checkSat, checkSatUsing, getAllSatResult
      , inNewContext, freshVar, freshVar_
      , parse
@@ -34,7 +36,7 @@ module Data.SBV.Control.Utils (
 
 import Data.List  (sortBy, elemIndex, partition, groupBy, tails)
 
-import Data.Char     (isPunctuation, isSpace)
+import Data.Char     (isPunctuation, isSpace, chr)
 import Data.Ord      (comparing)
 import Data.Function (on)
 
@@ -66,6 +68,8 @@ import Data.SBV.Core.Operations (svNot, svNotEqual, svOr)
 
 import Data.SBV.SMT.SMTLib  (toIncSMTLib, toSMTLib)
 import Data.SBV.SMT.Utils   (showTimeoutValue, annotateWithName, alignPlain, debug, mergeSExpr, SMTException(..))
+
+import Data.SBV.Utils.Lib (qfsToString)
 
 import Data.SBV.Utils.SExpr
 import Data.SBV.Control.Types
@@ -203,6 +207,30 @@ ask s = do QueryState{queryAsk, queryTimeOutValue} <- getQueryState
 
            return r
 
+-- | Send a string to the solver, and return the response. Except, if the response
+-- is one of the "ignore" ones, keep querying.
+askIgnoring :: String -> [String] -> Query String
+askIgnoring s ignoreList = do
+
+           QueryState{queryAsk, queryRetrieveResponse, queryTimeOutValue} <- getQueryState
+
+           case queryTimeOutValue of
+             Nothing -> queryDebug ["[SEND] " `alignPlain` s]
+             Just i  -> queryDebug ["[SEND, TimeOut: " ++ showTimeoutValue i ++ "] " `alignPlain` s]
+           r <- io $ queryAsk queryTimeOutValue s
+           queryDebug ["[RECV] " `alignPlain` r]
+
+           let loop currentResponse
+                 | currentResponse `notElem` ignoreList
+                 = return currentResponse
+                 | True
+                 = do queryDebug ["[WARN] Previous response is explicitly ignored, beware!"]
+                      newResponse <- io $ queryRetrieveResponse queryTimeOutValue
+                      queryDebug ["[RECV] " `alignPlain` newResponse]
+                      loop newResponse
+
+           loop r
+
 -- | Send a string to the solver. If the first argument is 'True', we will require
 -- a "success" response as well. Otherwise, we'll fire and forget.
 send :: Bool -> String -> Query ()
@@ -306,6 +334,16 @@ instance SMTValue AlgReal where
    sexprToVal (ENum (v, _)) = Just (fromIntegral v)
    sexprToVal _             = Nothing
 
+instance SMTValue String where
+   sexprToVal (ECon s)
+     | length s >= 2 && head s == '"' && last s == '"'
+     = Just (tail (init s))
+   sexprToVal _        = Nothing
+
+instance SMTValue Char where
+   sexprToVal (ENum (i, _)) = Just (chr (fromIntegral i))
+   sexprToVal _             = Nothing
+
 -- | Get the value of a term.
 getValue :: SMTValue a => SBV a -> Query a
 getValue s = do sw <- inNewContext (`sbvToSW` s)
@@ -367,16 +405,24 @@ getValueCWHelper mbi s = do
 recoverKindedValue :: Kind -> SExpr -> Maybe CW
 recoverKindedValue k e = case e of
                            ENum    i | isIntegralLike    -> Just $ mkConstCW k (fst i)
+                           ENum    i | isChar          k -> Just $ CW KChar    (CWChar    (chr (fromIntegral (fst i))))
                            EReal   i | isReal          k -> Just $ CW KReal    (CWAlgReal i)
                            EFloat  i | isFloat         k -> Just $ CW KFloat   (CWFloat   i)
                            EDouble i | isDouble        k -> Just $ CW KDouble  (CWDouble  i)
-                           ECon    i | isUninterpreted k -> Just $ CW k        (CWUserSort (getUIIndex k i, i))
+                           ECon    s | isString        k -> Just $ CW KString  (CWString   (interpretString s))
+                           ECon    s | isUninterpreted k -> Just $ CW k        (CWUserSort (getUIIndex k s, s))
                            _                             -> Nothing
   where isIntegralLike = or [f k | f <- [isBoolean, isBounded, isInteger, isReal, isFloat, isDouble]]
 
         getUIIndex (KUserSort  _ (Right xs)) i = i `elemIndex` xs
         getUIIndex _                         _ = Nothing
 
+        -- Make sure strings are really strings
+        interpretString xs
+          | length xs < 2 || head xs /= '"' || last xs /= '"'
+          = error $ "Expected a string constant with quotes, received: <" ++ xs ++ ">"
+          | True
+          = qfsToString $ tail (init xs)
 
 -- | Get the value of a term. If the kind is Real and solver supports decimal approximations,
 -- we will "squash" the representations.
@@ -409,7 +455,10 @@ checkSat = do cfg <- getConfig
 checkSatUsing :: String -> Query CheckSatResult
 checkSatUsing cmd = do let bad = unexpected "checkSat" cmd "one of sat/unsat/unknown" Nothing
 
-                       r <- ask cmd
+                           -- Sigh.. Ignore some of the pesky warnings. We only do it as an exception here.
+                           ignoreList = ["WARNING: optimization with quantified constraints is not supported"]
+
+                       r <- askIgnoring cmd ignoreList
 
                        parse r bad $ \case ECon "sat"     -> return Sat
                                            ECon "unsat"   -> return Unsat
@@ -428,6 +477,14 @@ getQuantifiedInputs = do State{rinps} <- get
                              (preQs, postQs) = span (\(q, _) -> q == EX) qinps
 
                          return $ preQs ++ trackers ++ postQs
+
+-- | Get observables, i.e., those explicitly labeled by the user with a call to 'observe'.
+getObservables :: Query [(String, SW)]
+getObservables = do State{rObservables} <- get
+
+                    rObs <- liftIO $ readIORef rObservables
+
+                    return $ reverse rObs
 
 -- | Repeatedly issue check-sat, after refuting the previous model.
 -- The bool is true if the model is unique upto prefix existentials.
@@ -618,7 +675,7 @@ unexpected ctx sent expected mbHint received mbReason = do
 
 -- | Convert a query result to an SMT Problem
 runProofOn :: SMTConfig -> Bool -> [String] -> Result -> SMTProblem
-runProofOn config isSat comments res@(Result ki _qcInfo _codeSegs is consts tbls arrs uis axs pgm cstrs _assertions outputs) =
+runProofOn config isSat comments res@(Result ki _qcInfo _observables _codeSegs is consts tbls arrs uis axs pgm cstrs _assertions outputs) =
      let flipQ (ALL, x) = (EX,  x)
          flipQ (EX,  x) = (ALL, x)
 

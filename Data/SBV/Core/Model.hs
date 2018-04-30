@@ -20,11 +20,7 @@
 {-# LANGUAGE TypeOperators          #-}
 {-# LANGUAGE DefaultSignatures      #-}
 
--- Keep GHC quiet.. I wish we can be more specific on these as opposed to module
--- level turning of redundant-constraints. Note that his is not needed >= GHC 8.0.2
--- since they removed this constraint from -Wall, see: https://ghc.haskell.org/trac/ghc/ticket/10635
-{-# OPTIONS_GHC -fno-warn-orphans               #-}
-{-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
+{-# OPTIONS_GHC -fno-warn-orphans   #-}
 
 module Data.SBV.Core.Model (
     Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertSoft, SIntegral, SFiniteBits(..)
@@ -33,8 +29,8 @@ module Data.SBV.Core.Model (
   , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
   , sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
-  , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, slet
-  , sRealToSInteger, label
+  , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, sChar, sChars, sString, sStrings, slet
+  , sRealToSInteger, label, observe
   , sAssert
   , liftQRem, liftDMod, symbolicMergeWithKind
   , genLiteral, genFromCW, genMkSymVar
@@ -43,18 +39,22 @@ module Data.SBV.Core.Model (
   where
 
 import Control.Monad        (when, unless, mplus)
+import Control.Monad.Trans  (liftIO)
+import Control.Monad.Reader (ask)
 
 import GHC.Generics (U1(..), M1(..), (:*:)(..), K1(..))
 import qualified GHC.Generics as G
 
 import GHC.Stack
 
-import Data.Array      (Array, Ix, listArray, elems, bounds, rangeSize)
-import Data.Bits       (Bits(..))
-import Data.Int        (Int8, Int16, Int32, Int64)
-import Data.List       (genericLength, genericIndex, genericTake, unzip4, unzip5, unzip6, unzip7, intercalate)
-import Data.Maybe      (fromMaybe)
-import Data.Word       (Word8, Word16, Word32, Word64)
+import Data.Array  (Array, Ix, listArray, elems, bounds, rangeSize)
+import Data.Bits   (Bits(..))
+import Data.Char   (toLower, isDigit)
+import Data.Int    (Int8, Int16, Int32, Int64)
+import Data.List   (genericLength, genericIndex, genericTake, unzip4, unzip5, unzip6, unzip7, intercalate, isPrefixOf)
+import Data.Maybe  (fromMaybe)
+import Data.String (IsString(..))
+import Data.Word   (Word8, Word16, Word32, Word64)
 
 import Test.QuickCheck                         (Testable(..), Arbitrary(..))
 import qualified Test.QuickCheck.Test    as QC (isSuccess)
@@ -186,9 +186,24 @@ instance SymWord Double where
   -- and in the presence of NaN's it would be incorrect to do any optimization
   isConcretely _ _ = False
 
+instance SymWord String where
+  mkSymWord = genMkSymVar KString
+  literal   = SBV . SVal KString . Left . CW KString . CWString
+  fromCW (CW _ (CWString a)) = a
+  fromCW c                   = error $ "SymWord.String: Unexpected non-string value: " ++ show c
+
+instance SymWord Char where
+  mkSymWord = genMkSymVar KChar
+  literal c = SBV . SVal KChar . Left . CW KChar $ CWChar c
+  fromCW (CW _ (CWChar a)) = a
+  fromCW c                 = error $ "SymWord.String: Unexpected non-char value: " ++ show c
+
+instance IsString SString where
+  fromString = literal
+
 ------------------------------------------------------------------------------------
 -- * Smart constructors for creating symbolic values. These are not strictly
--- necessary, as they are mere aliases for 'symbolic' and 'symbolics', but 
+-- necessary, as they are mere aliases for 'symbolic' and 'symbolics', but
 -- they nonetheless make programming easier.
 ------------------------------------------------------------------------------------
 -- | Declare an 'SBool'
@@ -295,6 +310,22 @@ sDouble = symbolic
 sDoubles :: [String] -> Symbolic [SDouble]
 sDoubles = symbolics
 
+-- | Declare an 'SChar'
+sChar :: String -> Symbolic SChar
+sChar = symbolic
+
+-- | Declare an 'SString'
+sString :: String -> Symbolic SString
+sString = symbolic
+
+-- | Declare a list of 'SChar's
+sChars :: [String] -> Symbolic [SChar]
+sChars = symbolics
+
+-- | Declare a list of 'SString's
+sStrings :: [String] -> Symbolic [SString]
+sStrings = symbolics
+
 -- | Convert an SReal to an SInteger. That is, it computes the
 -- largest integer @n@ that satisfies @sIntegerToSReal n <= r@
 -- essentially giving us the @floor@.
@@ -319,6 +350,22 @@ label m x
         r st = do xsw <- sbvToSW st x
                   newExpr st k (SBVApp (Label m) [xsw])
 
+-- | Observe the value of an expression.  Such values are useful in model construction, as they are printed part of a satisfying model, or a
+-- counter-example. The same works for quick-check as well. Useful when we want to see intermediate values, or expected/obtained
+-- pairs in a particular run.
+observe :: SymWord a => String -> SBV a -> Symbolic ()
+observe m x
+  | null m
+  = error "SBV.observe: Bad empty name!"
+  | map toLower m `elem` smtLibReservedNames
+  = error $ "SBV.observe: The name chosen is reserved, please change it!: " ++ show m
+  | "s" `isPrefixOf` m && all isDigit (drop 1 m)
+  = error $ "SBV.observe: Names of the form sXXX are internal to SBV, please use a different name: " ++ show m
+  | True
+  = do st <- ask
+       liftIO $ do xsw <- sbvToSW st x
+                   recordObservable st m xsw
+
 -- | Symbolic Equality. Note that we can't use Haskell's 'Eq' class since Haskell insists on returning Bool
 -- Comparing symbolic values will necessarily return a symbolic value.
 infix 4 .==, ./=
@@ -336,8 +383,8 @@ class EqSymbolic a where
 
   -- | Symbolic membership test.
   sElem    :: a -> [a] -> SBool
+  {-# MINIMAL (.==) #-}
 
-  -- minimal complete definition: .==
   x ./= y = bnot (x .== y)
 
   allEqual []     = true
@@ -371,7 +418,8 @@ class (Mergeable a, EqSymbolic a) => OrdSymbolic a where
   -- | Is the value withing the allowed /inclusive/ range?
   inRange    :: a -> (a, a) -> SBool
 
-  -- minimal complete definition: .<
+  {-# MINIMAL (.<) #-}
+
   a .<= b    = a .< b ||| a .== b
   a .>  b    = b .<  a
   a .>= b    = b .<= a
@@ -820,6 +868,8 @@ instance (SymWord a, Fractional a) => Fractional (SBV a) where
                       k@KBounded{}  -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KUnbounded  -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KBool       -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KString     -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KChar       -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KUserSort{} -> error $ "Unexpected Fractional case for: " ++ show k
 
 -- | Define Floating instance on SBV's; only for base types that are already floating; i.e., SFloat and SDouble
@@ -901,7 +951,7 @@ instance (Num a, Bits a, SymWord a) => Bits (SBV a) where
     | True
     = error $ "SBV.popCount: Called on symbolic value: " ++ show x ++ ". Use sPopCount instead."
 
--- | Conversion between integral-symbolic values, akin to Haskell's fromIntegral
+-- | Conversion between integral-symbolic values, akin to Haskell's `fromIntegral`
 sFromIntegral :: forall a b. (Integral a, HasKind a, Num a, SymWord a, HasKind b, Num b, SymWord b) => SBV a -> SBV b
 sFromIntegral x
   | isReal x
@@ -1019,7 +1069,7 @@ enumCvt w x = case unliteral x of
 -- | The 'SDivisible' class captures the essence of division.
 -- Unfortunately we cannot use Haskell's 'Integral' class since the 'Real'
 -- and 'Enum' superclasses are not implementable for symbolic bit-vectors.
--- However, 'quotRem' and 'divMod' makes perfect sense, and the 'SDivisible' class captures
+-- However, 'quotRem' and 'divMod' both make perfect sense, and the 'SDivisible' class captures
 -- this operation. One issue is how division by 0 behaves. The verification
 -- technology requires total functions, and there are several design choices
 -- here. We follow Isabelle/HOL approach of assigning the value 0 for division
@@ -1222,7 +1272,7 @@ instance (SymWord a, Arbitrary a) => Arbitrary (SBV a) where
 -- with a single constructor where the type of each field is an instance of
 -- 'Mergeable', such as a record of symbolic values. Users only need to add
 -- 'G.Generic' and 'Mergeable' to the @deriving@ clause for the data-type. See
--- 'Data.SBV.Examples.Puzzles.U2Bridge.Status' for an example and an
+-- 'Documentation.SBV.Examples.Puzzles.U2Bridge.Status' for an example and an
 -- illustration of what the instance would look like if written by hand.
 --
 -- The function 'select' is a total-indexing function out of a list of choices
@@ -1513,7 +1563,9 @@ class Uninterpreted a where
   -- by end-user-code, but is rather useful for the library development.
   sbvUninterpret :: Maybe ([String], a) -> String -> a
 
-  -- minimal complete definition: 'sbvUninterpret'
+  {-# MINIMAL sbvUninterpret #-}
+
+  -- defaults:
   uninterpret             = sbvUninterpret Nothing
   cgUninterpret nm code v = sbvUninterpret (Just (code, v)) nm
 
@@ -1770,22 +1822,26 @@ instance Metric SReal    where minimize nm o = addSValOptGoal (unSBV `fmap` Mini
 -- Quickcheck interface on symbolic-booleans..
 instance Testable SBool where
   property (SBV (SVal _ (Left b))) = property (cwToBool b)
-  property s                       = error $ "Cannot quick-check in the presence of uninterpreted constants! (" ++ show s ++ ")"
+  property _                       = error "Quick-check: Constant folding produced a symbolic value! Perhaps used a non-reducible expression? Please report!"
 
 instance Testable (Symbolic SBool) where
-   property prop = QC.monadicIO $ do (cond, r, tvals) <- QC.run test
+   property prop = QC.monadicIO $ do (cond, r, modelVals) <- QC.run test
                                      QC.pre cond
-                                     unless (r || null tvals) $ QC.monitor (QC.counterexample (complain tvals))
+                                     unless (r || null modelVals) $ QC.monitor (QC.counterexample (complain modelVals))
                                      QC.assert r
-     where test = do (r, Result{resTraces=tvals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic Concrete prop
+     where test = do (r, Result{resTraces=tvals, resObservables=ovals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic Concrete prop
 
                      let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
                          cond = all (cwToBool . cval . snd) cstrs
 
+                         getObservable (nm, v) = case v `lookup` cs of
+                                                   Just cw -> (nm, cw)
+                                                   Nothing -> error $ "Quick-check: Observable " ++ nm ++ " did not reduce to a constant!"
+
                      case map fst unints of
                        [] -> case unliteral r of
                                Nothing -> noQC [show r]
-                               Just b  -> return (cond, b, tvals)
+                               Just b  -> return (cond, b, tvals ++ map getObservable ovals)
                        us -> noQC us
 
            complain qcInfo = showModel defaultSMTCfg (SMTModel [] qcInfo)

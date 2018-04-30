@@ -183,6 +183,8 @@ specifier cfg sw = case kindOf sw of
                      KReal         -> specF (fromJust (cgReal cfg))
                      KFloat        -> specF CgFloat
                      KDouble       -> specF CgDouble
+                     KString       -> text "%s"
+                     KChar         -> text "%c"
                      KUserSort s _ -> die $ "uninterpreted sort: " ++ s
   where spec :: (Bool, Int) -> Doc
         spec (False,  1) = text "%d"
@@ -213,6 +215,8 @@ mkConst _   (CW (KBounded sg sz) (CWInteger i)) = showSizedConst i (sg,   sz)
 mkConst _   (CW KBool            (CWInteger i)) = showSizedConst i (False, 1)
 mkConst _   (CW KFloat           (CWFloat f))   = text $ showCFloat f
 mkConst _   (CW KDouble          (CWDouble d))  = text $ showCDouble d
+mkConst _   (CW KString          (CWString s))  = text $ show s
+mkConst _   (CW KChar            (CWChar c))    = text $ show c
 mkConst _   cw                                  = die $ "mkConst: " ++ show cw
 
 showSizedConst :: Integer -> (Bool, Int) -> Doc
@@ -295,13 +299,13 @@ genHeader (ik, rk) fn sigs protos =
   $$ text "typedef double SDouble;"
   $$ text ""
   $$ text "/* Unsigned bit-vectors */"
-  $$ text "typedef uint8_t  SWord8 ;"
+  $$ text "typedef uint8_t  SWord8;"
   $$ text "typedef uint16_t SWord16;"
   $$ text "typedef uint32_t SWord32;"
   $$ text "typedef uint64_t SWord64;"
   $$ text ""
   $$ text "/* Signed bit-vectors */"
-  $$ text "typedef int8_t  SInt8 ;"
+  $$ text "typedef int8_t  SInt8;"
   $$ text "typedef int16_t SInt16;"
   $$ text "typedef int32_t SInt32;"
   $$ text "typedef int64_t SInt64;"
@@ -408,10 +412,14 @@ genDriver cfg randVals fn inps outs mbRet = [pre, header, body, post]
 
 -- | Generate the C program
 genCProg :: CgConfig -> String -> Doc -> Result -> [(String, CgVal)] -> [(String, CgVal)] -> Maybe SW -> Doc -> [Doc]
-genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _uis _axioms (SBVPgm asgns) cstrs origAsserts _) inVars outVars mbRet extDecls
+genCProg cfg fn proto (Result kindInfo _tvals _ovals cgs ins preConsts tbls arrs _uis _axioms (SBVPgm asgns) cstrs origAsserts _) inVars outVars mbRet extDecls
   | isNothing (cgInteger cfg) && KUnbounded `Set.member` kindInfo
   = error $ "SBV->C: Unbounded integers are not supported by the C compiler."
           ++ "\nUse 'cgIntegerSize' to specify a fixed size for SInteger representation."
+  | KString `Set.member` kindInfo
+  = error "SBV->C: Strings are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
+  | KChar `Set.member` kindInfo
+  = error "SBV->C: Characters are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
   | isNothing (cgReal cfg) && KReal `Set.member` kindInfo
   = error $ "SBV->C: SReal values are not supported by the C compiler."
           ++ "\nUse 'cgSRealType' to specify a custom type for SReal representation."
@@ -462,6 +470,8 @@ genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _uis _
                 where len KReal{}             = 5
                       len KFloat{}            = 6 -- SFloat
                       len KDouble{}           = 7 -- SDouble
+                      len KString{}           = 7 -- SString
+                      len KChar{}             = 5 -- SChar
                       len KUnbounded{}        = 8
                       len KBool               = 5 -- SBool
                       len (KBounded False n)  = 5 + length (show n) -- SWordN
@@ -493,7 +503,7 @@ genCProg cfg fn proto (Result kindInfo _tvals cgs ins preConsts tbls arrs _uis _
        isAlive (_, _)           = True
 
        genIO :: Bool -> (Bool, (String, CgVal)) -> [Doc]
-       genIO True  (alive, (cNm, CgAtomic sw)) = [declSW typeWidth sw  <+> text "=" <+> text cNm P.<> semi             | alive]
+       genIO True  (alive, (cNm, CgAtomic sw)) = [declSW typeWidth sw  <+> text "=" <+> text cNm P.<> semi               | alive]
        genIO False (alive, (cNm, CgAtomic sw)) = [text "*" P.<> text cNm <+> text "=" <+> showSW cfg consts sw P.<> semi | alive]
        genIO isInp (_,     (cNm, CgArray sws)) = zipWith genElt sws [(0::Int)..]
          where genElt sw i
@@ -711,6 +721,8 @@ ppExpr cfg consts (SBVApp op opArgs) lhs (typ, var)
                                                KReal           -> die "array index with real value"
                                                KFloat          -> die "array index with float value"
                                                KDouble         -> die "array index with double value"
+                                               KString         -> die "array index with string value"
+                                               KChar           -> die "array index with character value"
                                                KUnbounded      -> case cgInteger cfg of
                                                                     Nothing -> (True, True) -- won't matter, it'll be rejected later
                                                                     Just i  -> (True, canOverflow True i)

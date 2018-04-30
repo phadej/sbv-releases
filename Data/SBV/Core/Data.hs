@@ -23,12 +23,12 @@
 
 module Data.SBV.Core.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
- , SInt8, SInt16, SInt32, SInt64, SInteger, SReal, SFloat, SDouble
+ , SInt8, SInt16, SInt32, SInt64, SInteger, SReal, SFloat, SDouble, SChar, SString
  , nan, infinity, sNaN, sInfinity, RoundingMode(..), SRoundingMode
  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero
  , sRNE, sRNA, sRTP, sRTN, sRTZ
  , SymWord(..)
- , CW(..), CWVal(..), AlgReal(..), ExtCW(..), GeneralizedCW(..), isRegularCW, cwSameType, cwToBool
+ , CW(..), CWVal(..), AlgReal(..), AlgRealPoly, ExtCW(..), GeneralizedCW(..), isRegularCW, cwSameType, cwToBool
  , mkConstCW ,liftCW2, mapCW, mapCW2
  , SW(..), trueSW, falseSW, trueCW, falseCW, normCW
  , SVal(..)
@@ -37,7 +37,7 @@ module Data.SBV.Core.Data
  , sbvToSW, sbvToSymSW, forceSWArg
  , SBVExpr(..), newExpr
  , cache, Cached, uncache, uncacheAI, HasKind(..)
- , Op(..), PBOp(..), FPOp(..), NamedSymVar, getTableIndex
+ , Op(..), PBOp(..), FPOp(..), StrOp(..), RegExp(..), NamedSymVar, getTableIndex
  , SBVPgm(..), Symbolic, runSymbolic, State, getPathCondition, extendPathCondition
  , inSMTMode, SBVRunMode(..), Kind(..), Outputtable(..), Result(..)
  , SolverContext(..), internalVariable, internalConstraint, isCodeGenMode
@@ -130,6 +130,22 @@ type SFloat = SBV Float
 -- | IEEE-754 double-precision floating point numbers
 type SDouble = SBV Double
 
+-- | A symbolic character. Note that, as far as SBV's symbolic strings are concerned, a character
+-- is currently an 8-bit unsigned value, corresponding to the ISO-8859-1 (Latin-1) character
+-- set: <http://en.wikipedia.org/wiki/ISO/IEC_8859-1>. A Haskell 'Char', on the other hand, is based
+-- on unicode. Therefore, there isn't a 1-1 correspondence between a Haskell character and an SBV
+-- character for the time being. This limitation is due to the SMT-solvers only supporting this
+-- particular subset. However, there is a pending proposal to add support for unicode, and SBV
+-- will track these changes to have full unicode support as solvers become available. For
+-- details, see: <http://smtlib.cs.uiowa.edu/theories-UnicodeStrings.shtml>
+type SChar = SBV Char
+
+-- | A symbolic string. Note that a symbolic string is /not/ a list of symbolic characters,
+-- that is, it is not the case that @SString = [SChar]@, unlike what one might expect following
+-- Haskell strings. An 'SString' is a symbolic value of its own, of possibly arbitrary length,
+-- and internally processed as one unit as opposed to a fixed-length list of characters.
+type SString = SBV String
+
 -- | Not-A-Number for 'Double' and 'Float'. Surprisingly, Haskell
 -- Prelude doesn't have this value defined, so we provide it here.
 nan :: Floating a => a
@@ -205,13 +221,13 @@ sRTN = sRoundTowardNegative
 sRTZ :: SRoundingMode
 sRTZ = sRoundTowardZero
 
--- Not particularly "desirable," when the value is symbolic, but we do need this
--- instance as otherwise we cannot simply evaluate Haskell functions that return
--- symbolic values and have their constant values printed easily!
+-- | A 'Show' instance is not particularly "desirable," when the value is symbolic,
+-- but we do need this instance as otherwise we cannot simply evaluate Haskell functions 
+-- that return symbolic values and have their constant values printed easily!
 instance Show (SBV a) where
   show (SBV sv) = show sv
 
--- Equality constraint on SBV values. Not desirable since we can't really compare two
+-- | Equality constraint on SBV values. Not desirable since we can't really compare two
 -- symbolic values, but will do. Note that we do need this instance since we want
 -- Bits as a class for SBV that we implement, which necessiates the Eq class.
 instance Eq (SBV a) where

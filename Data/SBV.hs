@@ -48,6 +48,8 @@
 --
 --   * 'SDouble': IEEE-754 double-precision floating point values
 --
+--   * 'SString', 'RegExp': Strings and regular expressions
+--
 --   * 'SArray', 'SFunArray': Flat arrays of symbolic values.
 --
 --   * Symbolic polynomials over GF(2^n), polynomial arithmetic, and CRCs.
@@ -59,7 +61,7 @@
 --
 -- The user can construct ordinary Haskell programs using these types, which behave
 -- very similar to their concrete counterparts. In particular these types belong to the
--- standard classes 'Num', 'Bits', custom versions of 'Eq' ('EqSymbolic') 
+-- standard classes 'Num', 'Bits', custom versions of 'Eq' ('EqSymbolic')
 -- and 'Ord' ('OrdSymbolic'), along with several other custom classes for simplifying
 -- programming with symbolic values. The framework takes full advantage of Haskell's type
 -- inference to avoid many common mistakes.
@@ -116,105 +118,128 @@
 {-# OPTIONS_GHC -fno-warn-orphans  #-}
 
 module Data.SBV (
-  -- * Programming with symbolic values
   -- $progIntro
 
-  -- ** Symbolic types
+  -- * Symbolic types
 
-  -- *** Symbolic bit
-    SBool
-  -- *** Unsigned symbolic bit-vectors
+  -- ** Booleans
+    SBool, oneIf
+  -- *** The Boolean class
+  , Boolean(..)
+  -- *** Logical operations
+  , bAnd, bOr, bAny, bAll
+  -- ** Bit-vectors
+  -- *** Unsigned bit-vectors
   , SWord8, SWord16, SWord32, SWord64
-  -- *** Signed symbolic bit-vectors
+  -- *** Signed bit-vectors
   , SInt8, SInt16, SInt32, SInt64
-  -- *** Signed unbounded integers
+  -- ** Unbounded integers
   -- $unboundedLimitations
   , SInteger
-  -- *** Floating point numbers
+  -- ** Floating point numbers
   -- $floatingPoints
   , SFloat, SDouble
-  -- *** Signed algebraic reals
+  -- ** Algebraic reals
   -- $algReals
   , SReal, AlgReal, sRealToSInteger
-
-  -- ** Creating a symbolic variable
-  -- $createSym
-  , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble
-
-  -- ** Creating a list of symbolic variables
-  -- $createSyms
-  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReals, sFloats, sDoubles
-
-  -- *** Abstract SBV type
-  , SBV, HasKind(..), Kind(..)
-  -- *** Arrays of symbolic values
+  -- ** Strings and Regular Expressions
+  -- $strings
+  , SString, SChar, (.++), (.!!)
+  -- * Arrays of symbolic values
   , SymArray(..), SArray, SFunArray, mkSFunArray
 
-  -- ** Operations on symbolic values
-  -- *** Word level
-  , sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, sFromIntegral, oneIf
-  , label
+  -- * Creating symbolic values
+  -- ** Single value
+  -- $createSym
+  , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble, sChar, sString
 
-  -- *** Exponentiation
-  , (.^)
-  -- *** Splitting, joining, and extending
-  , Splittable(..)
-
-  -- ** Conditionals: Mergeable values
-  , Mergeable(..), ite, iteLazy
-
-  -- ** Symbolic integral numbers
-  , SIntegral
-  -- ** Symbolic finite bits
-  , SFiniteBits(..)
-  -- ** Division
-  , SDivisible(..)
-  -- ** The Boolean class
-  , Boolean(..)
-  -- *** Generalizations of boolean operations
-  , bAnd, bOr, bAny, bAll
-
-  -- * Uninterpreted sorts, constants, and functions
-  -- $uninterpreted
-  , Uninterpreted(..), addAxiom
+  -- ** List of values
+  -- $createSyms
+  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReals, sFloats, sDoubles, sChars, sStrings
 
   -- * Symbolic Equality and Comparisons
   , EqSymbolic(..), OrdSymbolic(..), Equality(..)
+  -- * Conditionals: Mergeable values
+  , Mergeable(..), ite, iteLazy
 
-  -- * Constraints
-  -- $constrainIntro
-  , constrain, namedConstraint
-  -- ** Cardinality constraints
-  -- $cardIntro
-  , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
+  -- * Symbolic integral numbers
+  , SIntegral
+  -- * Division and Modulus
+  , SDivisible(..)
+  -- * Bit-vector operations
+  -- ** Conversions
+  , sFromIntegral
+  -- ** Shifts and rotates
+  -- $shiftRotate
+  , sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight
+  -- ** Finite bit-vector operations
+  , SFiniteBits(..)
+  -- ** Splitting, joining, and extending
+  , Splittable(..)
+  -- ** Exponentiation
+  , (.^)
+  -- * IEEE-floating point numbers
+  , IEEEFloating(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity
+  -- ** Rounding modes
+  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero, sRNE, sRNA, sRTP, sRTN, sRTZ
+  -- ** Conversion to/from floats
+  , IEEEFloatConvertable(..)
+  -- ** Bit-pattern conversions
+  , sFloatAsSWord32, sWord32AsSFloat, sDoubleAsSWord64, sWord64AsSDouble, blastSFloat, blastSDouble
 
   -- * Enumerations
   -- $enumerations
   , mkSymbolicEnumeration
 
-  -- * Properties, proofs, satisfiability, and safety
+  -- * Uninterpreted sorts, constants, and functions
+  -- $uninterpreted
+  , Uninterpreted(..), addAxiom
+
+  -- * Properties, proofs, and satisfiability
   -- $proveIntro
   -- $noteOnNestedQuantifiers
   -- $multiIntro
-  , Predicate, Goal, Provable(..)
-  -- ** Checking safety
+  , Predicate, Goal, Provable(..), solve
+  -- * Constraints
+  -- $constrainIntro
+  -- ** General constraints
+  -- $generalConstraints
+  , constrain
+
+  -- ** Constraint Vacuity
+  -- $constraintVacuity
+
+  -- ** Named constraints
+  -- $namedConstraints
+  , namedConstraint
+
+  -- ** Unsat cores
+  -- $unsatCores
+
+  -- ** Cardinality constraints
+  -- $cardIntro
+  , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
+
+  -- * Checking safety
   -- $safeIntro
   , sAssert, isSafe, SExecutable(..)
-  -- ** Satisfying a sequence of boolean conditions
-  , solve
 
-  -- ** Quick-checking
+  -- * Quick-checking
   , sbvQuickCheck
-
-  -- * Running a symbolic computation
-  , runSMT, runSMTWith
-
-  -- * Solver exceptions
-  , SMTException(..)
 
   -- * Optimization
   -- $optiIntro
-  , OptimizeStyle(..), Penalty(..), Objective(..), minimize, maximize, assertSoft
+
+  -- ** Multiple optimization goals
+  -- $multiOpt
+  , OptimizeStyle(..)
+  -- ** Objectives
+  , Objective(..), Metric(..)
+  -- ** Soft assumptions
+  -- $softAssertions
+  , assertSoft , Penalty(..)
+  -- ** Field extensions
+  -- | If an optimization results in an infinity/epsilon value, the returned `CW` value will be in the corresponding extension field.
   , ExtCW(..), GeneralizedCW(..)
 
   -- * Model extraction
@@ -224,25 +249,31 @@ module Data.SBV (
   -- $resultTypes
   , ThmResult(..), SatResult(..), AllSatResult(..), SafeResult(..), OptimizeResult(..), SMTResult(..)
 
-  -- * IEEE-floating point numbers
-  , IEEEFloating(..), IEEEFloatConvertable(..), RoundingMode(..), SRoundingMode, nan, infinity, sNaN, sInfinity
-  -- ** Rounding modes
-  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero, sRNE, sRNA, sRTP, sRTN, sRTZ
-  -- ** Bit-pattern conversions
-  , sFloatAsSWord32, sWord32AsSFloat, sDoubleAsSWord64, sWord64AsSDouble, blastSFloat, blastSDouble
+  -- ** Observing expressions
+  -- $observeInternal
+  , observe
 
   -- ** Programmable model extraction
   -- $programmableExtraction
   , SatModel(..), Modelable(..), displayModels, extractModels
   , getModelDictionaries, getModelValues, getModelUninterpretedValues
 
-  -- * SMT Interface: Configurations and solvers
+  -- * SMT Interface
   , SMTConfig(..), Timing(..), SMTLibVersion(..), Solver(..), SMTSolver(..)
-  , boolector, cvc4, yices, z3, mathSAT, abc, defaultSolverConfig, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
-  , setLogic, setOption, setInfo, setTimeOut
+  -- ** Controlling verbosity
+  -- $verbosity
 
-  -- * Symbolic computations
-  , Symbolic, output, SymWord(..)
+  -- ** Solvers
+  , boolector, cvc4, yices, z3, mathSAT, abc
+  -- ** Configurations
+  , defaultSolverConfig, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
+  , setLogic, setOption, setInfo, setTimeOut
+  -- ** Solver exceptions
+  , SMTException(..)
+
+  -- * Abstract SBV type
+  , SBV, HasKind(..), Kind(..), SymWord(..)
+  , Symbolic, label, output, runSMT, runSMTWith
 
   -- * Module exports
   -- $moduleExportIntro
@@ -262,6 +293,7 @@ import Data.SBV.Core.Data
 import Data.SBV.Core.Model
 import Data.SBV.Core.Floating
 import Data.SBV.Core.Splittable
+import Data.SBV.String ((.++), (.!!))
 
 import Data.SBV.Provers.Prover
 
@@ -404,11 +436,9 @@ executable within Haskell, without the need for any custom interpreters. (They a
 Haskell programs, not AST's built out of pieces of syntax.) This provides for an integrated
 feel of the system, one of the original design goals for SBV.
 
-= Incremental mode: Queries
-
-SBV provides a wide variety of ways to utilize SMT-solvers, without requiring the user to
+Incremental query mode: SBV provides a wide variety of ways to utilize SMT-solvers, without requiring the user to
 deal with the solvers themselves. While this mode is convenient, advanced users might need
-access to the underlying solver, using the SMTLib language. For such use cases, SBV allows
+access to the underlying solver at a lower level. For such use cases, SBV allows
 users to have an interactive session: The user can issue commands to the solver, inspect
 the values/results, and formulate new constraints. This advanced feature is available through
 the "Data.SBV.Control" module, where most SMTLib features are made available via a typed-API.
@@ -424,12 +454,13 @@ to communicate with arbitrary SMT solvers.
 -}
 
 {- $multiIntro
+=== Using multiple solvers
 On a multi-core machine, it might be desirable to try a given property using multiple SMT solvers,
 using parallel threads. Even with machines with single-cores, threading can be helpful if you
 want to try out multiple-solvers but do not know which one would work the best
 for the problem at hand ahead of time.
 
-The functions in this section allow proving/satisfiability-checking with multiple
+SBV allows proving/satisfiability-checking with multiple
 backends at the same time. Each function comes in two variants, one that
 returns the results from all solvers, the other that returns the fastest one.
 
@@ -483,7 +514,7 @@ attempt is done, as we did in the 'safe' calls.
 If required, the user can pass a 'CallStack' through the first argument to 'sAssert', which will be used
 by SBV to print a diagnostic info to pinpoint the failure.
 
-Also see "Data.SBV.Examples.Misc.NoDiv0" for the classic div-by-zero example.
+Also see "Documentation.SBV.Examples.Misc.NoDiv0" for the classic div-by-zero example.
 -}
 
 
@@ -502,7 +533,7 @@ Also see "Data.SBV.Examples.Misc.NoDiv0" for the classic div-by-zero example.
   Goals can be optimized at a regular or an extended value: An extended value is either positive or negative infinity
   (for unbounded integers and reals) or positive or negative epsilon differential from a real value (for reals).
 
-  For instance, a call of the form 
+  For instance, a call of the form
 
        @ 'minimize' "name-of-goal" $ x + 2*y @
 
@@ -539,7 +570,14 @@ Optimal model:
   As usual, the programmatic API can be used to extract the values of objectives and model-values ('getModelObjectives',
   'getModelAssignment', etc.) to access these values and program with them further.
 
-== Multiple optimization goals
+  The following examples illustrate the use of basic optimization routines:
+
+     * "Documentation.SBV.Examples.Optimization.LinearOpt": Simple linear-optimization example.
+     * "Documentation.SBV.Examples.Optimization.Production": Scheduling machines in a shop
+     * "Documentation.SBV.Examples.Optimization.VM": Scheduling virtual-machines in a data-center
+-}
+
+{- $multiOpt
 
   Multiple goals can be specified, using the same syntax. In this case, the user gets to pick what style of
   optimization to perform, by passing the relevant 'OptimizeStyle' as the first argument to 'optimize'.
@@ -558,8 +596,9 @@ Optimal model:
       in number, so if 'Nothing' is used, there is a potential for infinitely waiting for the SBV-solver interaction
       to finish. (If you suspect this might be the case, run in 'verbose' mode to see the interaction and
       put a limiting factor appropriately.)
+-}
 
-== Soft Assertions
+{- $softAssertions
 
   Related to optimization, SBV implements soft-asserts via 'assertSoft' calls. A soft assertion
   is a hint to the SMT solver that we would like a particular condition to hold if **possible*.
@@ -588,13 +627,6 @@ Optimal model:
   Finally in the third case, we are also associating this constraint with a group. The group
   name is only needed if we have classes of soft-constraints that should be considered together.
 
-== Optimization examples
-
-  The following examples illustrate the use of basic optimization routines:
-
-     * "Data.SBV.Examples.Optimization.LinearOpt": Simple linear-optimization example.
-     * "Data.SBV.Examples.Optimization.Production": Scheduling machines in a shop
-     * "Data.SBV.Examples.Optimization.VM": Scheduling virtual-machines in a data-center
 -}
 
 {- $modelExtraction
@@ -669,6 +701,21 @@ Floating point numbers are defined by the IEEE-754 standard; and correspond to H
 by Rummer and Wahl: <http://www.philipp.ruemmer.org/publications/smt-fpa.pdf>.
 -}
 
+{- $strings
+Support for strings (intial version contributed by Joel Burget) adds support for QF_S logic,
+described here: <https://rise4fun.com/z3/tutorialcontent/sequences>. Note that this logic
+is still not part of official SMTLib (as of March 2018), so it should be considered
+experimental.
+
+See "Data.SBV.Char", "Data.SBV.String", "Data.SBV.RegExp" for further related functions.
+-}
+
+{- $shiftRotate
+Symbolic words (both signed and unsigned) are an instance of Haskell's 'Bits' class, so regular
+bitwise operations are automatically available for them. Shifts and rotates, however, require
+specialized type-signatures since Haskell insists on an 'Int' second argument for them.
+-}
+
 {- $constrainIntro
 A constraint is a means for restricting the input domain of a formula. Here's a simple
 example:
@@ -709,7 +756,9 @@ depends on the context:
   * In a 'genTest' call: Similar to 'quickCheck' and 'prove': If a constraint
     does not hold, the input value is ignored and is not included in the test
     set.
+-}
 
+{- $generalConstraints
 A good use case (in fact the motivating use case) for 'constrain' is attaching a
 constraint to a 'forall' or 'exists' variable at the time of its creation.
 Also, the conjunctive semantics for 'sat' and the implicative
@@ -732,22 +781,9 @@ constraints are not vacuous, the functions 'isVacuous' (and 'isVacuousWith') can
 Also note that this semantics imply that test case generation ('genTest') and quick-check
 can take arbitrarily long in the presence of constraints, if the random input values generated
 rarely satisfy the constraints. (As an extreme case, consider @'constrain' 'false'@.)
+-}
 
-=== Named constraints and unsat cores
-
-Constraints can be given names:
-
-  @ 'namedConstraint' "a is at least 5" $ a .>= 5@
-
-Such constraints are useful when used in conjunction with 'getUnsatCore' function
-where the backend solver can be queried to obtain an unsat core in case the constraints are unsatisfiable.
-This feature is enabled by the following option:
-
-   @ setOption $ ProduceUnsatCores True @
-
-See "Data.SBV.Examples.Misc.UnsatCore" for an example use case.
-
-=== Constraint vacuity
+{- $constraintVacuity
 
 When adding constraints, one has to be careful about
 making sure they are not inconsistent. The function 'isVacuous' can be use for this purpose.
@@ -782,12 +818,23 @@ And the proof is not vacuous:
 
      >>> isVacuous pred'
      False
+-}
 
-=== Checking for vacuity
+{- $namedConstraints
 
-As we discussed SBV does not check that a given constraints is not vacuous. That is, that it can never be satisfied. This is usually
-the right behavior, since checking vacuity can be costly. The functions 'isVacuous' and 'isVacuousWith' should be used
-to explicitly check for constraint vacuity if desired.
+Constraints can be given names:
+
+  @ 'namedConstraint' "a is at least 5" $ a .>= 5@
+-}
+
+{- $unsatCores
+Named constraints are useful when used in conjunction with 'getUnsatCore' function
+where the backend solver can be queried to obtain an unsat core in case the constraints are unsatisfiable.
+This feature is enabled by the following option:
+
+   @ setOption $ ProduceUnsatCores True @
+
+See "Documentation.SBV.Examples.Misc.UnsatCore" for an example use case.
 -}
 
 {- $uninterpreted
@@ -798,7 +845,7 @@ following example demonstrates:
      data B = B () deriving (Eq, Ord, Show, Read, Data, SymWord, HasKind, SatModel)
   @
 
-(Note that you'll also need to use the language pragmas @DeriveDataTypeable@, @DeriveAnyClass@, and import @Data.Generics@ for the above to work.) 
+(Note that you'll also need to use the language pragmas @DeriveDataTypeable@, @DeriveAnyClass@, and import @Data.Generics@ for the above to work.)
 
 This is all it takes to introduce 'B' as an uninterpreted sort in SBV, which makes the type @SBV B@ automagically become available as the type
 of symbolic values that ranges over 'B' values. Note that the @()@ argument is important to distinguish it from enumerations, which will be
@@ -857,7 +904,7 @@ which would list all three elements of this domain as satisfying solutions.
 Note that the result is properly typed as @X@ elements; these are not mere strings. So, in a 'getModelAssignment' scenario, the user can recover actual
 elements of the domain and program further with those values as usual.
 
-See "Data.SBV.Examples.Misc.Enumerate" for an extended example on how to use symbolic enumerations.
+See "Documentation.SBV.Examples.Misc.Enumerate" for an extended example on how to use symbolic enumerations.
 -}
 
 {- $noteOnNestedQuantifiers
@@ -897,6 +944,44 @@ can get lost in the translation. The idea here is that if you use these function
 produce better translations to SMTLib for more efficient solving of cardinality constraints, assuming
 the backend solver supports them. Currently, only Z3 supports pseudo-booleans directly. For all other solvers,
 SBV will translate these to equivalent terms that do not require special functions.
+-}
+
+{- $verbosity
+
+SBV provides various levels of verbosity to aid in debugging, by using the 'SMTConfig' fields:
+
+  * ['verbose'] Print on stdout a shortened account of what is sent/received. This is specifically trimmed to reduce noise
+    and is good for quick debugging. The output is not supposed to be machine-readable.
+  * ['redirectVerbose'] Send the verbose output to a file. Note that you still have to set `verbose=True` for redirection to
+    take effect. Otherwise, the output is the same as what you would see in `verbose`.
+  * ['transcript'] Produce a file that is valid SMTLib2 format, containing everything sent and received. In particular, one can
+    directly feed this file to the SMT-solver outside of the SBV since it is machine-readable. This is good for offline analysis
+    situations, where you want to have a full account of what happened. For instance, it will print time-stamps at every interaction
+    point, so you can see how long each command took.
+-}
+
+{- $observeInternal
+
+The 'observe' command can be used to trace values of arbitrary expressions during a 'sat', 'prove', or perhaps more
+importantly, in a 'quickCheck' call. This is useful for, for instance, recording expected/obtained expressions as a symbolic program is executing.
+
+>>> :{
+prove $ do a1 <- free "i1"
+           a2 <- free "i2"
+           let spec, res :: SWord8
+               spec = a1 + a2
+               res  = ite (a1 .== 12 &&& a2 .== 22)   -- insert a malicious bug!
+                          1
+                          (a1 + a2)
+           observe "Expected" spec
+           observe "Result"   res
+           return $ spec .== res
+:}
+Falsifiable. Counter-example:
+  i1       = 12 :: Word8
+  i2       = 22 :: Word8
+  Expected = 34 :: Word8
+  Result   =  1 :: Word8
 -}
 
 {-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}

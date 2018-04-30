@@ -199,9 +199,9 @@ getSMTResult :: Query SMTResult
 getSMTResult = do cfg <- getConfig
                   cs  <- checkSat
                   case cs of
-                    Unsat -> return $ Unsatisfiable cfg
-                    Sat   -> Satisfiable cfg <$> getModel
-                    Unk   -> Unknown     cfg <$> getUnknownReason
+                    Unsat -> Unsatisfiable cfg <$> getUnsatCoreIfRequested
+                    Sat   -> Satisfiable   cfg <$> getModel
+                    Unk   -> Unknown       cfg <$> getUnknownReason
 
 -- | Classify a model based on whether it has unbound objectives or not.
 classifyModel :: SMTConfig -> SMTModel -> SMTResult
@@ -214,7 +214,7 @@ getLexicographicOptResults :: Query SMTResult
 getLexicographicOptResults = do cfg <- getConfig
                                 cs  <- checkSat
                                 case cs of
-                                  Unsat -> return $ Unsatisfiable cfg
+                                  Unsat -> Unsatisfiable cfg <$> getUnsatCoreIfRequested
                                   Sat   -> classifyModel cfg <$> getModelWithObjectives
                                   Unk   -> Unknown       cfg <$> getUnknownReason
    where getModelWithObjectives = do objectiveValues <- getObjectiveValues
@@ -227,7 +227,7 @@ getIndependentOptResults objNames = do cfg <- getConfig
                                        cs  <- checkSat
 
                                        case cs of
-                                         Unsat -> return [(nm, Unsatisfiable cfg) | nm <- objNames]
+                                         Unsat -> getUnsatCoreIfRequested >>= \mbUC -> return [(nm, Unsatisfiable cfg mbUC) | nm <- objNames]
                                          Sat   -> continue (classifyModel cfg)
                                          Unk   -> do ur <- Unknown cfg <$> getUnknownReason
                                                      return [(nm, ur) | nm <- objNames]
@@ -276,9 +276,10 @@ getModel = getModelAtIndex Nothing
 getModelAtIndex :: Maybe Int -> Query SMTModel
 getModelAtIndex mbi = do
              State{runMode} <- get
-             cfg  <- getConfig
-             inps <- getQuantifiedInputs
-             rm   <- io $ readIORef runMode
+             cfg   <- getConfig
+             inps  <- getQuantifiedInputs
+             obsvs <- getObservables
+             rm    <- io $ readIORef runMode
              let vars :: [NamedSymVar]
                  vars = case rm of
                           m@CodeGen         -> error $ "SBV.getModel: Model is not available in mode: " ++ show m
@@ -287,10 +288,17 @@ getModelAtIndex mbi = do
                                                let allModelInputs = if isSAT then takeWhile ((/= ALL) . fst) inps
                                                                              else takeWhile ((== ALL) . fst) inps
 
+                                                   -- are we inside a quantifier
+                                                   insideQuantifier = length allModelInputs < length inps
+
+                                                   -- observables are only meaningful if we're not in a quantified context
+                                                   allPrefixObservables | insideQuantifier = []
+                                                                        | True             = [(EX, (sw, nm)) | (nm, sw) <- obsvs]
+
                                                    sortByNodeId :: [NamedSymVar] -> [NamedSymVar]
                                                    sortByNodeId = sortBy (compare `on` (\(SW _ n, _) -> n))
 
-                                               in sortByNodeId [nv | (_, nv@(_, n)) <- allModelInputs, not (isNonModelVar cfg n)]
+                                               in sortByNodeId [nv | (_, nv@(_, n)) <- allModelInputs ++ allPrefixObservables, not (isNonModelVar cfg n)]
 
              assocs <- mapM (\(sw, n) -> (n, ) <$> getValueCW mbi sw) vars
 
@@ -470,7 +478,7 @@ pop i
 -- the conditions lead to a satisfiable result, returns @Just@ that result. If none of them
 -- do, returns @Nothing@. Note that we automatically generate a coverage case and search
 -- for it automatically as well. In that latter case, the string returned will be "Coverage".
--- The first argument controls printing progress messages  See "Data.SBV.Examples.Queries.CaseSplit"
+-- The first argument controls printing progress messages  See "Documentation.SBV.Examples.Queries.CaseSplit"
 -- for an example use case.
 caseSplit :: Bool -> [(String, SBool)] -> Query (Maybe (String, SMTResult))
 caseSplit printCases cases = do cfg <- getConfig
@@ -544,6 +552,14 @@ getUnsatCore = do
         parse r bad $ \case
            EApp es | Just xs <- mapM fromECon es -> return $ map unBar xs
            _                                     -> bad r Nothing
+
+-- | Retrieve the unsat core if it was asked for in the configuration
+getUnsatCoreIfRequested :: Query (Maybe [String])
+getUnsatCoreIfRequested = do
+        cfg <- getConfig
+        if or [b | ProduceUnsatCores b <- solverSetOptions cfg]
+           then Just <$> getUnsatCore
+           else return Nothing
 
 -- | Retrieve the proof. Note you must have arranged for
 -- proofs to be produced first (/via/ @'setOption' $ 'ProduceProofs' 'True'@)
