@@ -1,7 +1,43 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 7.7, 2018-04-29
+* Latest Hackage released version: 7.8, 2018-05-18
+
+### Version 7.8, Released 2018-05-18
+
+  * Fix printing of min-bounds for signed 32/64 bit numbers: These
+    are tricky since C does not allow -min_value as a valid literal!
+    Instead we use the macros provided in stdint.h. Thanks to Matt
+    Peddie for reporting this corner case.
+
+  * Fix translation of the "abs" function, to make sure we use
+    the correct variant. Thanks to Matt Peddie for reporting.
+
+  * Fix handling of tables and arrays in pushed-contexts. Previously,
+    we used initializers to get table/array values stored properly.
+    However, this trick does not work if we are in a pushed-context;
+    since a pop can forget the corresponding assignments. SBV now
+    handles this corner case properly, by using tracker assertions
+    to keep track of what array values must be restored at each pop.
+    Thanks to Martin Brain on the SMTLib mailing list for the
+    suggestion. (See https://github.com/LeventErkok/sbv/issues/374
+    for details.)
+
+  * Fix corner case in ite branch equality with float/double arguments,
+    where we were previously confusing +/-0 as equal to each other.
+    Thanks to Matt Peddie for reporting.
+
+  * Add a call 'cgOverwriteFiles', which suppresses code-generation
+    prompts for overwriting files and quiets the prompts during
+    code generation. Thanks to Matt Peddie for the suggestion.
+
+  * Add support for uninterpreted function introductions in the query
+    mode. Previously, this was only allowed before the query started,
+    now we fully support uninterpreted functions in all modes.
+
+  * New example: Documentation/SBV/Examples/Puzzles/HexPuzzle.hs,
+    showing how to code cover properties using SBV, using a form
+    of bounded model checking.
 
 ### Version 7.7, Released 2018-04-29
 
@@ -1183,8 +1219,7 @@ uninterpreted.
 
 ### Version 2.9, 2013-01-02
 
-  * Add support for the CVC4 SMT solver from New York University and
-    the University of Iowa. <http://cvc4.cs.nyu.edu/>.
+  * Add support for the CVC4 SMT solver from Stanford: <http://cvc4.cs.stanford.edu/web/>
     NB. Z3 remains the default solver for SBV. To use CVC4, use the
     *With variants of the interface (i.e., proveWith, satWith, ..)
     by passing cvc4 as the solver argument. (Similarly, use 'yices'

@@ -37,6 +37,8 @@ module Data.SBV.Core.Operations
   , svRotateLeft, svRotateRight
   , svBlastLE, svBlastBE
   , svAddConstant, svIncrement, svDecrement
+  -- Utils
+  , mkSymOp
   )
   where
 
@@ -47,6 +49,7 @@ import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Kind
 import Data.SBV.Core.Concrete
 import Data.SBV.Core.Symbolic
+import Data.SBV.Utils.Numeric (fpIsEqualObjectH)
 
 import Data.Ratio
 
@@ -480,11 +483,19 @@ svSymbolicMerge :: Kind -> Bool -> SVal -> SVal -> SVal -> SVal
 svSymbolicMerge k force t a b
   | Just r <- svAsBool t
   = if r then a else b
-  | force, rationalSBVCheck a b, areConcretelyEqual a b
+  | force, rationalSBVCheck a b, sameResult a b
   = a
   | True
   = SVal k $ Right $ cache c
-  where c st = do swt <- svToSW st t
+  where
+        -- Be careful with +/-0 here! See https://github.com/LeventErkok/sbv/issues/382
+        sameResult (SVal _ (Left c1)) (SVal _ (Left c2)) = c1 == c2 && floatCheck (cwVal c1) (cwVal c2)
+        sameResult _                       _             = False
+        floatCheck (CWFloat  f1) (CWFloat  f2)           = f1 `fpIsEqualObjectH` f2
+        floatCheck (CWDouble d1) (CWDouble d2)           = d1 `fpIsEqualObjectH` d2
+        floatCheck _            _                        = True
+
+        c st = do swt <- svToSW st t
                   case () of
                     () | swt == trueSW  -> svToSW st a       -- these two cases should never be needed as we expect symbolicMerge to be
                     () | swt == falseSW -> svToSW st b       -- called with symbolic tests, but just in case..
@@ -819,6 +830,52 @@ liftSym1 opS _    _    _    _    a@(SVal k _)        = SVal k $ Right $ cache c
    where c st = do swa <- svToSW st a
                    opS st k swa
 
+{- A note on constant folding.
+
+There are cases where we miss out on certain constant foldings. On May 8 2018, Matt Peddie pointed this
+out, as the C code he was getting had redundancies. I was aware that could be missing constant foldings
+due to missed out optimizations, or some other code snafu, but till Matt pointed it out I haven't realized
+that we could be hiding constants inside an if-then-else. The example is:
+
+     proveWith z3{verbose=True} $ \x -> 0 .< ite (x .== (x::SWord8)) 1 (2::SWord8)
+
+If you try this, you'll see that it generates (shortened):
+
+    (define-fun s1 () (_ BitVec 8) #x00)
+    (define-fun s2 () (_ BitVec 8) #x01)
+    (define-fun s3 () Bool (bvult s1 s2))
+
+But clearly we have all the info for s3 to be computed! The issue here is that the reduction of @x .== x@ to @true@
+happens after we start computing the if-then-else, hence we are already committed to an SW at that point. The call
+to ite eventually recognizes this, but at that point it picks up the now constants from SW's, missing the constant
+folding opportunity.
+
+We can fix this, by looking up the constants table in liftSW2, like this:
+
+
+    liftSW2 :: (CW -> CW -> Bool) -> (CW -> CW -> CW) -> (State -> Kind -> SW -> SW -> IO SW) -> Kind -> SVal -> SVal -> Cached SW
+    liftSW2 okCW opCW opS k a b = cache c
+      where c st = do sw1 <- svToSW st a
+                      sw2 <- svToSW st b
+                      cmap <- readIORef (rconstMap st)
+                      let cw1  = [cw | ((_, cw), sw) <- M.toList cmap, sw == sw1]
+                          cw2  = [cw | ((_, cw), sw) <- M.toList cmap, sw == sw2]
+                      case (cw1, cw2) of
+                        ([x], [y]) | okCW x y -> newConst st $ opCW x y
+                        _                     -> opS st k sw1 sw2
+
+(with obvious modifications to call sites to get the proper arguments.)
+
+But this means that we have to grab the constant list for every symbolicly lifted operation, also do the
+same for other places, etc.; for the rare opportunity of catching a @x .== x@ optimization. Even then, the
+constants for the branches would still be generated. (i.e., in the above example we would still generate
+@s1@ and @s2@, but would skip @s3@.)
+
+It seems to me that the price to pay is rather high, as this is hardly the most common case; so we're opting
+here to ignore these cases.
+
+See https://github.com/LeventErkok/sbv/issues/379 for some further discussion.
+-}
 liftSW2 :: (State -> Kind -> SW -> SW -> IO SW) -> Kind -> SVal -> SVal -> Cached SW
 liftSW2 opS k a b = cache c
   where c st = do sw1 <- svToSW st a
@@ -833,9 +890,11 @@ liftSym2B :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgR
 liftSym2B _   okCW opCR opCI opCF opCD opCC opCS opUI (SVal _ (Left a)) (SVal _ (Left b)) | okCW a b = svBool (liftCW2 opCR opCI opCF opCD opCC opCS opUI a b)
 liftSym2B opS _    _    _    _    _    _    _    _    a                 b                            = SVal KBool $ Right $ liftSW2 opS KBool a b
 
+-- | Create a symbolic two argument operation; with shortcut optimizations
 mkSymOpSC :: (SW -> SW -> Maybe SW) -> Op -> State -> Kind -> SW -> SW -> IO SW
 mkSymOpSC shortCut op st k a b = maybe (newExpr st k (SBVApp op [a, b])) return (shortCut a b)
 
+-- | Create a symbolic two argument operation; no shortcut optimizations
 mkSymOp :: Op -> State -> Kind -> SW -> SW -> IO SW
 mkSymOp = mkSymOpSC (const (const Nothing))
 
@@ -892,11 +951,6 @@ isConcreteMin (SVal _ (Left (CW (KBounded False _) (CWInteger n)))) = n == 0
 isConcreteMin (SVal _ (Left (CW (KBounded True  w) (CWInteger n)))) = n == - bit (w - 1)
 isConcreteMin (SVal _ (Left (CW KBool              (CWInteger n)))) = n == 0
 isConcreteMin _                                                     = False
-
--- | Predicate for optimizing conditionals.
-areConcretelyEqual :: SVal -> SVal -> Bool
-areConcretelyEqual (SVal _ (Left a)) (SVal _ (Left b)) = a == b
-areConcretelyEqual _                       _           = False
 
 -- | Most operations on concrete rationals require a compatibility check to avoid faulting
 -- on algebraic reals.

@@ -30,7 +30,7 @@ import qualified Text.PrettyPrint.HughesPJ as P ((<>))
 import Data.SBV.Core.Data
 import Data.SBV.Compilers.CodeGen
 
-import Data.SBV.Utils.PrettyNum   (shex, showCFloat, showCDouble)
+import Data.SBV.Utils.PrettyNum   (chex, showCFloat, showCDouble)
 
 import GHC.Stack
 
@@ -53,7 +53,7 @@ compileToC :: Maybe FilePath -> String -> SBVCodeGen () -> IO ()
 compileToC mbDirName nm f = compileToC' nm f >>= renderCgPgmBundle mbDirName
 
 -- | Lower level version of 'compileToC', producing a 'CgPgmBundle'
-compileToC' :: String -> SBVCodeGen () -> IO CgPgmBundle
+compileToC' :: String -> SBVCodeGen () -> IO (CgConfig, CgPgmBundle)
 compileToC' nm f = do rands <- randoms `fmap` newStdGen
                       codeGen SBVToC (defaultCgConfig { cgDriverVals = rands }) nm f
 
@@ -71,7 +71,7 @@ compileToCLib :: Maybe FilePath -> String -> [(String, SBVCodeGen ())] -> IO ()
 compileToCLib mbDirName libName comps = compileToCLib' libName comps >>= renderCgPgmBundle mbDirName
 
 -- | Lower level version of 'compileToCLib', producing a 'CgPgmBundle'
-compileToCLib' :: String -> [(String, SBVCodeGen ())] -> IO CgPgmBundle
+compileToCLib' :: String -> [(String, SBVCodeGen ())] -> IO (CgConfig, CgPgmBundle)
 compileToCLib' libName comps = mergeToLib libName `fmap` mapM (uncurry compileToC') comps
 
 ---------------------------------------------------------------------------
@@ -223,12 +223,12 @@ showSizedConst :: Integer -> (Bool, Int) -> Doc
 showSizedConst i   (False,  1) = text (if i == 0 then "false" else "true")
 showSizedConst i   (False,  8) = integer i
 showSizedConst i   (True,   8) = integer i
-showSizedConst i t@(False, 16) = text (shex False True t i) P.<> text "U"
-showSizedConst i t@(True,  16) = text (shex False True t i)
-showSizedConst i t@(False, 32) = text (shex False True t i) P.<> text "UL"
-showSizedConst i t@(True,  32) = text (shex False True t i) P.<> text "L"
-showSizedConst i t@(False, 64) = text (shex False True t i) P.<> text "ULL"
-showSizedConst i t@(True,  64) = text (shex False True t i) P.<> text "LL"
+showSizedConst i t@(False, 16) = text $ chex False True t i
+showSizedConst i t@(True,  16) = text $ chex False True t i
+showSizedConst i t@(False, 32) = text $ chex False True t i
+showSizedConst i t@(True,  32) = text $ chex False True t i
+showSizedConst i t@(False, 64) = text $ chex False True t i
+showSizedConst i t@(True,  64) = text $ chex False True t i
 showSizedConst i   (True,  1)  = die $ "Signed 1-bit value " ++ show i
 showSizedConst i   (s, sz)     = die $ "Constant " ++ show i ++ " at type " ++ (if s then "SInt" else "SWord") ++ show sz
 
@@ -735,11 +735,21 @@ ppExpr cfg consts (SBVApp op opArgs) lhs (typ, var)
                         in protectDiv0 k "/" z a b
         p Rem  [a, b] = protectDiv0 (kindOf (head opArgs)) "%" a a b
         p UNeg [a]    = parens (text "-" <+> a)
-        p Abs  [a]    = let f = case kindOf (head opArgs) of
-                                  KFloat  -> text "fabsf"
-                                  KDouble -> text "fabs"
-                                  _       -> text "abs"
-                        in f P.<> parens a
+        p Abs  [a]    = let f KFloat             = text "fabsf" P.<> parens a
+                            f KDouble            = text "fabs"  P.<> parens a
+                            f (KBounded False _) = text "/* unsigned, skipping call to abs */" <+> a
+                            f (KBounded True 32) = text "labs"  P.<> parens a
+                            f (KBounded True 64) = text "llabs" P.<> parens a
+                            f KUnbounded         = case cgInteger cfg of
+                                                     Nothing -> f $ KBounded True 32 -- won't matter, it'll be rejected later
+                                                     Just i  -> f $ KBounded True i
+                            f KReal              = case cgReal cfg of
+                                                     Nothing           -> f KDouble -- won't matter, it'll be rejected later
+                                                     Just CgFloat      -> f KFloat
+                                                     Just CgDouble     -> f KDouble
+                                                     Just CgLongDouble -> text "fabsl" P.<> parens a
+                            f _                  = text "abs" P.<> parens a
+                        in f (kindOf (head opArgs))
         -- for And/Or, translate to boolean versions if on boolean kind
         p And [a, b] | kindOf (head opArgs) == KBool = a <+> text "&&" <+> b
         p Or  [a, b] | kindOf (head opArgs) == KBool = a <+> text "||" <+> b
@@ -837,15 +847,17 @@ align ds = map (text . pad) ss
         l     = maximum (0 : map length ss)
         pad s = replicate (l - length s) ' ' ++ s
 
--- | Merge a bunch of bundles to generate code for a library
-mergeToLib :: String -> [CgPgmBundle] -> CgPgmBundle
-mergeToLib libName bundles
+-- | Merge a bunch of bundles to generate code for a library. For the final
+-- config, we simply return the first config we receive, or the default if none.
+mergeToLib :: String -> [(CgConfig, CgPgmBundle)] -> (CgConfig, CgPgmBundle)
+mergeToLib libName cfgBundles
   | length nubKinds /= 1
   = error $  "Cannot merge programs with differing SInteger/SReal mappings. Received the following kinds:\n"
           ++ unlines (map show nubKinds)
   | True
-  = CgPgmBundle bundleKind $ sources ++ libHeader : [libDriver | anyDriver] ++ [libMake | anyMake]
-  where kinds       = [k | CgPgmBundle k _ <- bundles]
+  = (finalCfg, CgPgmBundle bundleKind $ sources ++ libHeader : [libDriver | anyDriver] ++ [libMake | anyMake])
+  where bundles     = map snd cfgBundles
+        kinds       = [k | CgPgmBundle k _ <- bundles]
         nubKinds    = nub kinds
         bundleKind  = head nubKinds
         files       = concat [fs | CgPgmBundle _ fs <- bundles]
@@ -860,6 +872,9 @@ mergeToLib libName bundles
         libHInclude = text "#include" <+> text (show (libName ++ ".h"))
         libMake     = ("Makefile", (CgMakefile mkFlags, [genLibMake anyDriver libName sourceNms mkFlags]))
         libDriver   = (libName ++ "_driver.c", (CgDriver, mergeDrivers libName libHInclude (zip (map takeBaseName sourceNms) drivers)))
+        finalCfg    = case cfgBundles of
+                        []         -> defaultCgConfig
+                        ((c, _):_) -> c
 
 -- | Create a Makefile for the library
 genLibMake :: Bool -> String -> [String] -> [String] -> Doc

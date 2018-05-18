@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       7.7
+Version:       7.8
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -16,7 +16,7 @@ Homepage:      http://leventerkok.github.com/sbv/
 Bug-reports:   http://github.com/LeventErkok/sbv/issues
 Maintainer:    Levent Erkok (erkokl@gmail.com)
 Build-Type:    Simple
-Cabal-Version: >= 1.14
+Cabal-Version: 1.14
 Data-Files: SBVTestSuite/GoldFiles/*.gold
 Extra-Source-Files: INSTALL, README.md, COPYRIGHT, CHANGES.md
 
@@ -95,6 +95,7 @@ Library
                   , Documentation.SBV.Examples.Puzzles.DogCatMouse
                   , Documentation.SBV.Examples.Puzzles.Euler185
                   , Documentation.SBV.Examples.Puzzles.Fish
+                  , Documentation.SBV.Examples.Puzzles.HexPuzzle
                   , Documentation.SBV.Examples.Puzzles.MagicSquare
                   , Documentation.SBV.Examples.Puzzles.NQueens
                   , Documentation.SBV.Examples.Puzzles.SendMoreMoney
