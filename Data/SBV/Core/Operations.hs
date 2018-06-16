@@ -31,6 +31,8 @@ module Data.SBV.Core.Operations
   , svSelect
   , svSign, svUnsign, svSetBit, svWordFromBE, svWordFromLE
   , svExp, svFromIntegral
+  -- ** Overflows
+  , svMkOverflow
   -- ** Derived operations
   , svToWord1, svFromWord1, svTestBit
   , svShiftLeft, svShiftRight
@@ -49,7 +51,6 @@ import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Kind
 import Data.SBV.Core.Concrete
 import Data.SBV.Core.Symbolic
-import Data.SBV.Utils.Numeric (fpIsEqualObjectH)
 
 import Data.Ratio
 
@@ -487,13 +488,8 @@ svSymbolicMerge k force t a b
   = a
   | True
   = SVal k $ Right $ cache c
-  where
-        -- Be careful with +/-0 here! See https://github.com/LeventErkok/sbv/issues/382
-        sameResult (SVal _ (Left c1)) (SVal _ (Left c2)) = c1 == c2 && floatCheck (cwVal c1) (cwVal c2)
-        sameResult _                       _             = False
-        floatCheck (CWFloat  f1) (CWFloat  f2)           = f1 `fpIsEqualObjectH` f2
-        floatCheck (CWDouble d1) (CWDouble d2)           = d1 `fpIsEqualObjectH` d2
-        floatCheck _            _                        = True
+  where sameResult (SVal _ (Left c1)) (SVal _ (Left c2)) = c1 == c2
+        sameResult _                  _                  = False
 
         c st = do swt <- svToSW st t
                   case () of
@@ -802,6 +798,14 @@ svRotateRight x i
           z  = svInteger (kindOf x) 0
           zi = svInteger (kindOf i) 0
           n  = svInteger (kindOf i) (toInteger sx)
+
+--------------------------------------------------------------------------------
+-- | Overflow detection.
+svMkOverflow :: OvOp -> SVal -> SVal -> SVal
+svMkOverflow o x y = SVal KBool (Right (cache r))
+    where r st = do sx <- svToSW st x
+                    sy <- svToSW st y
+                    newExpr st KBool $ SBVApp (OverflowOp o) [sx, sy]
 
 --------------------------------------------------------------------------------
 -- Utility functions

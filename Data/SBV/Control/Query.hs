@@ -38,6 +38,7 @@ import Data.IORef (readIORef)
 import qualified Data.Map    as M
 import qualified Data.IntMap as IM
 
+import Data.Char     (toLower)
 import Data.List     (unzip3, intercalate, nubBy, sortBy)
 import Data.Maybe    (listToMaybe, catMaybes)
 import Data.Function (on)
@@ -110,8 +111,6 @@ getInfo flag = do
 
         isAllStat = isAllStatistics flag
 
-        render = serialize True
-
         grabAllStat k v = (render k, render v)
 
         -- we're trying to do our best to get key-value pairs here, but this
@@ -134,12 +133,24 @@ getInfo flag = do
                  EApp [ECon ":error-behavior", ECon "immediate-exit"]      -> return $ Resp_Error ErrorImmediateExit
                  EApp [ECon ":error-behavior", ECon "continued-execution"] -> return $ Resp_Error ErrorContinuedExecution
                  EApp (ECon ":name" : o)                                   -> return $ Resp_Name (render (EApp o))
-                 EApp [ECon ":reason-unknown", ECon "memout"]              -> return $ Resp_ReasonUnknown UnknownMemOut
-                 EApp [ECon ":reason-unknown", ECon "incomplete"]          -> return $ Resp_ReasonUnknown UnknownIncomplete
-                 EApp (ECon ":reason-unknown" : o)                         -> return $ Resp_ReasonUnknown (UnknownOther (render (EApp o)))
+                 EApp (ECon ":reason-unknown" : o)                         -> return $ Resp_ReasonUnknown (unk o)
                  EApp (ECon ":version" : o)                                -> return $ Resp_Version (render (EApp o))
                  EApp (ECon s : o)                                         -> return $ Resp_InfoKeyword s (map render o)
                  _                                                         -> bad r Nothing
+
+  where render = serialize True
+
+        unk [ECon s] | Just d <- getUR s = d
+        unk o                            = UnknownOther (render (EApp o))
+
+        getUR s = map toLower (unQuote s) `lookup` [(map toLower k, d) | (k, d) <- unknownReasons]
+
+        -- As specified in Section 4.1 of the SMTLib document. Note that we're adding the
+        -- extra timeout as it is useful in this context.
+        unknownReasons = [ ("memout",     UnknownMemOut)
+                         , ("incomplete", UnknownIncomplete)
+                         , ("timeout",    UnknownTimeOut)
+                         ]
 
 -- | Retrieve the value of an 'SMTOption.' The curious function argument is on purpose here,
 -- simply pass the constructor name. Example: the call @'getOption' 'ProduceUnsatCores'@ will return
@@ -186,16 +197,13 @@ getOption f = case f undefined of
         stringList c e _ = return $ Just $ c $ stringsOf e
 
 -- | Get the reason unknown. Only internally used.
-getUnknownReason :: Query String
+getUnknownReason :: Query SMTReasonUnknown
 getUnknownReason = do ru <- getInfo ReasonUnknown
                       case ru of
-                        Resp_Unsupported     -> return "No reason provided."
-                        Resp_ReasonUnknown r -> return $ case r of
-                                                           UnknownMemOut       -> "Out of memory."
-                                                           UnknownIncomplete   -> "Incomplete."
-                                                           UnknownOther      s -> s
+                        Resp_Unsupported     -> return $ UnknownOther "Solver responded: Unsupported."
+                        Resp_ReasonUnknown r -> return r
                         -- Shouldn't happen, but just in case:
-                        _                    -> return $ "Unexpected reason value received: " ++ show ru
+                        _                    -> error $ "Unexpected reason value received: " ++ show ru
 
 -- | Issue check-sat and get an SMT Result out.
 getSMTResult :: Query SMTResult
@@ -254,7 +262,7 @@ getParetoOptResults mbN      = do cfg <- getConfig
                                     Unsat -> return (False, [])
                                     Sat   -> continue (classifyModel cfg)
                                     Unk   -> do ur <- getUnknownReason
-                                                return (False, [ProofError cfg [ur]])
+                                                return (False, [ProofError cfg [show ur]])
 
   where continue classify = do m <- getModel
                                (limReached, fronts) <- getParetoFronts (subtract 1 <$> mbN) [m]
@@ -623,13 +631,13 @@ getProof = do
         -- result of parsing is ignored.
         parse r bad $ \_ -> return r
 
--- | Retrieve interpolants after an 'Unsat' result is obtained. Note you must have arranged for
+-- | Retrieve an interpolant after an 'Unsat' result is obtained. Note you must have arranged for
 -- interpolants to be produced first (/via/ @'setOption' $ 'ProduceInterpolants' 'True'@)
 -- for this call to not error out!
 --
--- To get an interpolant for a pair of formulas @A@ and @B@, use a 'namedConstraint' to attach
--- names to @A@ and @B@. Then call 'getInterpolant' @[\"A\", \"B\"]@, assuming those are the names
--- you gave to the formulas.
+-- To get an interpolant for a pair of formulas @A@ and @B@, use a 'constrainWithAttribute' call to attach
+-- interplation groups to @A@ and @B@. Then call 'getInterpolant' @[\"A\"]@, assuming those are the names
+-- you gave to the formulas in the @A@ group.
 --
 -- An interpolant for @A@ and @B@ is a formula @I@ such that:
 --
@@ -643,35 +651,28 @@ getProof = do
 -- be satisfied at the same time. Furthermore, @I@ will have only the symbols that are common
 -- to @A@ and @B@.
 --
--- Interpolants generalize to sequences: If you pass more than two formulas, then you will get
--- a sequence of interpolants. In general, for @N@ formulas that are not satisfiable together, you will be
--- returned @N-1@ interpolants. If formulas are @A1 .. An@, then interpolants will be @I1 .. I(N-1)@, such
--- that @A1 ==> I1@, @A2 /\\ I1 ==> I2@, @A3 /\\ I2 ==> I3@, ..., and finally @AN ===> not I(N-1)@.
---
--- Currently, SBV only returns simple and sequence interpolants, and does not support tree-interpolants.
--- If you need these, please get in touch. Furthermore, the result will be a list of mere strings representing the
--- interpolating formulas, as opposed to a more structured type. Please get in touch if you use this function and can
--- suggest a better API.
-getInterpolant :: [String] -> Query [String]
+-- N.B. As of Z3 version 4.8.0; Z3 no longer supports interpolants. Use the MathSAT backend for extracting
+-- interpolants. See 'Documentation.SBV.Examples.Queries.Interpolants' for an example.
+getInterpolant :: [String] -> Query String
 getInterpolant fs
-  | length fs < 2
-  = error $ "SBV.getInterpolant requires at least two named constraints, received: " ++ show fs
+  | null fs
+  = error "SBV.getInterpolant requires at least one marked constraint, received none!"
   | True
   = do let bar s = '|' : s ++ "|"
-           cmd = "(get-interpolant " ++ unwords (map bar fs) ++ ")"
+           cmd = "(get-interpolant (" ++ unwords (map bar fs) ++ "))"
            bad = unexpected "getInterpolant" cmd "a get-interpolant response"
                           $ Just [ "Make sure you use:"
                                  , ""
                                  , "       setOption $ ProduceInterpolants True"
                                  , ""
                                  , "to make sure the solver is ready for producing interpolants,"
-                                 , "and that you have named the formulas with calls to 'namedConstraint'."
+                                 , "and that you have used the proper attributes using the"
+                                 , "constrainWithAttribute function."
                                  ]
 
        r <- ask cmd
 
-       parse r bad $ \case EApp (ECon "interpolants" : es) -> return $ map (serialize False) es
-                           _                               -> bad r Nothing
+       parse r bad $ \e -> return $ serialize False e
 
 -- | Retrieve assertions. Note you must have arranged for
 -- assertions to be available first (/via/ @'setOption' $ 'ProduceAssertions' 'True'@)

@@ -40,7 +40,7 @@ module Data.SBV.Control (
      , getAssertions
 
      -- * Getting solver information
-     , SMTInfoFlag(..), SMTErrorBehavior(..), SMTReasonUnknown(..), SMTInfoResponse(..)
+     , SMTInfoFlag(..), SMTErrorBehavior(..), SMTInfoResponse(..)
      , getInfo, getOption
 
      -- * Entering and exiting assertion stack
@@ -69,15 +69,11 @@ module Data.SBV.Control (
 
      -- * Solver options
      , SMTOption(..)
-
-     -- * Logics supported
-     , Logic(..)
-
      ) where
 
 import Data.SBV.Core.Data     (SMTProblem(..), SMTSolver(..), SMTConfig(..))
 import Data.SBV.Core.Symbolic ( Query, IStage(..), SBVRunMode(..), Symbolic, Query(..), rSMTOptions
-                              , extractSymbolicSimulationState, solverSetOptions, runMode
+                              , extractSymbolicSimulationState, solverSetOptions, runMode, isRunIStage
                               )
 
 import Data.SBV.Control.Query
@@ -96,12 +92,14 @@ query (Query userQuery) = do
      rm <- liftIO $ readIORef (runMode st)
      case rm of
         -- Transitioning from setup
-        SMTMode ISetup isSAT cfg -> liftIO $ do let backend = engine (solver cfg)
+        SMTMode stage isSAT cfg | not (isRunIStage stage) -> liftIO $ do
+
+                                                let backend = engine (solver cfg)
 
                                                 res     <- extractSymbolicSimulationState st
                                                 setOpts <- reverse <$> readIORef (rSMTOptions st)
 
-                                                let SMTProblem{smtLibPgm} = runProofOn cfg isSAT [] res
+                                                let SMTProblem{smtLibPgm} = runProofOn rm [] res
                                                     cfg' = cfg { solverSetOptions = solverSetOptions cfg ++ setOpts }
                                                     pgm  = smtLibPgm cfg'
 

@@ -1,7 +1,54 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 7.8, 2018-05-18
+* Latest Hackage released version: 7.9, 2018-06-15
+
+### Version 7.9, 2018-06-15
+ 
+  * Add support for bit-vector arithmetic underflow/overflow detection. The new
+    'ArithmeticOverflow' class captures conditions under which addition, subtraction,
+    multiplication, division, and negation can underflow/overflow for
+    both signed and unsigned bit-vector values. The implementation is based on
+    http://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/z3prefix.pdf,
+    and can be used to detect overflow caused bugs in machine arithmetic.
+    See "Data.SBV.Tools.Overflow" for details.
+
+  * Add 'sFromIntegralO', which is the overflow/underflow detecting variant
+    of 'sFromIntegral'. This function returns (along with the converted
+    result), a pair of booleans showing whether the conversion underflowed
+    or overflowed.
+
+  * Change the function 'getUnknownReason' to return a proper data-type
+    ('SMTReasonUnknown') as opposed to a mere string. This is at the
+    query level. Similarly, change `Unknown` result to return the same
+    data-type at the sat/prove level.
+
+  * Interpolants: With Z3 4.8.0 release, Z3 folks have dropped support
+    for producing interpolants. If you need interpolants, you will have
+    to use the MathSAT backend now. Also, the MathSAT API is slightly
+    different from how Z3 supported interpolants as well, which means
+    your old code will need some modifications. See the example in
+    Documentation.SBV.Examples.Queries.Interpolants for the new usage.
+
+  * Add 'constrainWithAttribute' call, which can be used to attach 
+    arbitrary attribute to a constraint. Main use case is in interpolant
+    generation with MathSAT.
+
+  * C code generation: SBV now spits out linker flag -lm if needed.
+    Thanks to Matt Peddie for reporting.
+
+  * Code reorg: Simplify constant mapping table, by properly accounting
+    for negative-zero floats.
+    
+  * Export 'sexprToVal' for the class SMTValue, which allows for custom
+    definitions of value extractions. Thanks to Brian Schroeder for the
+    patch.
+  
+  * Export 'Logic' directly from Data.SBV. (Previously was from Control.)
+
+  * Fix a long standing issue (ever since we introduced queries) where
+    'sAssert' calls were run in the context of the final output boolean,
+    which is simply the wrong thing to do.
 
 ### Version 7.8, Released 2018-05-18
 

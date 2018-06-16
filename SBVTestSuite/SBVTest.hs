@@ -12,6 +12,7 @@ import qualified TestSuite.Arrays.Query
 import qualified TestSuite.Basics.AllSat
 import qualified TestSuite.Basics.ArithNoSolver
 import qualified TestSuite.Basics.ArithSolver
+import qualified TestSuite.Basics.Assert
 import qualified TestSuite.Basics.BasicTests
 import qualified TestSuite.Basics.Exceptions
 import qualified TestSuite.Basics.GenBenchmark
@@ -54,6 +55,8 @@ import qualified TestSuite.Optimization.Combined
 import qualified TestSuite.Optimization.ExtensionField
 import qualified TestSuite.Optimization.Quantified
 import qualified TestSuite.Optimization.Reals
+import qualified TestSuite.Overflows.Arithmetic
+import qualified TestSuite.Overflows.Casts
 import qualified TestSuite.Polynomials.Polynomials
 import qualified TestSuite.Puzzles.Coins
 import qualified TestSuite.Puzzles.Counts
@@ -125,8 +128,10 @@ localOnlyTests = testGroup "SBVLocalOnlyTests" [
                    , TestSuite.Queries.Int_CVC4.tests
                    , TestSuite.Queries.Int_Mathsat.tests
                    , TestSuite.Queries.Int_Yices.tests
-                   -- quick-check tests take a long time, so just run them locally.
+                   -- quick-check tests take a long time, so just run them locally:
                    , TestSuite.QuickCheck.QC.tests
+                   -- interpolant tests require MathSAT, run locally:
+                   , TestSuite.Queries.Interpolants.tests
                    ]
 
 -- | Remaining tests
@@ -136,6 +141,7 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Arrays.Query.tests
                , TestSuite.Basics.AllSat.tests
                , TestSuite.Basics.ArithNoSolver.tests
+               , TestSuite.Basics.Assert.tests
                , TestSuite.Basics.BasicTests.tests
                , TestSuite.Basics.Exceptions.testsRemote
                , TestSuite.Basics.GenBenchmark.tests
@@ -178,6 +184,8 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Optimization.ExtensionField.tests
                , TestSuite.Optimization.Quantified.tests
                , TestSuite.Optimization.Reals.tests
+               , TestSuite.Overflows.Arithmetic.tests
+               , TestSuite.Overflows.Casts.tests
                , TestSuite.Polynomials.Polynomials.tests
                , TestSuite.Puzzles.Coins.tests
                , TestSuite.Puzzles.Counts.tests
@@ -192,7 +200,6 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Queries.Enums.tests
                , TestSuite.Queries.FreshVars.tests
                , TestSuite.Queries.Int_Z3.tests
-               , TestSuite.Queries.Interpolants.tests
                , TestSuite.Queries.Strings.tests
                , TestSuite.Queries.Uninterpreted.tests
                , TestSuite.Uninterpreted.AUF.tests

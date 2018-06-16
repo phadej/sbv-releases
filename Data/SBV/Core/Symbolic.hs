@@ -27,7 +27,7 @@
 module Data.SBV.Core.Symbolic
   ( NodeId(..)
   , SW(..), swKind, trueSW, falseSW
-  , Op(..), PBOp(..), FPOp(..), StrOp(..), RegExp(..)
+  , Op(..), PBOp(..), OvOp(..), FPOp(..), StrOp(..), RegExp(..)
   , Quantifier(..), needsExistentials
   , RoundingMode(..)
   , SBVType(..), newUninterpreted, addAxiom
@@ -35,7 +35,7 @@ module Data.SBV.Core.Symbolic
   , svMkSymVar, sWordN, sWordN_, sIntN, sIntN_
   , ArrayContext(..), ArrayInfo
   , svToSW, svToSymSW, forceSWArg
-  , SBVExpr(..), newExpr, isCodeGenMode
+  , SBVExpr(..), newExpr, isCodeGenMode, isSafetyCheckingIStage, isRunIStage, isSetupIStage
   , Cached, cache, uncache
   , ArrayIndex, uncacheAI
   , NamedSymVar
@@ -64,7 +64,7 @@ import Control.Monad.Trans      (MonadIO, liftIO)
 import Data.Char                (isAlpha, isAlphaNum, toLower)
 import Data.IORef               (IORef, newIORef, readIORef)
 import Data.List                (intercalate, sortBy)
-import Data.Maybe               (isJust, fromJust, fromMaybe)
+import Data.Maybe               (isJust, fromJust, fromMaybe, listToMaybe)
 import Data.String              (IsString(fromString))
 
 import Data.Time (getCurrentTime, UTCTime)
@@ -154,6 +154,7 @@ data Op = Plus
         | Label String                          -- Essentially no-op; useful for code generation to emit comments.
         | IEEEFP FPOp                           -- Floating-point ops, categorized separately
         | PseudoBoolean PBOp                    -- Pseudo-boolean ops, categorized separately
+        | OverflowOp    OvOp                    -- Overflow-ops, categorized separately
         | StrOp StrOp                           -- String ops, categorized separately
         deriving (Eq, Ord)
 
@@ -220,6 +221,18 @@ data PBOp = PB_AtMost  Int        -- ^ At most k
           | PB_Ge      [Int] Int  -- ^ At least k, with coefficients given. Generalizes PB_AtLeast
           | PB_Eq      [Int] Int  -- ^ Exactly k,  with coefficients given. Generalized PB_Exactly
           deriving (Eq, Ord, Show)
+
+-- | Overflow operations
+data OvOp = Overflow_SMul_OVFL   -- ^ Signed multiplication overflow
+          | Overflow_SMul_UDFL   -- ^ Signed multiplication underflow
+          | Overflow_UMul_OVFL   -- ^ Unsigned multiplication overflow
+          deriving (Eq, Ord)
+
+-- | Show instance. It's important that these follow the internal z3 names
+instance Show OvOp where
+  show Overflow_SMul_OVFL = "bvsmul_noovfl"
+  show Overflow_SMul_UDFL = "bvsmul_noudfl"
+  show Overflow_UMul_OVFL = "bvumul_noovfl"
 
 -- | String operations. Note that we do not define `StrAt` as it translates to `StrSubStr` trivially.
 data StrOp = StrConcat       -- ^ Concatenation of one or more strings
@@ -339,6 +352,7 @@ instance Show Op where
   show (Label s)         = "[label] " ++ s
   show (IEEEFP w)        = show w
   show (PseudoBoolean p) = show p
+  show (OverflowOp o)    = show o
   show (StrOp s)         = show s
   show op
     | Just s <- op `lookup` syms = s
@@ -392,6 +406,7 @@ instance Show SBVExpr where
   show (SBVApp (Rol i) [a])               = unwords [show a, "<<<", show i]
   show (SBVApp (Ror i) [a])               = unwords [show a, ">>>", show i]
   show (SBVApp (PseudoBoolean pb) args)   = unwords (show pb : map show args)
+  show (SBVApp (OverflowOp op)    args)   = unwords (show op : map show args)
   show (SBVApp op                 [a, b]) = unwords [show a, show op, show b]
   show (SBVApp op                 args)   = unwords (show op : map show args)
 
@@ -406,7 +421,7 @@ type NamedSymVar = (SW, String)
 -- potentially be an infinite number of them and there is no way to know exactly
 -- how many ahead of time. If 'Nothing' is given, SBV will possibly loop forever
 -- if the number is really infinite.
-data OptimizeStyle = Lexicographic      -- ^ Objectives are optimized in the order given, earlier objectives have higher priority. This is the default.
+data OptimizeStyle = Lexicographic      -- ^ Objectives are optimized in the order given, earlier objectives have higher priority.
                    | Independent        -- ^ Each objective is optimized independently.
                    | Pareto (Maybe Int) -- ^ Objectives are optimized according to pareto front: That is, no objective can be made better without making some other worse.
                    deriving (Eq, Show)
@@ -470,7 +485,7 @@ data Result = Result { reskinds       :: Set.Set Kind                           
                      , resUIConsts    :: [(String, SBVType)]                              -- ^ uninterpreted constants
                      , resAxioms      :: [(String, [String])]                             -- ^ axioms
                      , resAsgns       :: SBVPgm                                           -- ^ assignments
-                     , resConstraints :: [(Maybe String, SW)]                             -- ^ additional constraints (boolean)
+                     , resConstraints :: [([(String, String)], SW)]                       -- ^ additional constraints (boolean)
                      , resAssertions  :: [(String, Maybe CallStack, SW)]                  -- ^ assertions
                      , resOutputs     :: [SW]                                             -- ^ outputs
                      }
@@ -540,8 +555,9 @@ instance Show Result where
 
           shax (nm, ss) = "  -- user defined axiom: " ++ nm ++ "\n  " ++ intercalate "\n  " ss
 
-          shCstr (Nothing, c) = show c
-          shCstr (Just nm, c) = nm ++ ": " ++ show c
+          shCstr ([], c)               = show c
+          shCstr ([(":named", nm)], c) = nm ++ ": " ++ show c
+          shCstr (attrs, c)            = show c ++ " (attributes: " ++ show attrs ++ ")"
 
           shAssert (nm, stk, p) = "  -- assertion: " ++ nm ++ " " ++ maybe "[No location]"
 #if MIN_VERSION_base(4,9,0)
@@ -562,16 +578,16 @@ instance Show ArrayContext where
   show (ArrayMerge  s i j) = " merged arrays " ++ show i ++ " and " ++ show j ++ " on condition " ++ show s
 
 -- | Expression map, used for hash-consing
-type ExprMap   = Map.Map SBVExpr SW
+type ExprMap = Map.Map SBVExpr SW
 
--- | Constants are stored in a map, for hash-consing. The bool is needed to tell -0 from +0, sigh
-type CnstMap   = Map.Map (Bool, CW) SW
+-- | Constants are stored in a map, for hash-consing.
+type CnstMap = Map.Map CW SW
 
 -- | Kinds used in the program; used for determining the final SMT-Lib logic to pick
 type KindSet = Set.Set Kind
 
 -- | Tables generated during a symbolic run
-type TableMap  = Map.Map (Kind, Kind, [SW]) Int
+type TableMap = Map.Map (Kind, Kind, [SW]) Int
 
 -- | Representation for symbolic arrays
 type ArrayInfo = (String, (Kind, Kind), ArrayContext)
@@ -589,8 +605,30 @@ type CgMap     = Map.Map String [String]
 type Cache a   = IMap.IntMap [(StableName (State -> IO a), a)]
 
 -- | Stage of an interactive run
-data IStage = ISetup    -- Before we initiate contact
-            | IRun      -- After the contact is started
+data IStage = ISetup        -- Before we initiate contact.
+            | ISafe         -- In the context of a safe/safeWith call
+            | IRun          -- After the contact is started
+
+-- | Are we cecking safety
+isSafetyCheckingIStage :: IStage -> Bool
+isSafetyCheckingIStage s = case s of
+                             ISetup -> False
+                             ISafe  -> True
+                             IRun   -> False
+
+-- | Are we in setup?
+isSetupIStage :: IStage -> Bool
+isSetupIStage s = case s of
+                   ISetup -> True
+                   ISafe  -> False
+                   IRun   -> True
+
+-- | Are we in a run?
+isRunIStage :: IStage -> Bool
+isRunIStage s = case s of
+                  ISetup -> False
+                  ISafe  -> False
+                  IRun   -> True
 
 -- | Different means of running a symbolic piece of code
 data SBVRunMode = SMTMode  IStage Bool SMTConfig -- ^ In regular mode, with a stage. Bool is True if this is SAT.
@@ -600,8 +638,10 @@ data SBVRunMode = SMTMode  IStage Bool SMTConfig -- ^ In regular mode, with a st
 -- Show instance for SBVRunMode; debugging purposes only
 instance Show SBVRunMode where
    show (SMTMode ISetup True  _) = "Satisfiability setup"
+   show (SMTMode ISafe  True  _) = "Safety setup"
    show (SMTMode IRun   True  _) = "Satisfiability"
    show (SMTMode ISetup False _) = "Proof setup"
+   show (SMTMode ISafe  False _) = error "ISafe-False is not an expected/supported combination for SBVRunMode!"
    show (SMTMode IRun   False _) = "Proof"
    show CodeGen                  = "Code generation"
    show Concrete                 = "Concrete evaluation"
@@ -665,7 +705,7 @@ data State  = State { pathCond     :: SVal                             -- ^ kind
                     , rUsedKinds   :: IORef KindSet
                     , rUsedLbls    :: IORef (Set.Set String)
                     , rinps        :: IORef ([(Quantifier, NamedSymVar)], [NamedSymVar]) -- User defined, and internal existential
-                    , rConstraints :: IORef [(Maybe String, SW)]
+                    , rConstraints :: IORef [([(String, String)], SW)]
                     , routs        :: IORef [SW]
                     , rtblMap      :: IORef TableMap
                     , spgm         :: IORef SBVPgm
@@ -856,24 +896,16 @@ registerLabel st nm
           else modifyState st rUsedLbls (Set.insert nm) (return ())
 
 -- | Create a new constant; hash-cons as necessary
--- NB. For each constant, we also store weather it's negative-0 or not,
--- as otherwise +0 == -0 and thus we'd confuse those entries. That's a
--- bummer as we incur an extra boolean for this rare case, but it's simple
--- and hopefully we don't generate a ton of constants in general.
 newConst :: State -> CW -> IO SW
 newConst st c = do
   constMap <- readIORef (rconstMap st)
-  let key = (isNeg0 (cwVal c), c)
-  case key `Map.lookup` constMap of
+  case c `Map.lookup` constMap of
     Just sw -> return sw
     Nothing -> do let k = kindOf c
                   (sw, _) <- newSW st k
-                  let ins = Map.insert key sw
+                  let ins = Map.insert c sw
                   modifyState st rconstMap ins $ modifyIncState st rNewConsts ins
                   return sw
-  where isNeg0 (CWFloat  f) = isNegativeZero f
-        isNeg0 (CWDouble d) = isNegativeZero d
-        isNeg0 _            = False
 {-# INLINE newConst #-}
 
 -- | Create a new table; hash-cons as necessary
@@ -1102,21 +1134,24 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
    SBVPgm rpgm  <- readIORef pgm
    inpsO <- (reverse *** reverse) <$> readIORef inps
    outsO <- reverse <$> readIORef outs
+
    let swap  (a, b)              = (b, a)
-       swapc ((_, a), b)         = (b, a)
        cmp   (a, _) (b, _)       = a `compare` b
        arrange (i, (at, rt, es)) = ((i, at, rt), es)
-   cnsts <- sortBy cmp . map swapc . Map.toList <$> readIORef (rconstMap st)
+
+   cnsts <- sortBy cmp . map swap . Map.toList <$> readIORef (rconstMap st)
    tbls  <- map arrange . sortBy cmp . map swap . Map.toList <$> readIORef tables
    arrs  <- IMap.toAscList <$> readIORef arrays
    unint <- Map.toList <$> readIORef uis
    axs   <- reverse <$> readIORef axioms
    knds  <- readIORef usedKinds
    cgMap <- Map.toList <$> readIORef cgs
-   traceVals  <- reverse <$> readIORef cInfo
+
+   traceVals   <- reverse <$> readIORef cInfo
    observables <- reverse <$> readIORef observes
-   extraCstrs <- reverse <$> readIORef cstrs
-   assertions <- reverse <$> readIORef asserts
+   extraCstrs  <- reverse <$> readIORef cstrs
+   assertions  <- reverse <$> readIORef asserts
+
    return $ Result knds traceVals observables cgMap inpsO cnsts tbls arrs unint axs (SBVPgm rpgm) extraCstrs assertions outsO
 
 -- | Add a new option
@@ -1125,23 +1160,21 @@ addNewSMTOption o =  do st <- ask
                         liftIO $ modifyState st rSMTOptions (o:) (return ())
 
 -- | Handling constraints
-imposeConstraint :: Maybe String -> SVal -> Symbolic ()
-imposeConstraint mbNm c = do st <- ask
-                             rm <- liftIO $ readIORef (runMode st)
-                             case rm of
-                               CodeGen -> error "SBV: constraints are not allowed in code-generation"
-                               _       -> do () <- case mbNm of
-                                                     Nothing -> return ()
-                                                     Just nm -> liftIO $ registerLabel st nm
-                                             liftIO $ internalConstraint st mbNm c
+imposeConstraint :: [(String, String)] -> SVal -> Symbolic ()
+imposeConstraint attrs c = do st <- ask
+                              rm <- liftIO $ readIORef (runMode st)
+                              case rm of
+                                CodeGen -> error "SBV: constraints are not allowed in code-generation"
+                                _       -> liftIO $ do mapM_ (registerLabel st) [nm | (":named",  nm) <- attrs]
+                                                       internalConstraint st attrs c
 
 -- | Require a boolean condition to be true in the state. Only used for internal purposes.
-internalConstraint :: State -> Maybe String -> SVal -> IO ()
-internalConstraint st mbNm b = do v <- svToSW st b
-                                  modifyState st rConstraints ((mbNm, v):)
-                                            $ noInteractive [ "Adding an internal constraint:"
-                                                            , "  Named: " ++ fromMaybe "<unnamed>" mbNm
-                                                            ]
+internalConstraint :: State -> [(String, String)] -> SVal -> IO ()
+internalConstraint st attrs b = do v <- svToSW st b
+                                   modifyState st rConstraints ((attrs, v):)
+                                             $ noInteractive [ "Adding an internal constraint:"
+                                                             , "  Named: " ++ fromMaybe "<unnamed>" (listToMaybe [nm | (":named", nm) <- attrs])
+                                                             ]
 
 -- | Add an optimization goal
 addSValOptGoal :: Objective SVal -> Symbolic ()
@@ -1439,7 +1472,7 @@ data SMTModel = SMTModel {
 data SMTResult = Unsatisfiable SMTConfig (Maybe [String]) -- ^ Unsatisfiable. If unsat-cores are enabled, they will be returned in the second parameter.
                | Satisfiable   SMTConfig SMTModel         -- ^ Satisfiable with model
                | SatExtField   SMTConfig SMTModel         -- ^ Prover returned a model, but in an extension field containing Infinite/epsilon
-               | Unknown       SMTConfig String           -- ^ Prover returned unknown, with the given reason
+               | Unknown       SMTConfig SMTReasonUnknown -- ^ Prover returned unknown, with the given reason
                | ProofError    SMTConfig [String]         -- ^ Prover errored out
 
 -- | A script, to be passed to the solver.
@@ -1476,3 +1509,4 @@ data SMTSolver = SMTSolver {
 
 {-# ANN type FPOp ("HLint: ignore Use camelCase" :: String) #-}
 {-# ANN type PBOp ("HLint: ignore Use camelCase" :: String) #-}
+{-# ANN type OvOp ("HLint: ignore Use camelCase" :: String) #-}

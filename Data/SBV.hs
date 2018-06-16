@@ -209,9 +209,9 @@ module Data.SBV (
   -- ** Constraint Vacuity
   -- $constraintVacuity
 
-  -- ** Named constraints
+  -- ** Named constraints and attributes
   -- $namedConstraints
-  , namedConstraint
+  , namedConstraint, constrainWithAttribute
 
   -- ** Unsat cores
   -- $unsatCores
@@ -247,7 +247,7 @@ module Data.SBV (
 
   -- ** Inspecting proof results
   -- $resultTypes
-  , ThmResult(..), SatResult(..), AllSatResult(..), SafeResult(..), OptimizeResult(..), SMTResult(..)
+  , ThmResult(..), SatResult(..), AllSatResult(..), SafeResult(..), OptimizeResult(..), SMTResult(..), SMTReasonUnknown(..)
 
   -- ** Observing expressions
   -- $observeInternal
@@ -267,7 +267,7 @@ module Data.SBV (
   , boolector, cvc4, yices, z3, mathSAT, abc
   -- ** Configurations
   , defaultSolverConfig, defaultSMTCfg, sbvCheckSolverInstallation, sbvAvailableSolvers
-  , setLogic, setOption, setInfo, setTimeOut
+  , setLogic, Logic(..), setOption, setInfo, setTimeOut
   -- ** Solver exceptions
   , SMTException(..)
 
@@ -309,7 +309,8 @@ import qualified Language.Haskell.TH as TH
 import Data.Generics
 
 import Data.SBV.SMT.Utils (SMTException(..))
-import Data.SBV.Control.Utils (SMTValue)
+import Data.SBV.Control.Utils (SMTValue (..))
+import Data.SBV.Control.Types (SMTReasonUnknown(..), Logic(..))
 
 -- | Form the symbolic conjunction of a given list of boolean conditions. Useful in expressing
 -- problems with constraints, like the following:
@@ -591,11 +592,16 @@ Optimal model:
     * ['Pareto']. Finally, the user can query for pareto-fronts. A pareto front is an model such that no goal can be made
       "better" without making some other goal "worse."
 
+      Pareto fronts only make sense when the objectives are bounded. If there are unbounded objective values, then the
+      backend solver can loop infinitely. (This is what z3 does currently.) If you are not sure the objectives are
+      bounded, you should first use 'Independent' mode to ensure the objectives are bounded, and then switch to
+      pareto-mode to extract them further.
+
       The optional number argument to 'Pareto' specifies the maximum number of pareto-fronts the user is asking
-      to get. If 'Nothing', SBV will query for all pareto-fronts. Note that pareto-fronts can be infinite
-      in number, so if 'Nothing' is used, there is a potential for infinitely waiting for the SBV-solver interaction
-      to finish. (If you suspect this might be the case, run in 'verbose' mode to see the interaction and
-      put a limiting factor appropriately.)
+      to get. If 'Nothing', SBV will query for all pareto-fronts. Note that pareto-fronts can be really large,
+      so if 'Nothing' is used, there is a potential for waiting indefinitely for the SBV-solver interaction to finish. (If
+      you suspect this might be the case, run in 'verbose' mode to see the interaction and put a limiting factor
+      appropriately.)
 -}
 
 {- $softAssertions
@@ -826,6 +832,12 @@ And the proof is not vacuous:
 Constraints can be given names:
 
   @ 'namedConstraint' "a is at least 5" $ a .>= 5@
+
+Similarly, arbitrary term attributes can also be associated:
+
+  @ 'constrainWithAttribute' [(":solver-specific-attribute", "value")] $ a .>= 5@
+
+Note that a 'namedConstraint' is equivalent to a 'constrainWithAttribute' call, setting the `":named"' attribute.
 -}
 
 {- $unsatCores

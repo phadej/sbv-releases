@@ -156,8 +156,8 @@ instance Show OptimizeResult where
                ParetoResult (False, [r]) -> sh (\s -> "Unique pareto front: " ++ s) r
                ParetoResult (False, rs)  -> multi "pareto optimal values" (zipWith shP [(1::Int)..] rs)
                ParetoResult (True,  rs)  ->    multi "pareto optimal values" (zipWith shP [(1::Int)..] rs)
-                                           ++ "\n*** Note: Pareto-front extraction was terminated before stream was ended as requested by the user."
-                                           ++ "\n***       There might be other (potentially infinitely more) results."
+                                           ++ "\n*** Note: Pareto-front extraction was terminated as requested by the user."
+                                           ++ "\n***       There might be many other results!"
 
        where multi w [] = "There are no " ++ w ++ " to display models for."
              multi _ xs = intercalate "\n" xs
@@ -385,7 +385,7 @@ instance Modelable SMTResult where
   getModelAssignment (Unsatisfiable _ _) = Left "SBV.getModelAssignment: Unsatisfiable result"
   getModelAssignment (Satisfiable _ m)   = Right (False, parseModelOut m)
   getModelAssignment (SatExtField _ _)   = Left "SBV.getModelAssignment: The model is in an extension field"
-  getModelAssignment (Unknown _ m)       = Left $ "SBV.getModelAssignment: Solver state is unknown: " ++ m
+  getModelAssignment (Unknown _ m)       = Left $ "SBV.getModelAssignment: Solver state is unknown: " ++ show m
   getModelAssignment (ProofError _ s)    = error $ unlines $ "Backend solver complains: " : s
 
   modelExists Satisfiable{}   = True
@@ -428,7 +428,7 @@ showSMTResult unsatMsg unkMsg satMsg satMsgModel satExtMsg result = case result 
   Satisfiable _ (SMTModel _ []) -> satMsg
   Satisfiable _ m               -> satMsgModel ++ showModel cfg m
   SatExtField _ (SMTModel b _)  -> satExtMsg   ++ showModelDictionary cfg b
-  Unknown     _ r               -> unkMsg ++ ".\n" ++ "  Reason: " `alignPlain` r
+  Unknown     _ r               -> unkMsg ++ ".\n" ++ "  Reason: " `alignPlain` show r
   ProofError  _ []              -> "*** An error occurred. No additional information available. Try running in verbose mode"
   ProofError  _ ls              -> "*** An error occurred.\n" ++ intercalate "\n" (map ("***  " ++) ls)
  where cfg = resultConfig result

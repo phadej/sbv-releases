@@ -60,15 +60,15 @@ import Data.SBV.Core.Data     ( SW(..), CW(..), SBV, AlgReal, sbvToSW, kindOf, K
                               , QueryState(..), SVal(..), Quantifier(..), cache
                               , newExpr, SBVExpr(..), Op(..), FPOp(..), SBV(..)
                               , SolverContext(..), SBool, Objective(..), SolverCapabilities(..), capabilities
-                              , Result(..), SMTProblem(..), trueSW, SymWord(..), SBVPgm(..), SMTSolver(..)
+                              , Result(..), SMTProblem(..), trueSW, SymWord(..), SBVPgm(..), SMTSolver(..), SBVRunMode(..)
                               )
-import Data.SBV.Core.Symbolic (IncState(..), withNewIncState, State(..), svToSW, registerLabel, svMkSymVar)
+import Data.SBV.Core.Symbolic (IncState(..), withNewIncState, State(..), svToSW, registerLabel, svMkSymVar, isSafetyCheckingIStage, isSetupIStage)
 
 import Data.SBV.Core.AlgReals   (mergeAlgReals)
 import Data.SBV.Core.Operations (svNot, svNotEqual, svOr)
 
 import Data.SBV.SMT.SMTLib  (toIncSMTLib, toSMTLib)
-import Data.SBV.SMT.Utils   (showTimeoutValue, annotateWithName, alignPlain, debug, mergeSExpr, SMTException(..))
+import Data.SBV.SMT.Utils   (showTimeoutValue, addAnnotations, alignPlain, debug, mergeSExpr, SMTException(..))
 
 import Data.SBV.Utils.Lib (qfsToString)
 
@@ -83,8 +83,9 @@ import GHC.Stack
 
 -- | 'Query' as a 'SolverContext'.
 instance SolverContext Query where
-   constrain          = addQueryConstraint Nothing
-   namedConstraint nm = addQueryConstraint (Just nm)
+   constrain                 = addQueryConstraint []
+   namedConstraint nm        = addQueryConstraint [(":named", nm)]
+   constrainWithAttribute    = addQueryConstraint
 
    setOption o
      | isStartModeOption o = error $ unlines [ ""
@@ -93,15 +94,12 @@ instance SolverContext Query where
                                              ]
      | True                = send True $ setSMTOption o
 
--- | Adding a constraint, possibly named. Only used internally.
+-- | Adding a constraint, possibly with attributes. Only used internally.
 -- Use 'constrain' and 'namedConstraint' from user programs.
-addQueryConstraint :: Maybe String -> SBool -> Query ()
-addQueryConstraint mbNm b = do sw <- inNewContext (\st -> do maybe (return ()) (registerLabel st) mbNm
+addQueryConstraint :: [(String, String)] -> SBool -> Query ()
+addQueryConstraint atts b = do sw <- inNewContext (\st -> do mapM_ (registerLabel st) [nm | (":named", nm) <- atts]
                                                              sbvToSW st b)
-                               send True $ "(assert " ++ mkNamed mbNm (show sw)  ++ ")"
-   where mkNamed Nothing   s = s
-         mkNamed (Just nm) s = annotateWithName nm s
-
+                               send True $ "(assert " ++ addAnnotations atts (show sw)  ++ ")"
 
 -- | Get the current configuration
 getConfig :: Query SMTConfig
@@ -131,12 +129,11 @@ syncUpSolver :: Bool -> IncState -> Query ()
 syncUpSolver afterAPush is = do
         cfg <- getConfig
         ls  <- io $ do let swap  (a, b)        = (b, a)
-                           swapc ((_, a), b)   = (b, a)
                            cmp   (a, _) (b, _) = a `compare` b
                            arrange (i, (at, rt, es)) = ((i, at, rt), es)
                        inps  <- reverse <$> readIORef (rNewInps is)
                        ks    <- readIORef (rNewKinds is)
-                       cnsts <- sortBy cmp . map swapc . Map.toList <$> readIORef (rNewConsts is)
+                       cnsts <- sortBy cmp . map swap . Map.toList <$> readIORef (rNewConsts is)
                        arrs  <- IMap.toAscList <$> readIORef (rNewArrs is)
                        tbls  <- map arrange . sortBy cmp . map swap . Map.toList <$> readIORef (rNewTbls is)
                        uis   <- Map.toAscList <$> readIORef (rNewUIs is)
@@ -680,9 +677,13 @@ unexpected ctx sent expected mbHint received mbReason = do
         io $ C.throwIO exc
 
 -- | Convert a query result to an SMT Problem
-runProofOn :: SMTConfig -> Bool -> [String] -> Result -> SMTProblem
-runProofOn config isSat comments res@(Result ki _qcInfo _observables _codeSegs is consts tbls arrs uis axs pgm cstrs _assertions outputs) =
-     let flipQ (ALL, x) = (EX,  x)
+runProofOn :: SBVRunMode -> [String] -> Result -> SMTProblem
+runProofOn rm comments res@(Result ki _qcInfo _observables _codeSegs is consts tbls arrs uis axs pgm cstrs _assertions outputs) =
+     let (config, isSat, isSafe, isSetup) = case rm of
+                                              SMTMode stage s c -> (c, s, isSafetyCheckingIStage stage, isSetupIStage stage)
+                                              _                 -> error $ "runProofOn: Unexpected run mode: " ++ show rm
+
+         flipQ (ALL, x) = (EX,  x)
          flipQ (EX,  x) = (ALL, x)
 
          skolemize :: [(Quantifier, NamedSymVar)] -> [Either SW (SW, [SW])]
@@ -694,23 +695,18 @@ runProofOn config isSat comments res@(Result ki _qcInfo _observables _codeSegs i
          qinps      = if isSat then fst is else map flipQ (fst is)
          skolemMap  = skolemize qinps
 
-         o = case outputs of
-               []  -> trueSW
-               [so] -> case so of
-                        SW KBool _ -> so
-                        _          -> trueSW
-                                      {-
-                                      -- TODO: We used to error out here, but "safeWith" might have a non-bool out
-                                      -- I wish we can get rid of this and still check for it. Perhaps this entire
-                                      -- runProofOn might disappear.
-                                      error $ unlines [ "Impossible happened, non-boolean output: " ++ show so
-                                                      , "Detected while generating the trace:\n" ++ show res
-                                                      ]
-                                      -}
-               os  -> error $ unlines [ "User error: Multiple output values detected: " ++ show os
-                                      , "Detected while generating the trace:\n" ++ show res
-                                      , "*** Check calls to \"output\", they are typically not needed!"
-                                      ]
+         o | isSafe = trueSW
+           | True   = case outputs of
+                        []  | isSetup -> trueSW
+                        [so]          -> case so of
+                                           SW KBool _ -> so
+                                           _          -> error $ unlines [ "Impossible happened, non-boolean output: " ++ show so
+                                                                         , "Detected while generating the trace:\n" ++ show res
+                                                                         ]
+                        os  -> error $ unlines [ "User error: Multiple output values detected: " ++ show os
+                                               , "Detected while generating the trace:\n" ++ show res
+                                               , "*** Check calls to \"output\", they are typically not needed!"
+                                               ]
 
      in SMTProblem { smtLibPgm = toSMTLib config ki isSat comments is skolemMap consts tbls arrs uis axs pgm cstrs o }
 
