@@ -15,6 +15,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE InstanceSigs          #-}
 {-# LANGUAGE PatternGuards         #-}
 {-# LANGUAGE DefaultSignatures     #-}
 {-# LANGUAGE NamedFieldPuns        #-}
@@ -33,7 +34,7 @@ module Data.SBV.Core.Data
  , SW(..), trueSW, falseSW, trueCW, falseCW, normCW
  , SVal(..)
  , SBV(..), NodeId(..), mkSymSBV
- , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), mkSFunArray, SArray(..)
+ , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), SArray(..)
  , sbvToSW, sbvToSymSW, forceSWArg
  , SBVExpr(..), newExpr
  , cache, Cached, uncache, uncacheAI, HasKind(..)
@@ -47,7 +48,6 @@ module Data.SBV.Core.Data
  , SolverCapabilities(..)
  , extractSymbolicSimulationState
  , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..)
- , declNewSArray, declNewSFunArray
  , OptimizeStyle(..), Penalty(..), Objective(..)
  , QueryState(..), Query(..), SMTProblem(..)
  ) where
@@ -166,6 +166,9 @@ sNaN = literal nan
 sInfinity :: (Floating a, SymWord a) => SBV a
 sInfinity = literal infinity
 
+-- | Internal representation of a symbolic simulation result
+newtype SMTProblem = SMTProblem {smtLibPgm :: SMTConfig -> SMTLibPgm} -- ^ SMTLib representation, given the config
+
 -- Boolean combinators
 instance Boolean SBool where
   true  = SBV (svBool True)
@@ -262,6 +265,8 @@ sbvToSymSW sbv = do
 class SolverContext m where
    -- | Add a constraint, any satisfying instance must satisfy this condition
    constrain       :: SBool -> m ()
+   -- | Add a soft constraint. The solver will try to satisfy this condition if possible, but won't if it cannot
+   softConstrain   :: SBool -> m ()
    -- | Add a named constraint. The name is used in unsat-core extraction.
    namedConstraint :: String -> SBool -> m ()
    -- | Add a constraint, with arbitrary attributes. Used in interpolant generation.
@@ -411,6 +416,7 @@ instance (Random a, SymWord a) => Random (SBV a) where
                        (Just lb, Just hb) -> let (v, g') = randomR (lb, hb) g in (literal (v :: a), g')
                        _                  -> error "SBV.Random: Cannot generate random values with symbolic bounds"
   random         g = let (v, g') = random g in (literal (v :: a) , g')
+
 ---------------------------------------------------------------------------------
 -- * Symbolic Arrays
 ---------------------------------------------------------------------------------
@@ -418,18 +424,51 @@ instance (Random a, SymWord a) => Random (SBV a) where
 -- | Flat arrays of symbolic values
 -- An @array a b@ is an array indexed by the type @'SBV' a@, with elements of type @'SBV' b@.
 --
+-- If a default value is supplied, then all the array elements will be initialized to this value.
+-- Otherwise, they will be left unspecified, i.e., a read from an unwritten location will produce
+-- an uninterpreted constant.
+--
 -- While it's certainly possible for user to create instances of 'SymArray', the
 -- 'SArray' and 'SFunArray' instances already provided should cover most use cases
--- in practice. (There are some differences between these models, however, see the corresponding
--- declaration.)
+-- in practice. Note that there are a few differences between these two models in
+-- terms of use models:
 --
+--    * 'SArray' produces SMTLib arrays, and requires a solver that understands the
+--      array theory. 'SFunArray' is internally handled, and thus can be used with
+--      any solver. (Note that all solvers except 'abc' support arrays, so this isn't
+--      a big decision factor.)
 --
--- Minimal complete definition: All methods are required, no defaults.
+--    * For both arrays, if a default value is supplied, then reading from uninitialized
+--      cell will return that value. If the default is not given, then reading from
+--      uninitialized cells is still OK for both arrays, and will produce an uninterpreted
+--      constant in both cases.
+--
+--    * Only 'SArray' supports checking equality of arrays. (That is, checking if an entire
+--      array is equivalent to another.) 'SFunArray's cannot be checked for equality. In general,
+--      checking wholesale equality of arrays is a difficult decision problem and should be
+--      avoided if possible.
+--
+--    * Only 'SFunArray' supports compilation to C. Programs using 'SArray' will not be
+--      accepted by the C-code generator.
+--
+--    * You cannot use quickcheck on programs that contain these arrays. (Neither 'SArray'
+--      nor 'SFunArray'.)
+--
+--    * With 'SArray', SBV transfers all array-processing to the SMT-solver. So, it can generate
+--      programs more quickly, but they might end up being too hard for the solver to handle. With
+--      'SFunArray', SBV only generates code for individual elements and the array itself never
+--      shows up in the resulting SMTLib program. This puts more onus on the SBV side and might
+--      have some performance impacts, but it might generate problems that are easier for the SMT
+--      solvers to handle. 
+--
+-- As a rule of thumb, try 'SArray' first. These should generate compact code. However, if
+-- the backend solver has hard time solving the generated problems, switch to
+-- 'SFunArray'. If you still have issues, please report so we can see what the problem might be!
 class SymArray array where
-  -- | Create a new anonymous array
-  newArray_      :: (HasKind a, HasKind b) => Symbolic (array a b)
-  -- | Create a named new array
-  newArray       :: (HasKind a, HasKind b) => String -> Symbolic (array a b)
+  -- | Create a new anonymous array, possibly with a default initial value.
+  newArray_      :: (HasKind a, HasKind b) => Maybe (SBV b) -> Symbolic (array a b)
+  -- | Create a named new array, possibly with a default initial value.
+  newArray       :: (HasKind a, HasKind b) => String -> Maybe (SBV b) -> Symbolic (array a b)
   -- | Read the array element at @a@
   readArray      :: array a b -> SBV a -> SBV b
   -- | Update the element at @a@ to be @b@
@@ -438,70 +477,74 @@ class SymArray array where
   -- Intuitively: @mergeArrays cond a b = if cond then a else b@.
   -- Merging pushes the if-then-else choice down on to elements
   mergeArrays    :: SymWord b => SBV Bool -> array a b -> array a b -> array a b
+  -- | Internal function, not exported to the user
+  newArrayInState :: (HasKind a, HasKind b) => Maybe String -> Maybe (SBV b) -> State -> IO (array a b)
+
+  {-# MINIMAL readArray, writeArray, mergeArrays, newArrayInState #-}
+  newArray_   mbVal = ask >>= liftIO . newArrayInState Nothing   mbVal
+  newArray nm mbVal = ask >>= liftIO . newArrayInState (Just nm) mbVal
 
 -- | Arrays implemented in terms of SMT-arrays: <http://smtlib.cs.uiowa.edu/theories-ArraysEx.shtml>
 --
 --   * Maps directly to SMT-lib arrays
 --
---   * Reading from an unintialized value is OK and yields an unspecified result
+--   * Reading from an unintialized value is OK. If the default value is given in 'newArray', it will
+--     be the result. Otherwise, the read yields an uninterpreted constant.
 --
 --   * Can check for equality of these arrays
+--
+--   * Cannot be used in code-generation (i.e., compilation to C)
 --
 --   * Cannot quick-check theorems using @SArray@ values
 --
 --   * Typically slower as it heavily relies on SMT-solving for the array theory
---
 newtype SArray a b = SArray { unSArray :: SArr }
 
 instance (HasKind a, HasKind b) => Show (SArray a b) where
   show SArray{} = "SArray<" ++ showType (undefined :: a) ++ ":" ++ showType (undefined :: b) ++ ">"
 
 instance SymArray SArray where
-  newArray_                                      = declNewSArray (\t -> "array_" ++ show t)
-  newArray n                                     = declNewSArray (const n)
   readArray   (SArray arr) (SBV a)               = SBV (readSArr arr a)
   writeArray  (SArray arr) (SBV a)    (SBV b)    = SArray (writeSArr arr a b)
   mergeArrays (SBV t)      (SArray a) (SArray b) = SArray (mergeSArr t a b)
 
--- | Declare a new symbolic array, with a potential initial value
-declNewSArray :: forall a b. (HasKind a, HasKind b) => (Int -> String) -> Symbolic (SArray a b)
-declNewSArray mkNm = SArray <$> newSArr (aknd, bknd) mkNm
- where aknd = kindOf (undefined :: a)
-       bknd = kindOf (undefined :: b)
+  newArrayInState :: forall a b. (HasKind a, HasKind b) => Maybe String -> Maybe (SBV b) -> State -> IO (SArray a b)
+  newArrayInState mbNm mbVal st = do mapM_ (registerKind st) [aknd, bknd]
+                                     SArray <$> newSArr st (aknd, bknd) (mkNm mbNm) (unSBV <$> mbVal)
+     where mkNm Nothing   t = "array_" ++ show t
+           mkNm (Just nm) _ = nm
+           aknd = kindOf (undefined :: a)
+           bknd = kindOf (undefined :: b)
 
--- | Declare a new functional symbolic array. Note that a read from an uninitialized cell will result in an error.
-declNewSFunArray :: forall a b. (HasKind a, HasKind b) => Maybe String -> Symbolic (SFunArray a b)
-declNewSFunArray mbNm = return $ SFunArray $ error . msg mbNm
-  where msg Nothing   i = "Reading from an uninitialized array entry, index: " ++ show i
-        msg (Just nm) i = "Array " ++ show nm ++ ": Reading from an uninitialized array entry, index: " ++ show i
-
--- | Arrays implemented internally as functions
+-- | Arrays implemented internally, without translating to SMT-Lib functions:
 --
---    * Internally handled by the library and not mapped to SMT-Lib
+--   * Internally handled by the library and not mapped to SMT-Lib, hence can
+--     be used with solvers that don't support arrays. (Such as abc.)
 --
---    * Reading an uninitialized value is considered an error (will throw exception). See `mkSFunArray` on how to avoid this.
+--   * Reading from an unintialized value is OK. If the default value is given in 'newArray', it will
+--     be the result. Otherwise, the read yields an uninterpreted constant.
 --
---    * Cannot check for equality (internally represented as functions)
+--   * Cannot check for equality of arrays.
 --
---    * Can quick-check
+--   * Can be used in code-generation (i.e., compilation to C).
 --
---    * Typically faster as it gets compiled away during translation
+--   * Can not quick-check theorems using @SFunArray@ values
 --
-newtype SFunArray a b = SFunArray (SBV a -> SBV b)
+--   * Typically faster as it gets compiled away during translation.
+newtype SFunArray a b = SFunArray { unSFunArray :: SFunArr }
 
 instance (HasKind a, HasKind b) => Show (SFunArray a b) where
-  show (SFunArray _) = "SFunArray<" ++ showType (undefined :: a) ++ ":" ++ showType (undefined :: b) ++ ">"
+  show SFunArray{} = "SFunArray<" ++ showType (undefined :: a) ++ ":" ++ showType (undefined :: b) ++ ">"
 
--- | Lift a function to an array. Useful for creating arrays in a pure context. (Otherwise use `newArray`.)
--- A simple way to create an array such that reading an unintialized value is assigned a free variable is
--- to simply use an uninterpreted function. That is, use:
---
---  @ mkSFunArray (uninterpret "initial") @
---
--- Note that this will ensure all uninitialized reads to the same location will return the same value,
--- without constraining them otherwise; with different indexes containing different values.
-mkSFunArray :: (SBV a -> SBV b) -> SFunArray a b
-mkSFunArray = SFunArray
+instance SymArray SFunArray where
+  readArray   (SFunArray arr) (SBV a)             = SBV (readSFunArr arr a)
+  writeArray  (SFunArray arr) (SBV a) (SBV b)     = SFunArray (writeSFunArr arr a b)
+  mergeArrays (SBV t) (SFunArray a) (SFunArray b) = SFunArray (mergeSFunArr t a b)
 
--- | Internal representation of a symbolic simulation result
-newtype SMTProblem = SMTProblem {smtLibPgm :: SMTConfig -> SMTLibPgm} -- ^ SMTLib representation, given the config
+  newArrayInState :: forall a b. (HasKind a, HasKind b) => Maybe String -> Maybe (SBV b) -> State -> IO (SFunArray a b)
+  newArrayInState mbNm mbVal st = do mapM_ (registerKind st) [aknd, bknd]
+                                     SFunArray <$> newSFunArr st (aknd, bknd) (mkNm mbNm) (unSBV <$> mbVal)
+    where mkNm Nothing t   = "funArray_" ++ show t
+          mkNm (Just nm) _ = nm
+          aknd = kindOf (undefined :: a)
+          bknd = kindOf (undefined :: b)

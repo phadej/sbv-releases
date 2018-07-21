@@ -166,7 +166,7 @@ class Provable a where
 
   -- | Prove the predicate using the given SMT-solver.
   proveWith :: SMTConfig -> a -> IO ThmResult
-  proveWith = runWithQuery False $ ThmResult <$> Control.getSMTResult
+  proveWith = runWithQuery False $ checkNoOptimizations >> ThmResult <$> Control.getSMTResult
 
   -- | Find a satisfying assignment for a predicate, using the default solver.
   sat :: a -> IO SatResult
@@ -174,7 +174,7 @@ class Provable a where
 
   -- | Find a satisfying assignment using the given SMT-solver.
   satWith :: SMTConfig -> a -> IO SatResult
-  satWith = runWithQuery True $ SatResult <$> Control.getSMTResult
+  satWith = runWithQuery True $ checkNoOptimizations >> SatResult <$> Control.getSMTResult
 
   -- | Find all satisfying assignments, using the default solver. See 'allSatWith' for details.
   allSat :: a -> IO AllSatResult
@@ -192,7 +192,7 @@ class Provable a where
   -- function counter-example back from the SMT solver.
   --  Find all satisfying assignments using the given SMT-solver
   allSatWith :: SMTConfig -> a -> IO AllSatResult
-  allSatWith = runWithQuery True $ AllSatResult <$> Control.getAllSatResult
+  allSatWith = runWithQuery True $ checkNoOptimizations >> AllSatResult <$> Control.getAllSatResult
 
   -- | Optimize a given collection of `Objective`s
   optimize :: OptimizeStyle -> a -> IO OptimizeResult
@@ -244,9 +244,9 @@ class Provable a where
 
                    let needsUniversalOpt = let tag _  [] = Nothing
                                                tag nm xs = Just (nm, xs)
-                                               needsUniversal (Maximize   nm (x, _))   = tag nm (chaseUniversal x)
-                                               needsUniversal (Minimize   nm (x, _))   = tag nm (chaseUniversal x)
-                                               needsUniversal (AssertSoft nm (x, _) _) = tag nm (chaseUniversal x)
+                                               needsUniversal (Maximize          nm (x, _))   = tag nm (chaseUniversal x)
+                                               needsUniversal (Minimize          nm (x, _))   = tag nm (chaseUniversal x)
+                                               needsUniversal (AssertWithPenalty nm (x, _) _) = tag nm (chaseUniversal x)
                                            in mapMaybe needsUniversal objectives
 
                    unless (null universals || null needsUniversalOpt) $
@@ -263,12 +263,12 @@ class Provable a where
 
                    let optimizerDirectives = concatMap minmax objectives ++ priority style
                          where mkEq (x, y) = "(assert (= " ++ show x ++ " " ++ show y ++ "))"
-                               minmax (Minimize   _  xy@(_, v))     = [mkEq xy, "(minimize "    ++ signAdjust v (show v) ++ ")"]
-                               minmax (Maximize   _  xy@(_, v))     = [mkEq xy, "(maximize "    ++ signAdjust v (show v) ++ ")"]
-                               minmax (AssertSoft nm xy@(_, v) mbp) = [mkEq xy, "(assert-soft " ++ signAdjust v (show v) ++ penalize mbp ++ ")"]
+                               minmax (Minimize          _  xy@(_, v))     = [mkEq xy, "(minimize "    ++ signAdjust v (show v) ++ ")"]
+                               minmax (Maximize          _  xy@(_, v))     = [mkEq xy, "(maximize "    ++ signAdjust v (show v) ++ ")"]
+                               minmax (AssertWithPenalty nm xy@(_, v) mbp) = [mkEq xy, "(assert-soft " ++ signAdjust v (show v) ++ penalize mbp ++ ")"]
                                  where penalize DefaultPenalty    = ""
                                        penalize (Penalty w mbGrp)
-                                          | w <= 0         = error $ unlines [ "SBV.AssertSoft: Goal " ++ show nm ++ " is assigned a non-positive penalty: " ++ shw
+                                          | w <= 0         = error $ unlines [ "SBV.AssertWithPenalty: Goal " ++ show nm ++ " is assigned a non-positive penalty: " ++ shw
                                                                              , "All soft goals must have > 0 penalties associated."
                                                                              ]
                                           | True           = " :weight " ++ shw ++ maybe "" group mbGrp
@@ -383,6 +383,15 @@ class Provable a where
 
         return $ out ++ "\n(check-sat)\n"
 
+checkNoOptimizations :: Query ()
+checkNoOptimizations = do objectives <- Control.getObjectives
+
+                          unless (null objectives) $
+                                error $ unlines [ ""
+                                                , "*** Data.SBV: Unsupported call sat/prove when optimization objectives are present."
+                                                , "*** Use \"optimize\"/\"optimizeWith\" to calculate optimal satisfaction!"
+                                                ]
+
 instance Provable Predicate where
   forAll_    = id
   forAll []  = id
@@ -420,19 +429,19 @@ instance (SymWord a, Provable p) => Provable (SBV a -> p) where
 
 -- SFunArrays (memory, functional representation), only supported universally for the time being
 instance (HasKind a, HasKind b, Provable p) => Provable (SArray a b -> p) where
-  forAll_       k = declNewSArray (\t -> "array_" ++ show t) >>= \a -> forAll_   $ k a
-  forAll (s:ss) k = declNewSArray (const s)                  >>= \a -> forAll ss $ k a
+  forAll_       k = newArray_  Nothing >>= \a -> forAll_   $ k a
+  forAll (s:ss) k = newArray s Nothing >>= \a -> forAll ss $ k a
   forAll []     k = forAll_ k
-  forSome_      _ = error "SBV.forSome: Existential arrays are not currently supported."
-  forSome _     _ = error "SBV.forSome: Existential arrays are not currently supported."
+  forSome_      _ = error "SBV.forSome.SFunArray: Existential arrays are not currently supported."
+  forSome _     _ = error "SBV.forSome.SFunArray: Existential arrays are not currently supported."
 
 -- SArrays (memory, SMT-Lib notion of arrays), only supported universally for the time being
 instance (HasKind a, HasKind b, Provable p) => Provable (SFunArray a b -> p) where
-  forAll_       k = declNewSFunArray Nothing >>= \a -> forAll_   $ k a
-  forAll (_:ss) k = declNewSFunArray Nothing >>= \a -> forAll ss $ k a
+  forAll_       k = newArray_  Nothing >>= \a -> forAll_   $ k a
+  forAll (s:ss) k = newArray s Nothing >>= \a -> forAll ss $ k a
   forAll []     k = forAll_ k
-  forSome_      _ = error "SBV.forSome: Existential arrays are not currently supported."
-  forSome _     _ = error "SBV.forSome: Existential arrays are not currently supported."
+  forSome_      _ = error "SBV.forSome.SArray: Existential arrays are not currently supported."
+  forSome _     _ = error "SBV.forSome.SArray: Existential arrays are not currently supported."
 
 -- 2 Tuple
 instance (SymWord a, SymWord b, Provable p) => Provable ((SBV a, SBV b) -> p) where
@@ -500,7 +509,7 @@ runSMTWith cfg a = fst <$> runSymbolic (SMTMode ISetup True cfg) a
 runWithQuery :: Provable a => Bool -> Query b -> SMTConfig -> a -> IO b
 runWithQuery isSAT q cfg a = fst <$> runSymbolic (SMTMode ISetup isSAT cfg) comp
   where comp =  do _ <- (if isSAT then forSome_ else forAll_) a >>= output
-                   Control.query q
+                   Control.executeQuery QueryInternal q
 
 -- | Check if a safe-call was safe or not, turning a 'SafeResult' to a Bool.
 isSafe :: SafeResult -> Bool

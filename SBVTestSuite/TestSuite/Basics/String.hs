@@ -8,7 +8,7 @@
 -- Stability   :  experimental
 --
 -- Test the string functions.
--- Most of these tests are adopted from <https://rise4fun.com/z3/tutorialcontent/sequences>
+-- Most of these tests are adopted from <http://rise4fun.com/z3/tutorialcontent/sequences>
 -----------------------------------------------------------------------------
 
 module TestSuite.Basics.String(tests)  where
@@ -19,7 +19,12 @@ import Utils.SBVTestFramework
 import qualified Data.SBV.String as S
 import qualified Data.SBV.RegExp as R
 
-import Control.Monad (unless, void)
+import Control.Monad (unless)
+import Data.List (sort)
+
+import qualified Data.Map.Strict as M
+
+import qualified Data.Char as C
 
 -- Test suite
 tests :: TestTree
@@ -42,7 +47,7 @@ tests =
     , goldenCapturedIO "strExamples11" $ \rf -> checkWith z3{redirectVerbose=Just rf} strExamples11   Unsat
     , goldenCapturedIO "strExamples12" $ \rf -> checkWith z3{redirectVerbose=Just rf} strExamples12   Unsat
     , goldenCapturedIO "strExamples13" $ \rf -> checkWith z3{redirectVerbose=Just rf} strExamples13   Unsat
-    , goldenCapturedIO "strExamples14" $ \rf -> checkASat z3{redirectVerbose=Just rf} strExamples14
+    , testCase         "strExamples14" $ assert strExamples14
     ]
 
 checkWith :: SMTConfig -> Symbolic () -> CheckSatResult -> IO ()
@@ -54,9 +59,6 @@ checkWith cfg props csExpected = runSMTWith cfg{verbose=True} $ do
                        Unsat -> error "Failed! Expected Sat, got UNSAT"
                        Sat   -> getModel         >>= \r -> error $ "Failed! Expected Unsat, got SAT:\n" ++ show (SatResult (Satisfiable cfg r))
                        Unk   -> getUnknownReason >>= \r -> error $ "Failed! Expected Unsat, got UNK:\n" ++ show r
-
-checkASat :: SMTConfig -> Symbolic SBool -> IO ()
-checkASat cfg = void . allSatWith cfg{verbose=True}
 
 strConcatSat :: Symbolic ()
 strConcatSat = constrain $ "abc" .++ "def" .== "abcdef"
@@ -170,6 +172,14 @@ strExamples13 = do
    constrain $ bnot $ S.strToNat s .== 13
 
 -- Generate all length one strings, to enumerate all and making sure we can parse correctly
-strExamples14 :: Predicate
-strExamples14 = do s <- sString "s"
-                   return $ S.length s .== 1
+strExamples14 :: IO Bool
+strExamples14 = do m <- allSat $ do s <- sString "s"
+                                    return $ S.length s .== 1
+                   let dicts = getModelDictionaries m
+
+                       vals :: [Int]
+                       vals = map C.ord $ concat $ sort $ map (fromCW . snd) (concatMap M.assocs dicts)
+
+                   case length dicts of
+                     256 -> return $ vals == [0 .. 255]
+                     _   -> return False

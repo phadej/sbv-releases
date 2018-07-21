@@ -22,7 +22,7 @@ module Data.SBV.Internals (
   , module Data.SBV.Core.Data
 
   -- * Operations useful for instantiating SBV type classes
-  , genLiteral, genFromCW, CW(..), genMkSymVar, genParse, showModel, SMTModel(..), liftQRem, liftDMod
+  , genLiteral, genFromCW, CW(..), genMkSymVar, genParse, showModel, SMTModel(..), liftQRem, liftDMod, registerKind
 
   -- * Compilation to C, extras
   , compileToC', compileToCLib'
@@ -43,11 +43,14 @@ module Data.SBV.Internals (
   -- $coordinateSolverInfo
   , sendStringToSolver, sendRequestToSolver, retrieveResponseFromSolver
 
+  -- * Defining new metrics
+  , addSValOptGoal
+
   ) where
 
 import Data.SBV.Core.Data
 import Data.SBV.Core.Model      (genLiteral, genFromCW, genMkSymVar, liftQRem, liftDMod)
-import Data.SBV.Core.Symbolic   (IStage(..))
+import Data.SBV.Core.Symbolic   (IStage(..), addSValOptGoal, registerKind)
 
 import Data.SBV.Compilers.C       (compileToC', compileToCLib')
 import Data.SBV.Compilers.CodeGen

@@ -121,10 +121,10 @@ findInjection expr = runSMT $ do
     badTopic <- sString "badTopic"
 
     -- Create an initial environment that returns the symbolic
-    -- value my_topicid only, and undefined for all other variables
-    undef      <- sString "uninitialized"
-    let env :: SFunArray String String
-        env = mkSFunArray $ \varName -> ite (varName .== "my_topicid") badTopic undef
+    -- value my_topicid only, and unspecified for all other variables
+    emptyEnv :: SFunArray String String <- newArray "emptyEnv" Nothing
+
+    let env = writeArray emptyEnv "my_topicid" badTopic
 
     (_, queries) <- runWriterT (evalStateT (eval expr) env)
 

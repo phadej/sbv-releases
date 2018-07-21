@@ -264,7 +264,7 @@ genQRems = map mkTest $
         -- Haskell's divMod and quotRem differs from SBV's in two ways:
         --     - when y is 0, Haskell throws an exception, SBV sets the result to 0; like in division
         --     - Haskell overflows if x == minBound and y == -1 for bounded signed types; but SBV returns minBound, 0; which is more meaningful
-        -- NB. There was a ticket filed against the second anomaly above, See: https://ghc.haskell.org/trac/ghc/ticket/8695
+        -- NB. There was a ticket filed against the second anomaly above, See: http://ghc.haskell.org/trac/ghc/ticket/8695
         -- But the Haskell folks decided not to fix it. Sigh..
         overflow x y = x == minBound && y == -1
         divMod0  x y = if y == 0       then (0, x) else x `divMod`   y
@@ -449,7 +449,7 @@ genFloats = bTests ++ uTests ++ fpTests1 ++ fpTests2 ++ converts
           | True               = a == b
 
         cvtTest  (nm, x, a, b)  = testCase ("arithCF-" ++ nm ++ "." ++ x) (same (extract a) (extract b) `showsAs` "True")
-        cvtTestI (nm, x, a, b)  = testCase ("arithCF-" ++ nm ++ "." ++ x) ((a == b) `showsAs` "True")
+        cvtTestI (nm, x, a, b)  = testCase ("arithCF-" ++ nm ++ "." ++ x) ((a .== b) `showsAs` "True")
 
         mkTest1 (nm, (x, s))    = testCase ("arithCF-" ++ nm ++ "." ++ x) (s `showsAs` "True")
         mkTest2 (nm, (x, y, s)) = testCase ("arithCF-" ++ nm ++ "." ++ x ++ "_" ++ y) (s `showsAs` "True")

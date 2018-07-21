@@ -24,7 +24,7 @@ module Data.SBV.Control.Utils (
      , ask, send, getValue, getUninterpretedValue, getValueCW, getUnsatAssumptions, SMTValue(..)
      , getQueryState, modifyQueryState, getConfig, getObjectives, getSBVAssertions, getSBVPgm, getQuantifiedInputs, getObservables
      , checkSat, checkSatUsing, getAllSatResult
-     , inNewContext, freshVar, freshVar_
+     , inNewContext, freshVar, freshVar_, freshArray, freshArray_
      , parse
      , unexpected
      , timeout
@@ -32,23 +32,27 @@ module Data.SBV.Control.Utils (
      , retrieveResponse
      , recoverKindedValue
      , runProofOn
+     , executeQuery
      ) where
 
 import Data.Maybe (isJust)
-import Data.List  (sortBy, elemIndex, partition, groupBy, tails)
+import Data.List  (sortBy, sortOn, elemIndex, partition, groupBy, tails, intercalate)
 
 import Data.Char     (isPunctuation, isSpace, chr)
-import Data.Ord      (comparing)
 import Data.Function (on)
 
 import Data.Int
 import Data.Word
 
-import qualified Data.Map    as Map
-import qualified Data.IntMap as IMap
+import qualified Data.Map.Strict    as Map
+import qualified Data.IntMap.Strict as IMap
+
+import qualified Control.Monad.Reader as R (ask)
 
 import Control.Monad            (unless)
 import Control.Monad.State.Lazy (get, liftIO)
+
+import Control.Monad.State      (evalStateT)
 
 import Data.IORef (readIORef, writeIORef)
 
@@ -58,17 +62,23 @@ import Data.SBV.Core.Data     ( SW(..), CW(..), SBV, AlgReal, sbvToSW, kindOf, K
                               , HasKind(..), mkConstCW, CWVal(..), SMTResult(..)
                               , NamedSymVar, SMTConfig(..), Query, SMTModel(..)
                               , QueryState(..), SVal(..), Quantifier(..), cache
-                              , newExpr, SBVExpr(..), Op(..), FPOp(..), SBV(..)
+                              , newExpr, SBVExpr(..), Op(..), FPOp(..), SBV(..), SymArray(..)
                               , SolverContext(..), SBool, Objective(..), SolverCapabilities(..), capabilities
                               , Result(..), SMTProblem(..), trueSW, SymWord(..), SBVPgm(..), SMTSolver(..), SBVRunMode(..)
                               )
-import Data.SBV.Core.Symbolic (IncState(..), withNewIncState, State(..), svToSW, registerLabel, svMkSymVar, isSafetyCheckingIStage, isSetupIStage)
+
+import Data.SBV.Core.Symbolic ( IncState(..), withNewIncState, State(..), svToSW, Symbolic
+                              , QueryContext(..)
+                              , registerLabel, svMkSymVar
+                              , isSafetyCheckingIStage, isSetupIStage, isRunIStage, IStage(..), Query(..)
+                              , extractSymbolicSimulationState
+                              )
 
 import Data.SBV.Core.AlgReals   (mergeAlgReals)
 import Data.SBV.Core.Operations (svNot, svNotEqual, svOr)
 
 import Data.SBV.SMT.SMTLib  (toIncSMTLib, toSMTLib)
-import Data.SBV.SMT.Utils   (showTimeoutValue, addAnnotations, alignPlain, debug, mergeSExpr, SMTException(..))
+import Data.SBV.SMT.Utils   (showTimeoutValue, addAnnotations, alignPlain, debug, mergeSExpr, SBVException(..))
 
 import Data.SBV.Utils.Lib (qfsToString)
 
@@ -83,9 +93,10 @@ import GHC.Stack
 
 -- | 'Query' as a 'SolverContext'.
 instance SolverContext Query where
-   constrain                 = addQueryConstraint []
-   namedConstraint nm        = addQueryConstraint [(":named", nm)]
-   constrainWithAttribute    = addQueryConstraint
+   constrain                 = addQueryConstraint False []
+   softConstrain             = addQueryConstraint True  []
+   namedConstraint nm        = addQueryConstraint False [(":named", nm)]
+   constrainWithAttribute    = addQueryConstraint False
 
    setOption o
      | isStartModeOption o = error $ unlines [ ""
@@ -94,12 +105,14 @@ instance SolverContext Query where
                                              ]
      | True                = send True $ setSMTOption o
 
--- | Adding a constraint, possibly with attributes. Only used internally.
+-- | Adding a constraint, possibly with attributes and possibly soft. Only used internally.
 -- Use 'constrain' and 'namedConstraint' from user programs.
-addQueryConstraint :: [(String, String)] -> SBool -> Query ()
-addQueryConstraint atts b = do sw <- inNewContext (\st -> do mapM_ (registerLabel st) [nm | (":named", nm) <- atts]
-                                                             sbvToSW st b)
-                               send True $ "(assert " ++ addAnnotations atts (show sw)  ++ ")"
+addQueryConstraint :: Bool -> [(String, String)] -> SBool -> Query ()
+addQueryConstraint isSoft atts b = do sw <- inNewContext (\st -> do mapM_ (registerLabel "Constraint" st) [nm | (":named", nm) <- atts]
+                                                                    sbvToSW st b)
+                                      send True $ "(" ++ asrt ++ " " ++ addAnnotations atts (show sw)  ++ ")"
+   where asrt | isSoft = "assert-soft"
+              | True   = "assert"
 
 -- | Get the current configuration
 getConfig :: Query SMTConfig
@@ -190,6 +203,21 @@ freshVar_ = inNewContext $ fmap SBV . svMkSymVar (Just EX) k Nothing
 freshVar :: forall a. SymWord a => String -> Query (SBV a)
 freshVar nm = inNewContext $ fmap SBV . svMkSymVar (Just EX) k (Just nm)
   where k = kindOf (undefined :: a)
+
+-- | Similar to 'freshArray', except creates unnamed array.
+freshArray_ :: (SymArray array, HasKind a, HasKind b) => Maybe (SBV b) -> Query (array a b)
+freshArray_ = mkFreshArray Nothing
+
+-- | Create a fresh array in query mode. Again, you should prefer
+-- creating arrays before the queries start using 'newArray', but this
+-- method can come in handy in occasional cases where you need a new array
+-- after you start the query based interaction.
+freshArray :: (SymArray array, HasKind a, HasKind b) => String -> Maybe (SBV b) -> Query (array a b)
+freshArray nm = mkFreshArray (Just nm)
+
+-- | Creating arrays, internal use only.
+mkFreshArray :: (SymArray array, HasKind a, HasKind b) => Maybe String -> Maybe (SBV b) -> Query (array a b)
+mkFreshArray mbNm mbVal = inNewContext $ newArrayInState mbNm mbVal
 
 -- | If 'verbose' is 'True', print the message, useful for debugging messages
 -- in custom queries. Note that 'redirectVerbose' will be respected: If a
@@ -569,7 +597,7 @@ getAllSatResult = do queryDebug ["*** Checking Satisfiability, all solutions.."]
                                                            . filter (\l -> length l > 1)  -- Only need this class if it has at least two members
                                                            . map (map fst)                -- throw away values, we only need svals
                                                            . groupBy ((==) `on` snd)      -- make sure they belong to the same sort and have the same value
-                                                           . sortBy (comparing snd)       -- sort them according to their CW (i.e., sort/value)
+                                                           . sortOn snd                   -- sort them according to their CW (i.e., sort/value)
                                                            $ uninterpreteds
                                             where pwDistinct :: [SVal] -> [SVal]
                                                   pwDistinct ss = [x `svNotEqual` y | (x:ys) <- tails ss, y <- ys]
@@ -662,16 +690,16 @@ unexpected ctx sent expected mbHint received mbReason = do
 
         cfg <- getConfig
 
-        let exc = SMTException { smtExceptionDescription = "Data.SBV: Unexpected response from the solver, context: " ++ ctx
-                               , smtExceptionSent        = sent
-                               , smtExceptionExpected    = expected
-                               , smtExceptionReceived    = received
-                               , smtExceptionStdOut      = unlines extras
-                               , smtExceptionStdErr      = Nothing
-                               , smtExceptionExitCode    = Nothing
-                               , smtExceptionConfig      = cfg
-                               , smtExceptionReason      = mbReason
-                               , smtExceptionHint        = mbHint
+        let exc = SBVException { sbvExceptionDescription = "Unexpected response from the solver, context: " ++ ctx
+                               , sbvExceptionSent        = Just sent
+                               , sbvExceptionExpected    = Just expected
+                               , sbvExceptionReceived    = Just received
+                               , sbvExceptionStdOut      = Just $ unlines extras
+                               , sbvExceptionStdErr      = Nothing
+                               , sbvExceptionExitCode    = Nothing
+                               , sbvExceptionConfig      = cfg
+                               , sbvExceptionReason      = mbReason
+                               , sbvExceptionHint        = mbHint
                                }
 
         io $ C.throwIO exc
@@ -709,5 +737,131 @@ runProofOn rm comments res@(Result ki _qcInfo _observables _codeSegs is consts t
                                                ]
 
      in SMTProblem { smtLibPgm = toSMTLib config ki isSat comments is skolemMap consts tbls arrs uis axs pgm cstrs o }
+
+-- | Execute a query
+executeQuery :: QueryContext -> Query a -> Symbolic a
+executeQuery queryContext (Query userQuery) = do
+     st <- R.ask
+     rm <- liftIO $ readIORef (runMode st)
+
+     -- If we're doing an external query, then we cannot allow quantifiers to be present. Why?
+     -- Consider:
+     --
+     --      issue = do x :: SBool <- forall_
+     --                 y :: SBool <- exists_
+     --                 constrain y
+     --                 query $ do checkSat
+     --                         (,) <$> getValue x <*> getValue y
+     --
+     -- This is the (simplified/annotated SMTLib we would generate:)
+     --
+     --     (declare-fun s1 (Bool) Bool)   ; s1 is the function that corresponds to the skolemized 'y'
+     --     (assert (forall ((s0 Bool))    ; s0 is 'x'
+     --                 (s1 s0)))          ; s1 applied to s0 is the actual 'y'
+     --     (check-sat)
+     --     (get-value (s0))        ; s0 simply not visible here
+     --     (get-value (s1))        ; s1 is visible, but only via 's1 s0', so it is also not available.
+     --
+     -- And that would be terrible! The scoping rules of our "quantified" variables and how they map to
+     -- SMTLib is just not compatible. This is a historical design issue, but too late at this point. (We
+     -- should've never allowed general quantification like this, but only in limited contexts.)
+     --
+     -- So, we check if this is an external-query, and if there are quantified variables. If so, we
+     -- cowardly refuse to continue. For details, see: <http://github.com/LeventErkok/sbv/issues/407>
+
+     () <- liftIO $ case queryContext of
+                      QueryInternal -> return ()         -- we're good, internal usages don't mess with scopes
+                      QueryExternal -> do
+                        (userInps, _) <- readIORef (rinps st)
+                        let badInps = reverse [n | (ALL, (_, n)) <- userInps]
+                        case badInps of
+                          [] -> return ()
+                          _  -> let plu | length badInps > 1 = "s require"
+                                        | True               = " requires"
+                                in error $ unlines [ ""
+                                                   , "*** Data.SBV: Unsupported query call in the presence of quantified inputs."
+                                                   , "***"
+                                                   , "*** The following variable" ++ plu ++ " explicit quantification: "
+                                                   , "***"
+                                                   , "***    " ++ intercalate ", " badInps
+                                                   , "***"
+                                                   , "*** While quantification and queries can co-exist in principle, SBV currently"
+                                                   , "*** does not support this scenario. Avoid using quantifiers with user queries"
+                                                   , "*** if possible. Please do get in touch if your use case does require such"
+                                                   , "*** a feature to see how we can accommodate such scenarios."
+                                                   ]
+
+     case rm of
+        -- Transitioning from setup
+        SMTMode stage isSAT cfg | not (isRunIStage stage) -> liftIO $ do
+
+                                                let backend = engine (solver cfg)
+
+                                                res     <- extractSymbolicSimulationState st
+                                                setOpts <- reverse <$> readIORef (rSMTOptions st)
+
+                                                let SMTProblem{smtLibPgm} = runProofOn rm [] res
+                                                    cfg' = cfg { solverSetOptions = solverSetOptions cfg ++ setOpts }
+                                                    pgm  = smtLibPgm cfg'
+
+                                                writeIORef (runMode st) $ SMTMode IRun isSAT cfg
+
+                                                backend cfg' st (show pgm) $ evalStateT userQuery
+
+        -- Already in a query, in theory we can just continue, but that causes use-case issues
+        -- so we reject it. TODO: Review if we should actually support this. The issue arises with
+        -- expressions like this:
+        --
+        -- In the following t0's output doesn't get recorded, as the output call is too late when we get
+        -- here. (The output field isn't "incremental.") So, t0/t1 behave differently!
+        --
+        --   t0 = satWith z3{verbose=True, transcript=Just "t.smt2"} $ query (return (false::SBool))
+        --   t1 = satWith z3{verbose=True, transcript=Just "t.smt2"} $ ((return (false::SBool)) :: Predicate)
+        --
+        -- Also, not at all clear what it means to go in an out of query mode:
+        --
+        -- r = runSMTWith z3{verbose=True} $ do
+        --         a' <- sInteger "a"
+        --
+        --        (a, av) <- query $ do _ <- checkSat
+        --                              av <- getValue a'
+        --                              return (a', av)
+        --
+        --        liftIO $ putStrLn $ "Got: " ++ show av
+        --        -- constrain $ a .> literal av + 1      -- Cant' do this since we're "out" of query. Sigh.
+        --
+        --        bv <- query $ do constrain $ a .> literal av + 1
+        --                         _ <- checkSat
+        --                         getValue a
+        --
+        --        return $ a' .== a' + 1
+        --
+        -- This would be one possible implementation, alas it has the problems above:
+        --
+        --    SMTMode IRun _ _ -> liftIO $ evalStateT userQuery st
+        --
+        -- So, we just reject it.
+
+        SMTMode IRun _ _ -> error $ unlines [ ""
+                                            , "*** Data.SBV: Unsupported nested query is detected."
+                                            , "***"
+                                            , "*** Please group your queries into one block. Note that this"
+                                            , "*** can also arise if you have a call to 'query' not within 'runSMT'"
+                                            , "*** For instance, within 'sat'/'prove' calls with custom user queries."
+                                            , "*** The solution is to do the sat/prove part in the query directly."
+                                            , "***"
+                                            , "*** While multiple/nested queries should not be necessary in general,"
+                                            , "*** please do get in touch if your use case does require such a feature,"
+                                            , "*** to see how we can accommodate such scenarios."
+                                            ]
+
+        -- Otherwise choke!
+        m -> error $ unlines [ ""
+                             , "*** Data.SBV: Invalid query call."
+                             , "***"
+                             , "***   Current mode: " ++ show m
+                             , "***"
+                             , "*** Query calls are only valid within runSMT/runSMTWith calls"
+                             ]
 
 {-# ANN module ("HLint: ignore Reduce duplication" :: String) #-}

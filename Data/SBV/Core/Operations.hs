@@ -26,7 +26,6 @@ module Data.SBV.Core.Operations
   , svAnd, svOr, svXOr, svNot
   , svShl, svShr, svRol, svRor
   , svExtract, svJoin
-  , svUninterpreted
   , svIte, svLazyIte, svSymbolicMerge
   , svSelect
   , svSign, svUnsign, svSetBit, svWordFromBE, svWordFromLE
@@ -39,6 +38,9 @@ module Data.SBV.Core.Operations
   , svRotateLeft, svRotateRight
   , svBlastLE, svBlastBE
   , svAddConstant, svIncrement, svDecrement
+  -- ** Basic array operations
+  , SArr,         readSArr,     writeSArr,     mergeSArr,     newSArr,     eqSArr
+  , SFunArr(..),  readSFunArr,  writeSFunArr,  mergeSFunArr,  newSFunArr
   -- Utils
   , mkSymOp
   )
@@ -46,6 +48,10 @@ module Data.SBV.Core.Operations
 
 import Data.Bits (Bits(..))
 import Data.List (genericIndex, genericLength, genericTake)
+
+import qualified Data.IORef         as R    (modifyIORef', newIORef, readIORef)
+import qualified Data.Map.Strict    as Map  (toList, fromList, lookup)
+import qualified Data.IntMap.Strict as IMap (IntMap, empty, toAscList, fromAscList, lookup, size, insert)
 
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Kind
@@ -455,21 +461,6 @@ svJoin x@(SVal (KBounded s i) a) y@(SVal (KBounded _ j) b)
               newExpr st k (SBVApp Join [xsw, ysw])
 svJoin _ _ = error "svJoin: non-bitvector type"
 
--- | Uninterpreted constants and functions. An uninterpreted constant is
--- a value that is indexed by its name. The only property the prover assumes
--- about these values are that they are equivalent to themselves; i.e., (for
--- functions) they return the same results when applied to same arguments.
--- We support uninterpreted-functions as a general means of black-box'ing
--- operations that are /irrelevant/ for the purposes of the proof; i.e., when
--- the proofs can be performed without any knowledge about the function itself.
-svUninterpreted :: Kind -> String -> Maybe [String] -> [SVal] -> SVal
-svUninterpreted k nm code args = SVal k $ Right $ cache result
-  where result st = do let ty = SBVType (map kindOf args ++ [k])
-                       newUninterpreted st nm ty code
-                       sws <- mapM (svToSW st) args
-                       mapM_ forceSWArg sws
-                       newExpr st k $ SBVApp (Uninterpreted nm) sws
-
 -- | If-then-else. This one will force branches.
 svIte :: SVal -> SVal -> SVal -> SVal
 svIte t a b = svSymbolicMerge (kindOf a) True t a b
@@ -725,7 +716,7 @@ svShift toLeft x i
         -- of i. Note that this is a *necessary* check, Consider for instance if we're shifting a
         -- 32-bit value using a 1-bit shift amount (which can happen if the value is 1 with minimal
         -- shift widths). We would compare 1 >= 32, but stuffing 32 into bit-vector of size 1 would
-        -- overflow. See https://github.com/LeventErkok/sbv/issues/323 for this case. Thus, we
+        -- overflow. See http://github.com/LeventErkok/sbv/issues/323 for this case. Thus, we
         -- make sure that the bit-vector would fit as a value.
         cannotOverShift = maxRepresentable <= fromIntegral (intSizeOf x)
           where maxRepresentable :: Integer
@@ -807,6 +798,323 @@ svMkOverflow o x y = SVal KBool (Right (cache r))
                     sy <- svToSW st y
                     newExpr st KBool $ SBVApp (OverflowOp o) [sx, sy]
 
+---------------------------------------------------------------------------------
+-- * Symbolic Arrays
+---------------------------------------------------------------------------------
+
+-- | Arrays in terms of SMT-Lib arrays
+data SArr = SArr (Kind, Kind) (Cached ArrayIndex)
+
+-- | Read the array element at @a@
+readSArr :: SArr -> SVal -> SVal
+readSArr (SArr (_, bk) f) a = SVal bk $ Right $ cache r
+  where r st = do arr <- uncacheAI f st
+                  i   <- svToSW st a
+                  newExpr st bk (SBVApp (ArrRead arr) [i])
+
+-- | Update the element at @a@ to be @b@
+writeSArr :: SArr -> SVal -> SVal -> SArr
+writeSArr (SArr ainfo f) a b = SArr ainfo $ cache g
+  where g st = do arr  <- uncacheAI f st
+                  addr <- svToSW st a
+                  val  <- svToSW st b
+                  amap <- R.readIORef (rArrayMap st)
+
+                  let j   = ArrayIndex $ IMap.size amap
+                      upd = IMap.insert (unArrayIndex j) ("array_" ++ show j, ainfo, ArrayMutate arr addr val)
+
+                  j `seq` modifyState st rArrayMap upd $ modifyIncState st rNewArrs upd
+                  return j
+
+-- | Merge two given arrays on the symbolic condition
+-- Intuitively: @mergeArrays cond a b = if cond then a else b@.
+-- Merging pushes the if-then-else choice down on to elements
+mergeSArr :: SVal -> SArr -> SArr -> SArr
+mergeSArr t (SArr ainfo a) (SArr _ b) = SArr ainfo $ cache h
+  where h st = do ai <- uncacheAI a st
+                  bi <- uncacheAI b st
+                  ts <- svToSW st t
+                  amap <- R.readIORef (rArrayMap st)
+
+                  let k   = ArrayIndex $ IMap.size amap
+                      upd = IMap.insert (unArrayIndex k) ("array_" ++ show k, ainfo, ArrayMerge ts ai bi)
+
+                  k `seq` modifyState st rArrayMap upd $ modifyIncState st rNewArrs upd
+                  return k
+
+-- | Create a named new array
+newSArr :: State -> (Kind, Kind) -> (Int -> String) -> Maybe SVal -> IO SArr
+newSArr st ainfo mkNm mbDef = do
+    amap <- R.readIORef $ rArrayMap st
+
+    mbSWDef <- case mbDef of
+                 Nothing -> return Nothing
+                 Just sv -> Just <$> svToSW st sv
+
+    let i   = ArrayIndex $ IMap.size amap
+        nm  = mkNm (unArrayIndex i)
+        upd = IMap.insert (unArrayIndex i) (nm, ainfo, ArrayFree mbSWDef)
+
+    registerLabel "SArray declaration" st nm
+
+    modifyState st rArrayMap upd $ modifyIncState st rNewArrs upd
+    return $ SArr ainfo $ cache $ const $ return i
+
+-- | Compare two arrays for equality
+eqSArr :: SArr -> SArr -> SVal
+eqSArr (SArr _ a) (SArr _ b) = SVal KBool $ Right $ cache c
+  where c st = do ai <- uncacheAI a st
+                  bi <- uncacheAI b st
+                  newExpr st KBool (SBVApp (ArrEq ai bi) [])
+
+-- | Arrays managed internally
+data SFunArr = SFunArr (Kind, Kind) (Cached FArrayIndex)
+
+-- | Convert a node-id to an SVal
+nodeIdToSVal :: Kind -> Int -> SVal
+nodeIdToSVal k i = swToSVal $ SW k (NodeId i)
+
+-- | Convert an SW to an SVal
+swToSVal :: SW -> SVal
+swToSVal sw@(SW k _) = SVal k $ Right $ cache $ const $ return sw
+
+-- | A variant of SVal equality, but taking into account of constants
+-- NB. The rationalCheck is paranid perhaps, but is necessary in case
+-- we have some funky polynomial roots in there. We do allow for
+-- floating-points here though. Why? Because the Eq instance of CW
+-- does the right thing by using object equality. (i.e., it does
+-- the right thing for NaN/+0/-0 etc.) A straightforward equality
+-- here would be wrong for floats!
+svEqualWithConsts :: (SVal, Maybe CW) -> (SVal, Maybe CW) -> SVal
+svEqualWithConsts sv1 sv2 = case (grabCW sv1, grabCW sv2) of
+                               (Just cw, Just cw') | rationalCheck cw cw' -> if cw == cw' then svTrue else svFalse
+                               _                                          -> fst sv1 `svEqual` fst sv2
+  where grabCW (_,                Just cw) = Just cw
+        grabCW (SVal _ (Left cw), _      ) = Just cw
+        grabCW _                           = Nothing
+
+-- | Read the array element at @a@. For efficiency purposes, we create a memo-table
+-- as we go along, as otherwise we suffer significant performance penalties. See:
+-- <http://github.com/LeventErkok/sbv/issues/402> and
+-- <http://github.com/LeventErkok/sbv/issues/396>.
+readSFunArr :: SFunArr -> SVal -> SVal
+readSFunArr (SFunArr (ak, bk) f) address
+  | kindOf address /= ak
+  = error $ "Data.SBV.readSFunArr: Impossible happened, accesing with address type: " ++ show (kindOf address) ++ ", expected: " ++ show ak
+  | True
+  = SVal bk $ Right $ cache r
+  where r st = do fArrayIndex <- uncacheFAI f st
+                  fArrMap     <- R.readIORef (rFArrayMap st)
+
+                  constMap <- R.readIORef (rconstMap st)
+                  let consts = Map.fromList [(i, cw) | (cw, SW _ (NodeId i)) <- Map.toList constMap]
+
+                  case unFArrayIndex fArrayIndex `IMap.lookup` fArrMap of
+                    Nothing -> error $ "Data.SBV.readSFunArr: Impossible happened while trying to access SFunArray, can't find index: " ++ show fArrayIndex
+                    Just (uninitializedRead, rCache) -> do
+                        memoTable  <- R.readIORef rCache
+                        SW _ (NodeId addressNodeId) <- svToSW st address
+
+                        -- If we hit the cache, return the result right away. If we miss, we need to
+                        -- walk through each element to "merge" all possible reads as we do not know
+                        -- whether the symbolic access may end up the same as one of the earlier ones
+                        -- in the cache.
+                        case addressNodeId `IMap.lookup` memoTable of
+                          Just v  -> return v  -- cache hit!
+
+                          Nothing -> -- cache miss; walk down the cache items to form the chain of reads:
+                                     do let aInfo = (address, addressNodeId `Map.lookup` consts)
+
+                                            find :: [(Int, SW)] -> SVal
+                                            find []             = uninitializedRead address
+                                            find ((i, v) : ivs) = svIte (svEqualWithConsts (nodeIdToSVal ak i, i `Map.lookup` consts) aInfo) (swToSVal v) (find ivs)
+
+                                            finalValue = find (IMap.toAscList memoTable)
+
+                                        finalSW <- svToSW st finalValue
+
+                                        -- Cache the result, so next time we can retrieve it faster if we look it up with the same address!
+                                        -- The following line is really the whole point of having caching in SFunArray!
+                                        R.modifyIORef' rCache (IMap.insert addressNodeId finalSW)
+
+                                        return finalSW
+
+-- | Update the element at @address@ to be @b@
+writeSFunArr :: SFunArr -> SVal -> SVal -> SFunArr
+writeSFunArr (SFunArr (ak, bk) f) address b
+  | kindOf address /= ak
+  = error $ "Data.SBV.writeSFunArr: Impossible happened, accesing with address type: " ++ show (kindOf address) ++ ", expected: " ++ show ak
+  | kindOf b /= bk
+  = error $ "Data.SBV.writeSFunArr: Impossible happened, accesing with address type: " ++ show (kindOf b) ++ ", expected: " ++ show bk
+  | True
+  = SFunArr (ak, bk) $ cache g
+  where g st = do fArrayIndex <- uncacheFAI f st
+                  fArrMap     <- R.readIORef (rFArrayMap st)
+                  constMap    <- R.readIORef (rconstMap st)
+
+                  let consts = Map.fromList [(i, cw) | (cw, SW _ (NodeId i)) <- Map.toList constMap]
+
+                  case unFArrayIndex fArrayIndex `IMap.lookup` fArrMap of
+                    Nothing          -> error $ "Data.SBV.writeSFunArr: Impossible happened while trying to access SFunArray, can't find index: " ++ show fArrayIndex
+
+                    Just (aUi, rCache) -> do
+                       memoTable <- R.readIORef rCache
+                       SW _ (NodeId addressNodeId) <- svToSW st address
+                       val              <- svToSW st b
+
+                       -- There are three cases:
+                       --
+                       --    (1) We hit the cache, and old value is the same as new: No write necessary, just return the array
+                       --    (2) We hit the cache, values are different. Simply insert, overriding the old-memo table location
+                       --    (3) We miss the cache: Now we have to walk through all accesses and update the memo table accordingly.
+                       --        Why? Just because we missed the cache doesn't mean that it's not there with a different "symbolic"
+                       --        address. So, we have to walk through and update each entry in case the address matches.
+                       --
+                       -- Below, we determine which case we're in and then insert the value at the end and continue
+                       cont <- case addressNodeId `IMap.lookup` memoTable of
+                                 Just oldVal                    -- Cache hit
+                                   | val == oldVal -> return $ Left fArrayIndex   -- Case 1
+                                   | True          -> return $ Right memoTable    -- Case 2
+
+                                 Nothing           -> do        -- Cache miss
+
+                                        let aInfo = (address, addressNodeId `Map.lookup` consts)
+
+                                            -- NB. The order of modifications here is important as we
+                                            -- keep the keys in ascending order. (Since we'll call fromAscList later on.)
+                                            walk :: [(Int, SW)] -> [(Int, SW)] -> IO [(Int, SW)]
+                                            walk []           sofar = return $ reverse sofar
+                                            walk ((i, s):iss) sofar = modify i s >>= \s' -> walk iss ((i, s') : sofar)
+
+                                            -- At the cached address i, currently storing value s. Conditionally update it to `b` (new value)
+                                            -- if the addresses match. Otherwise keep it the same.
+                                            modify :: Int -> SW -> IO SW
+                                            modify i s = svToSW st $ svIte (svEqualWithConsts (nodeIdToSVal ak i, i `Map.lookup` consts) aInfo) b (swToSVal s)
+
+                                        Right . IMap.fromAscList <$> walk (IMap.toAscList memoTable) []
+
+                       case cont of
+                         Left j   -> return j  -- There was a hit, and value was unchanged, nothing to do
+
+                         Right mt -> do        -- There was a hit, and the value was different; or there was a miss. Insert the new value
+                                               -- and create a new array. Note that we keep the aUi the same: Just because we modified
+                                               -- an array, it doesn't mean we change the uninitialized reads: they still come from the same place.
+                                               --
+                                        newMemoTable <- R.newIORef $ IMap.insert addressNodeId val mt
+
+                                        let j = FArrayIndex $ IMap.size fArrMap
+                                            upd = IMap.insert (unFArrayIndex j) (aUi, newMemoTable)
+
+                                        j `seq` modifyState st rFArrayMap upd (return ())
+                                        return j
+
+-- | Merge two given arrays on the symbolic condition
+-- Intuitively: @mergeArrays cond a b = if cond then a else b@.
+-- Merging pushes the if-then-else choice down on to elements
+mergeSFunArr :: SVal -> SFunArr -> SFunArr -> SFunArr
+mergeSFunArr t array1@(SFunArr ainfo@(sourceKind, targetKind) a) array2@(SFunArr binfo b)
+  | ainfo /= binfo
+  = error $ "Data.SBV.mergeSFunArr: Impossible happened, merging incompatbile arrays: " ++ show (ainfo, binfo)
+  | Just test <- svAsBool t
+  = if test then array1 else array2
+  | True
+  = SFunArr ainfo $ cache c
+  where c st = do ai <- uncacheFAI a st
+                  bi <- uncacheFAI b st
+
+                  constMap <- R.readIORef (rconstMap st)
+                  let consts = Map.fromList [(i, cw) | (cw, SW _ (NodeId i)) <- Map.toList constMap]
+
+                  -- Catch the degenerate case of merging an array with itself. One
+                  -- can argue this is pointless, but actually it comes up when one
+                  -- is merging composite structures (through a Mergeable class instance)
+                  -- that has an array component that didn't change. So, pays off in practice!
+                  if unFArrayIndex ai == unFArrayIndex bi
+                     then return ai  -- merging with itself, noop
+                     else do fArrMap <- R.readIORef (rFArrayMap st)
+
+                             case (unFArrayIndex ai `IMap.lookup` fArrMap, unFArrayIndex bi `IMap.lookup` fArrMap) of
+                               (Nothing, _) -> error $ "Data.SBV.mergeSFunArr: Impossible happened while trying to access SFunArray, can't find index: " ++ show ai
+                               (_, Nothing) -> error $ "Data.SBV.mergeSFunArr: Impossible happened while trying to access SFunArray, can't find index: " ++ show bi
+                               (Just (aUi, raCache), Just (bUi, rbCache)) -> do
+
+                                   -- This is where the complication happens. We need to merge the caches. If the same
+                                   -- key appears in both, then that's the easy case: Just merge the entries. But if
+                                   -- a key only appears in one but not the other? Just like in the read/write cases,
+                                   -- we have to consider the possibility that the missing key can be any one of the
+                                   -- other elements in the cache. So, for each non-matching key in either memo-table,
+                                   -- we traverse the other and create a chain of look-up values.
+                                   aMemo <- R.readIORef raCache
+                                   bMemo <- R.readIORef rbCache
+
+                                   let aMemoT = IMap.toAscList aMemo
+                                       bMemoT = IMap.toAscList bMemo
+
+                                       -- gen takes a uninitialized-read creator, a key, and the choices from the "other"
+                                       -- cache that this key may map to. And creates a new SW that corresponds to the
+                                       -- merged value:
+                                       gen :: (SVal -> SVal) -> Int -> [(Int, SW)] -> IO SW
+                                       gen mk k choices = svToSW st $ walk choices
+                                         where kInfo = (nodeIdToSVal sourceKind k, k `Map.lookup` consts)
+
+                                               walk :: [(Int, SW)] -> SVal
+                                               walk []             = mk (fst kInfo)
+                                               walk ((i, v) : ivs) = svIte (svEqualWithConsts (nodeIdToSVal sourceKind i, i `Map.lookup` consts) kInfo)
+                                                                           (swToSVal v)
+                                                                           (walk ivs)
+
+                                       -- Insert into an existing map the new key value by merging according to the test
+                                       fill :: Int -> SW -> SW -> IMap.IntMap SW -> IO (IMap.IntMap SW)
+                                       fill k (SW _ (NodeId ni1)) (SW _ (NodeId ni2)) m = do v <- svToSW st (svIte t sval1 sval2)
+                                                                                             return $ IMap.insert k v m
+                                         where sval1 = nodeIdToSVal targetKind ni1
+                                               sval2 = nodeIdToSVal targetKind ni2
+
+                                       -- Walk down the memo-tables in tandem. If we find a common key: Simply fill it in. If we find
+                                       -- a key only in one, generate the corresponding read from the other cache, and do the fill.
+                                       merge []                  []                  sofar = return sofar
+                                       merge ((k1, v1) : as)     []                  sofar = gen bUi k1 bMemoT >>= \v2  -> fill k1 v1  v2 sofar  >>= merge as []
+                                       merge []                  ((k2, v2) : bs)     sofar = gen aUi k2 aMemoT >>= \v1  -> fill k2 v1  v2 sofar  >>= merge [] bs
+                                       merge ass@((k1, v1) : as) bss@((k2, v2) : bs) sofar
+                                         | k1 < k2                                         = gen bUi k1 bMemoT >>= \nv2 -> fill k1 v1  nv2 sofar >>= merge as  bss
+                                         | k1 > k2                                         = gen aUi k2 aMemoT >>= \nv1 -> fill k2 nv1 v2  sofar >>= merge ass bs
+                                         | True                                            =                               fill k1 v1  v2  sofar >>= merge as  bs
+
+                                   mergedMap  <- merge aMemoT bMemoT IMap.empty
+                                   memoMerged <- R.newIORef mergedMap
+
+                                   -- Craft a new uninitializer. Note that we do *not* create a new initializer here,
+                                   -- but simply merge the two initializers which will inherit their original unread
+                                   -- references should the test be a constant.
+                                   let mkUninitialized i = svIte t (aUi i) (bUi i)
+
+                                   -- Add it to our collection:
+                                   let j   = FArrayIndex $ IMap.size fArrMap
+                                       upd = IMap.insert (unFArrayIndex j) (mkUninitialized, memoMerged)
+
+                                   j `seq` modifyState st rFArrayMap upd (return ())
+
+                                   return j
+
+-- | Create a named new array
+newSFunArr :: State -> (Kind, Kind) -> (Int -> String) -> Maybe SVal -> IO SFunArr
+newSFunArr st (ak, bk) mkNm mbDef = do
+        fArrMap <- R.readIORef (rFArrayMap st)
+        memoTable <- R.newIORef IMap.empty
+
+        let j  = FArrayIndex $ IMap.size fArrMap
+            nm = mkNm (unFArrayIndex j)
+            mkUninitialized i = case mbDef of
+                                  Just def -> def
+                                  _        -> svUninterpreted bk (nm ++ "_uninitializedRead") Nothing [i]
+
+            upd = IMap.insert (unFArrayIndex j) (mkUninitialized, memoTable)
+
+        registerLabel "SFunArray declaration" st nm
+        j `seq` modifyState st rFArrayMap upd (return ())
+
+        return $ SFunArr (ak, bk) $ cache $ const $ return j
+
 --------------------------------------------------------------------------------
 -- Utility functions
 
@@ -878,7 +1186,7 @@ constants for the branches would still be generated. (i.e., in the above example
 It seems to me that the price to pay is rather high, as this is hardly the most common case; so we're opting
 here to ignore these cases.
 
-See https://github.com/LeventErkok/sbv/issues/379 for some further discussion.
+See http://github.com/LeventErkok/sbv/issues/379 for some further discussion.
 -}
 liftSW2 :: (State -> Kind -> SW -> SW -> IO SW) -> Kind -> SVal -> SVal -> Cached SW
 liftSW2 opS k a b = cache c

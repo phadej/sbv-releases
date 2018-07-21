@@ -17,9 +17,9 @@ import Data.List  (intercalate, partition, unzip3)
 import Data.Maybe (listToMaybe, fromMaybe)
 
 import qualified Data.Foldable as F (toList)
-import qualified Data.Map      as M
-import qualified Data.IntMap   as IM
-import qualified Data.Set      as Set
+import qualified Data.Map.Strict      as M
+import qualified Data.IntMap.Strict   as IM
+import qualified Data.Set             as Set
 
 import Data.SBV.Core.Data
 import Data.SBV.SMT.Utils
@@ -42,6 +42,7 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
         hasBVs         = hasChar || not (null [() | KBounded{} <- Set.toList kindInfo])   -- Remember, characters map to Word8
         usorts         = [(s, dt) | KUserSort s dt <- Set.toList kindInfo]
         hasNonBVArrays = (not . null) [() | (_, (_, (k1, k2), _)) <- arrs, not (isBounded k1 && isBounded k2)]
+        hasArrayInits  = (not . null) [() | (_, (_, _, ArrayFree (Just _))) <- arrs]
         rm             = roundingMode cfg
         solverCaps     = capabilities (solver cfg)
 
@@ -52,7 +53,7 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
                          []  -> Nothing
                          [l] -> Just l
                          ls  -> error $ unlines [ ""
-                                                , "*** Only one setOption call to 'SetLogic' is allowed, found: " ++ show (length ls)
+                                                , "*** Only one setOption call to 'setLogic' is allowed, found: " ++ show (length ls)
                                                 , "***  " ++ unwords (map show ls)
                                                 ]
            = case l of
@@ -63,6 +64,10 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
            -- NB. This isn't really fool proof!
 
            -- we never set QF_S (ALL seems to work better in all cases)
+           
+           | hasArrayInits
+           = ["(set-logic ALL)"]
+
            | hasString
            = ["(set-logic ALL)"]
 
@@ -157,7 +162,7 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
 
         (constTables, skolemTables) = ([(t, d) | (t, Left d) <- allTables], [(t, d) | (t, Right d) <- allTables])
         allTables = [(t, genTableData rm skolemMap (not (null foralls), forallArgs) (map fst consts) t) | t <- tbls]
-        (arrayConstants, arrayDelayeds, arraySetups) = unzip3 $ map (declArray False (not (null foralls)) (map fst consts) skolemMap) arrs
+        (arrayConstants, arrayDelayeds, arraySetups) = unzip3 $ map (declArray cfg False (not (null foralls)) consts skolemMap) arrs
         delayedEqualities = concatMap snd skolemTables
 
         delayedAsserts []              = []
@@ -169,18 +174,27 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
 
         finalAssert
           | null foralls
-          = map (\a -> "(assert " ++ uncurry addAnnotations a ++ ")") assertions
+          =    map (\a -> "(assert "      ++ uncurry addAnnotations a ++ ")") hardAsserts
+            ++ map (\a -> "(assert-soft " ++ uncurry addAnnotations a ++ ")") softAsserts
           | not (null namedAsserts)
           = error $ intercalate "\n" [ "SBV: Constraints with attributes and quantifiers cannot be mixed!"
                                      , "   Quantified variables: " ++ unwords (map show foralls)
                                      , "   Named constraints   : " ++ intercalate ", " (map show namedAsserts)
                                      ]
+          | not (null softAsserts)
+          = error $ intercalate "\n" [ "SBV: Soft constraints and quantifiers cannot be mixed!"
+                                     , "   Quantified variables: " ++ unwords (map show foralls)
+                                     , "   Soft constraints    : " ++ intercalate ", " (map show softAsserts)
+                                     ]
           | True
           = [impAlign (letShift combined) ++ replicate noOfCloseParens ')']
-          where namedAsserts = [findName attrs | (attrs, _) <- assertions, not (null attrs)]
+          where namedAsserts = [findName attrs | (_, attrs, _) <- assertions, not (null attrs)]
                  where findName attrs = fromMaybe "<anonymous>" (listToMaybe [nm | (":named", nm) <- attrs])
 
-                combined = case map snd assertions of
+                hardAsserts = [(attr, v) | (False, attr, v) <- assertions]
+                softAsserts = [(attr, v) | (True,  attr, v) <- assertions]
+
+                combined = case map snd hardAsserts of
                              [x] -> x
                              xs  -> "(and " ++ unwords xs ++ ")"
 
@@ -203,13 +217,14 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
         -- That is, we always assert all path constraints and path conditions AND
         --     -- negation of the output in a prove
         --     -- output itself in a sat
+        assertions :: [(Bool, [(String, String)], String)]
         assertions
-           | null finals = [([], cvtSW skolemMap trueSW)]
+           | null finals = [(False, [], cvtSW skolemMap trueSW)]
            | True        = finals
 
-           where finals  = cstrs' ++ maybe [] (\r -> [([], r)]) mbO
+           where finals  = cstrs' ++ maybe [] (\r -> [(False, [], r)]) mbO
 
-                 cstrs' =  [(attrs, c') | (attrs, c) <- cstrs, Just c' <- [pos c]]
+                 cstrs' =  [(isSoft, attrs, c') | (isSoft, attrs, c) <- cstrs, Just c' <- [pos c]]
 
                  mbO | isSat = pos out
                      | True  = neg out
@@ -283,7 +298,7 @@ cvtInc afterAPush inps ks consts arrs tbls uis (SBVPgm asgnsSeq) cfg =
 
         declInp (s, _) = "(declare-fun " ++ show s ++ " () " ++ swType s ++ ")"
 
-        (arrayConstants, arrayDelayeds, arraySetups) = unzip3 $ map (declArray afterAPush False (map fst consts) skolemMap) arrs
+        (arrayConstants, arrayDelayeds, arraySetups) = unzip3 $ map (declArray cfg afterAPush False consts skolemMap) arrs
 
         allTables = [(t, either id id (genTableData rm skolemMap (False, []) (map fst consts) t)) | t <- tbls]
         tableMap  = IM.fromList $ map mkTable allTables
@@ -361,24 +376,36 @@ genTableData rm skolemMap (_quantified, args) consts ((i, aknd, _), elts)
 -- we might have to skolemize those. Implement this properly.
 -- The difficulty is with the Mutate/Merge: We have to postpone an init if
 -- the components are themselves postponed, so this cannot be implemented as a simple map.
-declArray :: Bool -> Bool -> [SW] -> SkolemMap -> (Int, ArrayInfo) -> ([String], [String], [String])
-declArray afterAPush quantified consts skolemMap (i, (_, (aKnd, bKnd), ctx)) = (adecl : zipWith wrap [(0::Int)..] (map snd pre), zipWith wrap [lpre..] (map snd post), setup)
-  where topLevel = not quantified || case ctx of
-                                       ArrayFree         -> True
-                                       ArrayMutate _ a b -> all (`elem` consts) [a, b]
-                                       ArrayMerge c _ _  -> c `elem` consts
+declArray :: SMTConfig -> Bool -> Bool -> [(SW, CW)] -> SkolemMap -> (Int, ArrayInfo) -> ([String], [String], [String])
+declArray cfg afterAPush quantified consts skolemMap (i, (_, (aKnd, bKnd), ctx)) = (adecl : zipWith wrap [(0::Int)..] (map snd pre), zipWith wrap [lpre..] (map snd post), setup)
+  where constNames = map fst consts
+        topLevel = not quantified || case ctx of
+                                       ArrayFree mbi      -> maybe True (`elem` constNames) mbi
+                                       ArrayMutate _ a b  -> all (`elem` constNames) [a, b]
+                                       ArrayMerge c _ _   -> c `elem` constNames
         (pre, post) = partition fst ctxInfo
         nm = "array_" ++ show i
         ssw sw
-         | topLevel || sw `elem` consts
+         | topLevel || sw `elem` constNames
          = cvtSW skolemMap sw
          | True
          = tbd "Non-constant array initializer in a quantified context"
-        adecl = "(declare-fun " ++ nm ++ " () (Array " ++ smtType aKnd ++ " " ++ smtType bKnd ++ "))"
+        atyp  = "(Array " ++ smtType aKnd ++ " " ++ smtType bKnd ++ ")"
+
+        adecl = case ctx of
+                  ArrayFree (Just v) -> "(define-fun "  ++ nm ++ " () " ++ atyp ++ " ((as const " ++ atyp ++ ") " ++ constInit v ++ "))"
+                  _                  -> "(declare-fun " ++ nm ++ " () " ++ atyp ++                                                  ")"
+
+        -- CVC4 chokes if the initializer is not a constant. (Z3 is ok with it.) So, print it as
+        -- a constant if we have it in the constants; otherwise, we merely print it and hope for the best.
+        constInit v = case v `lookup` consts of
+                        Nothing -> ssw v                      -- Z3 will work, CVC4 will choke. Others don't even support this.
+                        Just c  -> cvtCW (roundingMode cfg) c -- Z3 and CVC4 will work. Other's don't support this.
+
         ctxInfo = case ctx of
-                    ArrayFree         -> []
-                    ArrayMutate j a b -> [(all (`elem` consts) [a, b], "(= " ++ nm ++ " (store array_" ++ show j ++ " " ++ ssw a ++ " " ++ ssw b ++ "))")]
-                    ArrayMerge  t j k -> [(t `elem` consts,            "(= " ++ nm ++ " (ite " ++ ssw t ++ " array_" ++ show j ++ " array_" ++ show k ++ "))")]
+                    ArrayFree _       -> []
+                    ArrayMutate j a b -> [(all (`elem` constNames) [a, b], "(= " ++ nm ++ " (store array_" ++ show j ++ " " ++ ssw a ++ " " ++ ssw b ++ "))")]
+                    ArrayMerge  t j k -> [(t `elem` constNames,            "(= " ++ nm ++ " (ite " ++ ssw t ++ " array_" ++ show j ++ " array_" ++ show k ++ "))")]
 
         -- Arrange for initializers
         mkInit idx    = "array_" ++ show i ++ "_initializer_" ++ show (idx :: Int)
@@ -828,6 +855,14 @@ handleKindCast kFrom kTo a
          | m == n = a
          | True   = extract (n - 1)
 
+        -- NB. The following works regardless n < 0 or not, because the first thing we
+        -- do is to compute "reduced" to bring it down to the correct range. It also works
+        -- regardless were mapping to signed or unsigned bit-vector; because the representation
+        -- is the same.
+        --
+        -- NB2. (TODO) There is an SMTLib equivalent of this function, called int2bv. However, it
+        -- used to be uninterpreted for a long time by Z3; though I think that got fixed. We
+        -- might want to simply use that if it's reliably available across the board in solvers.
         i2b n = "(let (" ++ reduced ++ ") (let (" ++ defs ++ ") " ++ body ++ "))"
           where b i      = show (bit i :: Integer)
                 reduced  = "(__a (mod " ++ a ++ " " ++ b n ++ "))"

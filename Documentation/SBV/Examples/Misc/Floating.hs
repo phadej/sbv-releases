@@ -62,9 +62,12 @@ assocPlus x y z = x + (y + z) .== (x + y) + z
 --
 -- Indeed, we have:
 --
--- >>> (-1.844675e19) + ((8.7960925e12)  + (-2.4178333e24)):: Float
+-- >>> let x =  -1.844675e19 :: Float
+-- >>> let y =  8.7960925e12 :: Float
+-- >>> let z = -2.4178333e24 :: Float
+-- >>> x + (y + z)
 -- -2.417852e24
--- >>> ((-1.844675e19) + (8.7960925e12))  + (-2.4178333e24) :: Float
+-- >>> (x + y) + z
 -- -2.4178516e24
 --
 -- Note the difference between two additions!
@@ -118,13 +121,13 @@ nonZeroAddition = prove $ do [a, b] <- sFloats ["a", "b"]
 --
 -- >>> multInverse
 -- Falsifiable. Counter-example:
---   a = 8.988465678497178e307 :: Double
+--   a = -1.1299203187734916e-308 :: Double
 --
 -- Indeed, we have:
 --
--- >>> let a = 8.988465678497178e307 :: Double
+-- >>> let a = -1.1299203187734916e-308 :: Double
 -- >>> a * (1/a)
--- 1.0000000000000002
+-- 0.9999999999999999
 multInverse :: IO ThmResult
 multInverse = prove $ do a <- sDouble "a"
                          constrain $ fpIsPoint a
@@ -153,13 +156,13 @@ multInverse = prove $ do a <- sDouble "a"
 -- Unfortunately we can't directly validate this result at the Haskell level, as Haskell only supports
 -- 'RoundNearestTiesToEven'. We have:
 --
--- >>> (1 + (-6.1035094e-5)) :: Float
+-- >>> 1.0 + (-6.1035094e-5) :: Float
 -- 0.99993896
 --
 -- While we cannot directly see the result when the mode is 'RoundTowardPositive' in Haskell, we can use
 -- SBV to provide us with that result thusly:
 --
--- >>> sat $ \z -> z .== fpAdd sRoundTowardPositive   1 (-6.1035094e-5 :: SFloat)
+-- >>> sat $ \z -> z .== fpAdd sRoundTowardPositive 1.0 (-6.1035094e-5 :: SFloat)
 -- Satisfiable. Model:
 --   s0 = 0.999939 :: Float
 --
@@ -167,13 +170,13 @@ multInverse = prove $ do a <- sDouble "a"
 -- (which rounds towards positive-infinity) produces a larger result. Indeed, if we treat these numbers
 -- as 'Double' values, we get:
 --
--- >>> (1 + (-6.1035094e-5)) :: Double
+-- >>> 1.0 + (-6.1035094e-5) :: Double
 -- 0.999938964906
 --
 -- we see that the "more precise" result is larger than what the 'Float' value is, justifying the
 -- larger value with 'RoundTowardPositive'. A more detailed study is beyond our current scope, so we'll
 --  merely -- note that floating point representation and semantics is indeed a thorny
--- subject, and point to <https://ece.uwaterloo.ca/~dwharder/NumericalAnalysis/02Numerics/Double/paper.pdf> as
+-- subject, and point to <http://ece.uwaterloo.ca/~dwharder/NumericalAnalysis/02Numerics/Double/paper.pdf> as
 -- an excellent guide.
 roundingAdd :: IO SatResult
 roundingAdd = sat $ do m :: SRoundingMode <- free "rm"

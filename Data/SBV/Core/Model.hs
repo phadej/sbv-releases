@@ -23,7 +23,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans   #-}
 
 module Data.SBV.Core.Model (
-    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertSoft, SIntegral, SFiniteBits(..)
+    Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertWithPenalty, SIntegral, SFiniteBits(..)
   , ite, iteLazy, sFromIntegral, sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, (.^)
   , oneIf, genVar, genVar_, forall, forall_, exists, exists_
   , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
@@ -38,6 +38,7 @@ module Data.SBV.Core.Model (
   )
   where
 
+import Control.Applicative  (ZipList(ZipList))
 import Control.Monad        (when, unless, mplus)
 import Control.Monad.Trans  (liftIO)
 import Control.Monad.Reader (ask)
@@ -66,7 +67,7 @@ import Data.SBV.Core.Data
 import Data.SBV.Core.Symbolic
 import Data.SBV.Core.Operations
 
-import Data.SBV.Provers.Prover (defaultSMTCfg)
+import Data.SBV.Provers.Prover (defaultSMTCfg, SafeResult(..))
 import Data.SBV.SMT.SMT        (showModel)
 
 import Data.SBV.Utils.Boolean
@@ -1248,12 +1249,6 @@ instance SDivisible SInteger where
             $ ite (y .>  0)              1 (-1)
 
 -- Quickcheck interface
-
--- The Arbitrary instance for SFunArray returns an array initialized
--- to an arbitrary element
-instance (SymWord b, Arbitrary b) => Arbitrary (SFunArray a b) where
-  arbitrary = arbitrary >>= \r -> return $ SFunArray (const r)
-
 instance (SymWord a, Arbitrary a) => Arbitrary (SBV a) where
   arbitrary = literal `fmap` arbitrary
 
@@ -1327,7 +1322,13 @@ iteLazy t a b
 -- | Symbolic assert. Check that the given boolean condition is always true in the given path. The
 -- optional first argument can be used to provide call-stack info via GHC's location facilities.
 sAssert :: Maybe CallStack -> String -> SBool -> SBV a -> SBV a
-sAssert cs msg cond x = SBV $ SVal k $ Right $ cache r
+sAssert cs msg cond x
+   | Just mustHold <- unliteral cond
+   = if mustHold
+     then x
+     else error $ show $ SafeResult ((locInfo . getCallStack) `fmap` cs, msg, Satisfiable defaultSMTCfg (SMTModel [] []))
+   | True
+   = SBV $ SVal k $ Right $ cache r
   where k     = kindOf x
         r st  = do xsw <- sbvToSW st x
                    let pc = getPathCondition st
@@ -1337,6 +1338,9 @@ sAssert cs msg cond x = SBV $ SVal k $ Right $ cache r
                    cnd <- sbvToSW st mustNeverHappen
                    addAssertion st cs msg cnd
                    return xsw
+
+        locInfo ps = intercalate ",\n " (map loc ps)
+          where loc (f, sl) = concat [srcLocFile sl, ":", show (srcLocStartLine sl), ":", show (srcLocStartCol sl), ":", f]
 
 -- | Merge two symbolic values, at kind @k@, possibly @force@'ing the branches to make
 -- sure they do not evaluate to the same result. This should only be used for internal purposes;
@@ -1392,6 +1396,11 @@ instance Mergeable a => Mergeable [a] where
     | lxs == lys = zipWith (symbolicMerge f t) xs ys
     | True       = error $ "SBV.Mergeable.List: No least-upper-bound for lists of differing size " ++ show (lxs, lys)
     where (lxs, lys) = (length xs, length ys)
+
+-- ZipList
+instance Mergeable a => Mergeable (ZipList a) where
+  symbolicMerge force test (ZipList xs) (ZipList ys)
+    = ZipList (symbolicMerge force test xs ys)
 
 -- Maybe
 instance Mergeable a => Mergeable (Maybe a) where
@@ -1510,22 +1519,12 @@ instance (SymWord a, Bounded a) => Bounded (SBV a) where
 
 -- SArrays are both "EqSymbolic" and "Mergeable"
 instance EqSymbolic (SArray a b) where
-  (SArray a) .== (SArray b) = SBV (eqSArr a b)
+  SArray a .== SArray b = SBV (a `eqSArr` b)
 
 -- When merging arrays; we'll ignore the force argument. This is arguably
 -- the right thing to do as we've too many things and likely we want to keep it efficient.
 instance SymWord b => Mergeable (SArray a b) where
   symbolicMerge _ = mergeArrays
-
--- SFunArrays are only "Mergeable". Although a brute
--- force equality can be defined, any non-toy instance
--- will suffer from efficiency issues; so we don't define it
-instance SymArray SFunArray where
-  newArray nm                                 = declNewSFunArray (Just nm)
-  newArray_                                   = declNewSFunArray Nothing
-  readArray     (SFunArray f)                 = f
-  writeArray    (SFunArray f) a b             = SFunArray (\a' -> ite (a .== a') b (f a'))
-  mergeArrays t (SFunArray g)   (SFunArray h) = SFunArray (\x -> ite t (g x) (h x))
 
 -- When merging arrays; we'll ignore the force argument. This is arguably
 -- the right thing to do as we've too many things and likely we want to keep it efficient.
@@ -1779,15 +1778,16 @@ instance (SymWord h, SymWord g, SymWord f, SymWord e, SymWord d, SymWord c, SymW
 
 -- | Symbolic computations provide a context for writing symbolic programs.
 instance SolverContext Symbolic where
-   constrain                   (SBV c) = imposeConstraint []               c
-   namedConstraint        nm   (SBV c) = imposeConstraint [(":named", nm)] c
-   constrainWithAttribute atts (SBV c) = imposeConstraint atts             c
+   constrain                   (SBV c) = imposeConstraint False []               c
+   softConstrain               (SBV c) = imposeConstraint True  []               c
+   namedConstraint        nm   (SBV c) = imposeConstraint False [(":named", nm)] c
+   constrainWithAttribute atts (SBV c) = imposeConstraint False atts             c
 
    setOption o = addNewSMTOption  o
 
 -- | Introduce a soft assertion, with an optional penalty
-assertSoft :: String -> SBool -> Penalty -> Symbolic ()
-assertSoft nm o p = addSValOptGoal $ unSBV `fmap` AssertSoft nm o p
+assertWithPenalty :: String -> SBool -> Penalty -> Symbolic ()
+assertWithPenalty nm o p = addSValOptGoal $ unSBV `fmap` AssertWithPenalty nm o p
 
 -- | Class of metrics we can optimize for. Currently,
 -- bounded signed/unsigned bit-vectors, unbounded integers,
@@ -1795,7 +1795,7 @@ assertSoft nm o p = addSValOptGoal $ unSBV `fmap` AssertSoft nm o p
 -- Minimal complete definition: minimize/maximize.
 --
 -- A good reference on these features is given in the following paper:
--- <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/nbjorner-scss2014.pdf>.
+-- <http://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/nbjorner-scss2014.pdf>.
 class Metric a where
   -- | Minimize a named metric
   minimize :: String -> a -> Symbolic ()
@@ -1827,7 +1827,7 @@ instance Testable (Symbolic SBool) where
      where test = do (r, Result{resTraces=tvals, resObservables=ovals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic Concrete prop
 
                      let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
-                         cond = all (cwToBool . cval . snd) cstrs
+                         cond = and [cwToBool (cval v) | (False, _, v) <- cstrs] -- Only pick-up "hard" constraints, as indicated by False in the fist component
 
                          getObservable (nm, v) = case v `lookup` cs of
                                                    Just cw -> (nm, cw)

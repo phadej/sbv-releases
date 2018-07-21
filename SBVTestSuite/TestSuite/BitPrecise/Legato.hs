@@ -23,21 +23,18 @@ tests = testGroup "BitPrecise.Legato" [
  , goldenVsStringShow "legato_c" legatoC
  ]
  where legatoPgm = runSAT $ do
-                       addrX   <- free "addrX"
-                       x       <- free "x"
-                       addrY   <- free "addrY"
-                       y       <- free "y"
-                       addrLow <- free "addrLow"
-                       regX    <- free "regX"
-                       regA    <- free "regA"
-                       flagC   <- free "flagC"
-                       flagZ   <- free "flagZ"
-                       output $ legatoIsCorrect (mkSFunArray (const 0)) (addrX, x) (addrY, y) addrLow (regX, regA, flagC, flagZ)
+                       x     <- free "x"
+                       y     <- free "y"
+                       lo    <- free "lo"
+                       regX  <- free "regX"
+                       regA  <- free "regA"
+                       flagC <- free "flagC"
+                       flagZ <- free "flagZ"
+                       output $ legatoIsCorrect (x, y, lo, regX, regA, flagC, flagZ)
        legatoC = snd <$> compileToC' "legatoMult" (do
                     cgSetDriverValues [87, 92]
-                    cgPerformRTCs True
                     x <- cgInput "x"
                     y <- cgInput "y"
-                    let (hi, lo) = runLegato (0, x) (1, y) 2 (initMachine (mkSFunArray (const 0)) (0, 0, false, false))
+                    let (hi, lo) = runLegato (initMachine (x, y, 0, 0, 0, false, false))
                     cgOutput "hi" hi
                     cgOutput "lo" lo)

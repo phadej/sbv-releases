@@ -22,6 +22,8 @@ module Documentation.SBV.Examples.Puzzles.U2Bridge where
 import Control.Monad       (unless)
 import Control.Monad.State (State, runState, put, get, gets, modify, evalState)
 
+import Data.List(sortOn)
+
 import GHC.Generics (Generic)
 
 import Data.SBV
@@ -225,7 +227,7 @@ solveN n = do putStrLn $ "Checking for solutions with " ++ show n ++ " move" ++ 
                               p2 <- exists_
                               return (b, p1, p2)
               res <- allSat $ isValid `fmap` mapM (const genAct) [1..n]
-              cnt <- displayModels disp res
+              cnt <- displayModels disp (rearrange res)
               if cnt == 0 then return False
                           else do putStrLn $ "Found: " ++ show cnt ++ " solution" ++ plu cnt ++ " with " ++ show n ++ " move" ++ plu n ++ "."
                                   return True
@@ -245,6 +247,13 @@ solveN n = do putStrLn $ "Checking for solutions with " ++ show n ++ " move" ++ 
                sh2 t = let s = show t in if length s < 2 then ' ' : s else s
                shL False = " --> "
                shL True  = " <-- "
+
+        -- The following function can be replaced by id. It's only
+        -- here to make sure the multiple solutions come out in the
+        -- same order and thus not mess up our test suite if the
+        -- solver decides to return them in the alternate order
+        rearrange :: AllSatResult -> AllSatResult
+        rearrange (AllSatResult (b1, b2, ms)) = AllSatResult (b1, b2, sortOn (show . SatResult) ms)
 
 -- | Solve the U2-bridge crossing puzzle, starting by testing solutions with
 -- increasing number of steps, until we find one. We have:

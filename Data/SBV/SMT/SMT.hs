@@ -41,7 +41,7 @@ import Control.Concurrent (newEmptyMVar, takeMVar, putMVar, forkIO)
 import Control.DeepSeq    (NFData(..))
 import Control.Monad      (zipWithM)
 import Data.Char          (isSpace)
-import Data.Maybe         (fromMaybe)
+import Data.Maybe         (fromMaybe, isJust)
 import Data.Int           (Int8, Int16, Int32, Int64)
 import Data.List          (intercalate, isPrefixOf)
 import Data.Word          (Word8, Word16, Word32, Word64)
@@ -56,13 +56,13 @@ import System.Exit        (ExitCode(..))
 import System.IO          (hClose, hFlush, hPutStrLn, hGetContents, hGetLine)
 import System.Process     (runInteractiveProcess, waitForProcess, terminateProcess)
 
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
 
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Data
 import Data.SBV.Core.Symbolic (SMTEngine, State(..))
 
-import Data.SBV.SMT.Utils     (showTimeoutValue, alignPlain, alignDiagnostic, debug, mergeSExpr, SMTException(..))
+import Data.SBV.SMT.Utils     (showTimeoutValue, alignPlain, debug, mergeSExpr, SBVException(..))
 
 import Data.SBV.Utils.PrettyNum
 import Data.SBV.Utils.Lib       (joinArgs, splitArgs)
@@ -491,12 +491,12 @@ pipeProcess cfg ctx execName opts pgm continuation = do
 
       Just execPath -> runSolver cfg ctx execPath opts pgm continuation
                        `C.catches`
-                        [ C.Handler (\(e :: SMTException)    -> C.throwIO e)
+                        [ C.Handler (\(e :: SBVException)    -> C.throwIO e)
                         , C.Handler (\(e :: C.ErrorCall)     -> C.throwIO e)
-                        , C.Handler (\(e :: C.SomeException) -> error $ unlines [ "Failed to start the external solver:\n" ++ show e
-                                                                                , "Make sure you can start " ++ show execPath
-                                                                                , "from the command line without issues."
-                                                                                ])
+                        , C.Handler (\(e :: C.SomeException) -> handleAsync e $ error $ unlines [ "Failed to start the external solver:\n" ++ show e
+                                                                                                , "Make sure you can start " ++ show execPath
+                                                                                                , "from the command line without issues."
+                                                                                                ])
                         ]
 
 -- | A standard engine interface. Most solvers follow-suit here in how we "chat" to them..
@@ -505,8 +505,8 @@ standardEngine :: String
                -> SMTEngine
 standardEngine envName envOptName cfg ctx pgm continuation = do
 
-    execName <-                    getEnv envName     `C.catch` (\(_ :: C.SomeException) -> return (executable (solver cfg)))
-    execOpts <- (splitArgs `fmap`  getEnv envOptName) `C.catch` (\(_ :: C.SomeException) -> return (options (solver cfg) cfg))
+    execName <-                    getEnv envName     `C.catch` (\(e :: C.SomeException) -> handleAsync e (return (executable (solver cfg))))
+    execOpts <- (splitArgs `fmap`  getEnv envOptName) `C.catch` (\(e :: C.SomeException) -> handleAsync e (return (options (solver cfg) cfg)))
 
     let cfg' = cfg {solver = (solver cfg) {executable = execName, options = const execOpts}}
 
@@ -612,7 +612,7 @@ runSolver cfg ctx execPath opts pgm continuation
 
 
                             go isFirst i sofar = do
-                                            errln <- safeGetLine isFirst outh `C.catch` (\(e :: C.SomeException) -> return (SolverException (show e)))
+                                            errln <- safeGetLine isFirst outh `C.catch` (\(e :: C.SomeException) -> handleAsync e (return (SolverException (show e))))
                                             case errln of
                                               SolverRegular ln -> let need  = i + parenDeficit ln
                                                                       -- make sure we get *something*
@@ -626,41 +626,45 @@ runSolver cfg ctx execPath opts pgm continuation
                                                                         (False, False) -> go False   need (ln:sofar)
                                                                         (False, True)  -> return (ln:sofar)
 
-                                              SolverException e -> error $ unlines $ [""
-                                                                                     , "*** Error     : " ++ e
-                                                                                     , "*** Executable: " ++ execPath
-                                                                                     , "*** Options   : " ++ joinArgs opts
-                                                                                     ]
-                                                                                  ++ [ "*** Request   : " `alignDiagnostic` command                 | Just command <- [mbCommand]]
-                                                                                  ++ [ "*** Response  : " `alignDiagnostic` unlines (reverse sofar) | not $ null sofar           ]
-                                                                                  ++ [ "***"
-                                                                                     , "*** Giving up!"
-                                                                                     ]
+                                              SolverException e -> do terminateProcess pid
+                                                                      C.throwIO $ SBVException { sbvExceptionDescription = e
+                                                                                               , sbvExceptionSent        = mbCommand
+                                                                                               , sbvExceptionExpected    = Nothing
+                                                                                               , sbvExceptionReceived    = Just $ unlines (reverse sofar)
+                                                                                               , sbvExceptionStdOut      = Nothing
+                                                                                               , sbvExceptionStdErr      = Nothing
+                                                                                               , sbvExceptionExitCode    = Nothing
+                                                                                               , sbvExceptionConfig      = cfg { solver = (solver cfg) { executable = execPath } }
+                                                                                               , sbvExceptionReason      = Nothing
+                                                                                               , sbvExceptionHint        = Nothing
+                                                                                               }
 
                                               SolverTimeout e -> do terminateProcess pid -- NB. Do not *wait* for the process, just quit.
-                                                                    error $ unlines $ [ ""
-                                                                                      , "*** Data.SBV: Timeout."
-                                                                                      , "***"
-                                                                                      , "***   " ++ e
-                                                                                      ]
-                                                                                   ++ [ "***   Response so far: " `alignDiagnostic` unlines (reverse sofar) | not $ null sofar]
-                                                                                   ++ [ "***   Last command sent was: " `alignDiagnostic` command | Just command <- [mbCommand]]
-                                                                                   ++ [ "***   Run with 'verbose=True' for further information" | not (verbose cfg)]
-                                                                                   ++ [ "***"
-                                                                                      , "*** Giving up!"
-                                                                                      ]
+                                                                    C.throwIO $ SBVException { sbvExceptionDescription = "Timeout! " ++ e
+                                                                                             , sbvExceptionSent        = mbCommand
+                                                                                             , sbvExceptionExpected    = Nothing
+                                                                                             , sbvExceptionReceived    = Just $ unlines (reverse sofar)
+                                                                                             , sbvExceptionStdOut      = Nothing
+                                                                                             , sbvExceptionStdErr      = Nothing
+                                                                                             , sbvExceptionExitCode    = Nothing
+                                                                                             , sbvExceptionConfig      = cfg { solver = (solver cfg) { executable = execPath } }
+                                                                                             , sbvExceptionReason      = Nothing
+                                                                                             , sbvExceptionHint        = if not (verbose cfg)
+                                                                                                                         then Just ["Run with 'verbose=True' for further information"]
+                                                                                                                         else Nothing
+                                                                                             }
 
                     terminateSolver = do hClose inh
                                          outMVar <- newEmptyMVar
-                                         out <- hGetContents outh `C.catch`  (\(e :: C.SomeException) -> return (show e))
+                                         out <- hGetContents outh `C.catch`  (\(e :: C.SomeException) -> handleAsync e (return (show e)))
                                          _ <- forkIO $ C.evaluate (length out) >> putMVar outMVar ()
-                                         err <- hGetContents errh `C.catch`  (\(e :: C.SomeException) -> return (show e))
+                                         err <- hGetContents errh `C.catch`  (\(e :: C.SomeException) -> handleAsync e (return (show e)))
                                          _ <- forkIO $ C.evaluate (length err) >> putMVar outMVar ()
                                          takeMVar outMVar
                                          takeMVar outMVar
-                                         hClose outh `C.catch`  (\(_ :: C.SomeException) -> return ())
-                                         hClose errh `C.catch`  (\(_ :: C.SomeException) -> return ())
-                                         ex <- waitForProcess pid `C.catch` (\(_ :: C.SomeException) -> return (ExitFailure (-999)))
+                                         hClose outh `C.catch`  (\(e :: C.SomeException) -> handleAsync e (return ()))
+                                         hClose errh `C.catch`  (\(e :: C.SomeException) -> handleAsync e (return ()))
+                                         ex <- waitForProcess pid `C.catch` (\(e :: C.SomeException) -> handleAsync e (return (ExitFailure (-999))))
                                          return (out, err, ex)
 
                     cleanUp
@@ -676,21 +680,26 @@ runSolver cfg ctx execPath opts pgm continuation
                              ExitSuccess -> return ()
                              _           -> if ignoreExitCode cfg
                                                then msg ["Ignoring non-zero exit code of " ++ show ex ++ " per user request!"]
-                                               else error $ unlines $  [ ""
-                                                                       , "*** Failed to complete the call to " ++ nm ++ ":"
-                                                                       , "*** Executable   : " ++ execPath
-                                                                       , "*** Options      : " ++ joinArgs opts
-                                                                       , "*** Exit code    : " ++ show ex
-                                                                       ]
-                                                                    ++ [ "*** Std-out      : " ++ intercalate "\n                   " (lines out)]
-                                                                    ++ [ "*** Std-err      : " ++ intercalate "\n                   " (lines err)]
-                                                                    ++ ["Giving up.."]
+                                               else C.throwIO $ SBVException { sbvExceptionDescription = "Failed to complete the call to " ++ nm
+                                                                             , sbvExceptionSent        = Nothing
+                                                                             , sbvExceptionExpected    = Nothing
+                                                                             , sbvExceptionReceived    = Nothing
+                                                                             , sbvExceptionStdOut      = Just out
+                                                                             , sbvExceptionStdErr      = Just err
+                                                                             , sbvExceptionExitCode    = Just ex
+                                                                             , sbvExceptionConfig      = cfg { solver = (solver cfg) { executable = execPath } }
+                                                                             , sbvExceptionReason      = Nothing
+                                                                             , sbvExceptionHint        = if not (verbose cfg)
+                                                                                                         then Just ["Run with 'verbose=True' for further information"]
+                                                                                                         else Nothing
+                                                                             }
+
                 return (send, ask, getResponseFromSolver, terminateSolver, cleanUp, pid)
 
       let executeSolver = do let sendAndGetSuccess :: Maybe Int -> String -> IO ()
                                  sendAndGetSuccess mbTimeOut l
                                    -- The pathetic case when the solver doesn't support queries, so we pretend it responded "success"
-                                   -- Currently ABC is the only such solver. Filed a request for ABC at: https://bitbucket.org/alanmi/abc/issues/70/
+                                   -- Currently ABC is the only such solver. Filed a request for ABC at: http://bitbucket.org/alanmi/abc/issues/70/
                                    | not (supportsCustomQueries (capabilities (solver cfg)))
                                    = do send mbTimeOut l
                                         debug cfg ["[ISSUE] " `alignPlain` l]
@@ -711,7 +720,8 @@ runSolver cfg ctx execPath opts pgm continuation
                                                                                     ]
 
                                                             -- put a sync point here before we die so we consume everything
-                                                            mbExtras <- (Right <$> getResponseFromSolver Nothing (Just 5000000)) `C.catch` (\(e :: C.SomeException) -> return (Left (show e)))
+                                                            mbExtras <- (Right <$> getResponseFromSolver Nothing (Just 5000000))
+                                                                        `C.catch` (\(e :: C.SomeException) -> handleAsync e (return (Left (show e))))
 
                                                             -- Ignore any exceptions from last sync, pointless.
                                                             let extras = case mbExtras of
@@ -722,16 +732,16 @@ runSolver cfg ctx execPath opts pgm continuation
                                                             let out = intercalate "\n" . lines $ outOrig
                                                                 err = intercalate "\n" . lines $ errOrig
 
-                                                                exc = SMTException { smtExceptionDescription = "Data.SBV: Unexpected non-success response from " ++ nm
-                                                                                   , smtExceptionSent        = l
-                                                                                   , smtExceptionExpected    = "success"
-                                                                                   , smtExceptionReceived    = r ++ "\n" ++ extras
-                                                                                   , smtExceptionStdOut      = out
-                                                                                   , smtExceptionStdErr      = Just err
-                                                                                   , smtExceptionExitCode    = Just ex
-                                                                                   , smtExceptionConfig      = cfg { solver = (solver cfg) {executable = execPath } }
-                                                                                   , smtExceptionReason      = Just reason
-                                                                                   , smtExceptionHint        = Nothing
+                                                                exc = SBVException { sbvExceptionDescription = "Unexpected non-success response from " ++ nm
+                                                                                   , sbvExceptionSent        = Just l
+                                                                                   , sbvExceptionExpected    = Just "success"
+                                                                                   , sbvExceptionReceived    = Just $ r ++ "\n" ++ extras
+                                                                                   , sbvExceptionStdOut      = Just out
+                                                                                   , sbvExceptionStdErr      = Just err
+                                                                                   , sbvExceptionExitCode    = Just ex
+                                                                                   , sbvExceptionConfig      = cfg { solver = (solver cfg) {executable = execPath } }
+                                                                                   , sbvExceptionReason      = Just reason
+                                                                                   , sbvExceptionHint        = Nothing
                                                                                    }
 
                                                             C.throwIO exc
@@ -807,12 +817,12 @@ runSolver cfg ctx execPath opts pgm continuation
                             recordEndTime      cfg ctx
                             return r
 
-      launchSolver `C.catch` (\(e :: C.SomeException) -> do terminateProcess pid
-                                                            ec <- waitForProcess pid
-                                                            recordException    (transcript cfg) (show e)
-                                                            finalizeTranscript (transcript cfg) (Just ec)
-                                                            recordEndTime      cfg ctx
-                                                            C.throwIO e)
+      launchSolver `C.catch` (\(e :: C.SomeException) -> handleAsync e $ do terminateProcess pid
+                                                                            ec <- waitForProcess pid
+                                                                            recordException    (transcript cfg) (show e)
+                                                                            finalizeTranscript (transcript cfg) (Just ec)
+                                                                            recordEndTime      cfg ctx
+                                                                            C.throwIO e)
 
 -- | Compute and report the end time
 recordEndTime :: SMTConfig -> State -> IO ()
@@ -887,3 +897,13 @@ recordException (Just f) m = do ts <- show <$> getZonedTime
                         ++ [ ";;;"
                            , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
                            ]
+
+-- We should not be catching/processing asynchronous exceptions.
+-- See http://github.com/LeventErkok/sbv/issues/410
+handleAsync :: C.SomeException -> IO a -> IO a
+handleAsync e cont
+  | isAsynchronous = C.throwIO e
+  | True           = cont
+  where -- Stealing this definition from the asynchronous exceptions package to reduce dependencies
+        isAsynchronous :: Bool
+        isAsynchronous = isJust (C.fromException e :: Maybe C.AsyncException) || isJust (C.fromException e :: Maybe C.SomeAsyncException)

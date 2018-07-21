@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       7.9
+Version:       7.10
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -65,6 +65,7 @@ Library
                   , Data.SBV.Tools.Polynomial
                   , Data.SBV.Tools.STree
                   , Documentation.SBV.Examples.BitPrecise.BitTricks
+                  , Documentation.SBV.Examples.BitPrecise.BrokenSearch
                   , Documentation.SBV.Examples.BitPrecise.Legato
                   , Documentation.SBV.Examples.BitPrecise.MergeSort
                   , Documentation.SBV.Examples.BitPrecise.MultMask
@@ -85,6 +86,7 @@ Library
                   , Documentation.SBV.Examples.Misc.Auxiliary
                   , Documentation.SBV.Examples.Misc.NoDiv0
                   , Documentation.SBV.Examples.Misc.Polynomials
+                  , Documentation.SBV.Examples.Misc.SoftConstrain
                   , Documentation.SBV.Examples.Misc.Word4
                   , Documentation.SBV.Examples.Optimization.LinearOpt
                   , Documentation.SBV.Examples.Optimization.Production
@@ -164,6 +166,7 @@ Test-Suite SBVTest
   Hs-Source-Dirs  : SBVTestSuite
   main-is         : SBVTest.hs
   Other-modules   : Utils.SBVTestFramework
+                  , TestSuite.Arrays.InitVals
                   , TestSuite.Arrays.Memory
                   , TestSuite.Arrays.Query
                   , TestSuite.Basics.AllSat
@@ -206,12 +209,13 @@ Test-Suite SBVTest
                   , TestSuite.Crypto.RC4
                   , TestSuite.Existentials.CRCPolynomial
                   , TestSuite.GenTest.GenTests
-                  , TestSuite.Optimization.AssertSoft
+                  , TestSuite.Optimization.AssertWithPenalty
                   , TestSuite.Optimization.Basics
                   , TestSuite.Optimization.Combined
                   , TestSuite.Optimization.ExtensionField
                   , TestSuite.Optimization.Quantified
                   , TestSuite.Optimization.Reals
+                  , TestSuite.Optimization.NoOpt
                   , TestSuite.Overflows.Arithmetic
                   , TestSuite.Overflows.Casts
                   , TestSuite.Polynomials.Polynomials
