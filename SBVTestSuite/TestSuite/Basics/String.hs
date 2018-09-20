@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  TestSuite.Basics.String
@@ -11,11 +10,14 @@
 -- Most of these tests are adopted from <http://rise4fun.com/z3/tutorialcontent/sequences>
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE OverloadedStrings #-}
+
 module TestSuite.Basics.String(tests)  where
 
 import Data.SBV.Control
 import Utils.SBVTestFramework
 
+import Data.SBV.String ((.!!), (.++))
 import qualified Data.SBV.String as S
 import qualified Data.SBV.RegExp as R
 
@@ -75,7 +77,7 @@ strIndexOfUnsat = constrain $ S.indexOf "abcabc" "a" ./= 0
 -- Basic string operations
 strExamples1 :: Symbolic ()
 strExamples1 = constrain $ bAnd
-  [ S.charToStr ("abc" .!! 1) .++ S.charToStr ("abc" .!! 0) .== "ba"
+  [ S.singleton ("abc" .!! 1) .++ S.singleton ("abc" .!! 0) .== "ba"
   , "abcabc" `S.indexOf` "a"                                .== 0
   , S.offsetIndexOf "abcabc" "a" 1                          .== 3
   , S.subStr "xxabcyy" 2 3                                  .== "abc"

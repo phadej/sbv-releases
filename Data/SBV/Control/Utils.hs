@@ -38,8 +38,10 @@ module Data.SBV.Control.Utils (
 import Data.Maybe (isJust)
 import Data.List  (sortBy, sortOn, elemIndex, partition, groupBy, tails, intercalate)
 
-import Data.Char     (isPunctuation, isSpace, chr)
+import Data.Char     (isPunctuation, isSpace, chr, ord)
 import Data.Function (on)
+
+import Data.Typeable (Typeable)
 
 import Data.Int
 import Data.Word
@@ -80,7 +82,7 @@ import Data.SBV.Core.Operations (svNot, svNotEqual, svOr)
 import Data.SBV.SMT.SMTLib  (toIncSMTLib, toSMTLib)
 import Data.SBV.SMT.Utils   (showTimeoutValue, addAnnotations, alignPlain, debug, mergeSExpr, SBVException(..))
 
-import Data.SBV.Utils.Lib (qfsToString)
+import Data.SBV.Utils.Lib (qfsToString, isKString)
 
 import Data.SBV.Utils.SExpr
 import Data.SBV.Control.Types
@@ -90,6 +92,8 @@ import qualified Data.Set as Set (toList)
 import qualified Control.Exception as C
 
 import GHC.Stack
+
+import Unsafe.Coerce (unsafeCoerce) -- Only used safely!
 
 -- | 'Query' as a 'SolverContext'.
 instance SolverContext Query where
@@ -365,15 +369,33 @@ instance SMTValue AlgReal where
    sexprToVal (ENum (v, _)) = Just (fromIntegral v)
    sexprToVal _             = Nothing
 
-instance SMTValue String where
-   sexprToVal (ECon s)
-     | length s >= 2 && head s == '"' && last s == '"'
-     = Just (tail (init s))
-   sexprToVal _        = Nothing
-
 instance SMTValue Char where
    sexprToVal (ENum (i, _)) = Just (chr (fromIntegral i))
    sexprToVal _             = Nothing
+
+instance (SMTValue a, Typeable a) => SMTValue [a] where
+   -- NB. The conflation of String/[Char] forces us to have this bastard case here
+   -- with unsafeCoerce to cast back to a regular string. This is unfortunate,
+   -- and the ice is thin here. But it works, and is much better than a plethora
+   -- of overlapping instances. Sigh.
+   sexprToVal (ECon s)
+    | isKString (undefined :: [a]) && length s >= 2 && head s == '"' && last s == '"'
+    = Just $ map unsafeCoerce s'
+    | True
+    = Just $ map (unsafeCoerce . c2w8) s'
+    where s' = qfsToString (tail (init s))
+          c2w8  :: Char -> Word8
+          c2w8 = fromIntegral . ord
+
+   -- Otherwise we have a good old sequence, just parse it simply:
+   sexprToVal (EApp [ECon "seq.++", l, r])            = do l' <- sexprToVal l
+                                                           r' <- sexprToVal r
+                                                           return $ l' ++ r'
+   sexprToVal (EApp [ECon "seq.unit", a])             = do a' <- sexprToVal a
+                                                           return [a']
+   sexprToVal (EApp [ECon "as", ECon "seq.empty", _]) = return []
+
+   sexprToVal _                                       = Nothing
 
 -- | Get the value of a term.
 getValue :: SMTValue a => SBV a -> Query a
@@ -400,7 +422,7 @@ getUninterpretedValue s =
                                      r <- ask cmd
 
                                      parse r bad $ \case EApp [EApp [ECon o,  ECon v]] | o == show sw -> return v
-                                                         _                                             -> bad r Nothing
+                                                         _                                            -> bad r Nothing
 
           k                    -> error $ unlines [""
                                                   , "*** SBV.getUninterpretedValue: Called on an 'interpreted' kind"
@@ -442,18 +464,44 @@ recoverKindedValue k e = case e of
                            EDouble i | isDouble        k -> Just $ CW KDouble  (CWDouble  i)
                            ECon    s | isString        k -> Just $ CW KString  (CWString   (interpretString s))
                            ECon    s | isUninterpreted k -> Just $ CW k        (CWUserSort (getUIIndex k s, s))
+                           _         | isList          k -> Just $ CW k        (CWList     (interpretList e))
                            _                             -> Nothing
   where isIntegralLike = or [f k | f <- [isBoolean, isBounded, isInteger, isReal, isFloat, isDouble]]
 
         getUIIndex (KUserSort  _ (Right xs)) i = i `elemIndex` xs
         getUIIndex _                         _ = Nothing
 
+        stringLike xs = length xs >= 2 && head xs == '"' && last xs == '"'
+
         -- Make sure strings are really strings
         interpretString xs
-          | length xs < 2 || head xs /= '"' || last xs /= '"'
+          | not (stringLike xs)
           = error $ "Expected a string constant with quotes, received: <" ++ xs ++ ">"
           | True
           = qfsToString $ tail (init xs)
+
+        isStringSequence (KList (KBounded _ 8)) = True
+        isStringSequence _                      = False
+
+        -- Lists are tricky since z3 prints the 8-bit variants as strings. See: <http://github.com/Z3Prover/z3/issues/1808>
+        interpretList (ECon s)
+          | isStringSequence k && stringLike s
+          = map (CWInteger . fromIntegral . ord) $ interpretString s
+        interpretList topExpr = walk topExpr
+          where walk (EApp [ECon "as", ECon "seq.empty", _]) = []
+                walk (EApp [ECon "seq.unit", v])             = case recoverKindedValue ek v of
+                                                                 Just w -> [cwVal w]
+                                                                 Nothing -> error $ "Cannot parse a sequence item of kind " ++ show ek ++ " from: " ++ show v ++ extra v
+                walk (EApp [ECon "seq.++", pre, post])       = walk pre ++ walk post
+                walk cur                                     = error $ "Expected a sequence constant, but received: " ++ show cur ++ extra cur
+
+                extra cur | show cur == t = ""
+                          | True          = "\nWhile parsing: " ++ t
+                          where t = show topExpr
+
+                ek = case k of
+                       KList ik -> ik
+                       _        -> error $ "Impossible: Expected a sequence kind, bug got: " ++ show k
 
 -- | Get the value of a term. If the kind is Real and solver supports decimal approximations,
 -- we will "squash" the representations.

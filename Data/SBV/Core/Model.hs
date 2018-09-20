@@ -9,18 +9,18 @@
 -- Instance declarations for our symbolic world
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE TypeSynonymInstances   #-}
-{-# LANGUAGE BangPatterns           #-}
-{-# LANGUAGE PatternGuards          #-}
-{-# LANGUAGE FlexibleContexts       #-}
-{-# LANGUAGE FlexibleInstances      #-}
-{-# LANGUAGE MultiParamTypeClasses  #-}
-{-# LANGUAGE ScopedTypeVariables    #-}
-{-# LANGUAGE Rank2Types             #-}
-{-# LANGUAGE TypeOperators          #-}
-{-# LANGUAGE DefaultSignatures      #-}
+{-# LANGUAGE BangPatterns          #-}
+{-# LANGUAGE DefaultSignatures     #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PatternGuards         #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE Rank2Types            #-}
+{-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE TypeSynonymInstances  #-}
 
-{-# OPTIONS_GHC -fno-warn-orphans   #-}
+{-# OPTIONS_GHC -fno-warn-orphans  #-}
 
 module Data.SBV.Core.Model (
     Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertWithPenalty, SIntegral, SFiniteBits(..)
@@ -29,7 +29,8 @@ module Data.SBV.Core.Model (
   , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
   , sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
-  , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, sChar, sChars, sString, sStrings, slet
+  , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, sChar, sChars, sString, sStrings, sList, sLists
+  , slet
   , sRealToSInteger, label, observe
   , sAssert
   , liftQRem, liftDMod, symbolicMergeWithKind
@@ -57,6 +58,8 @@ import Data.Maybe  (fromMaybe)
 import Data.String (IsString(..))
 import Data.Word   (Word8, Word16, Word32, Word64)
 
+import Data.Dynamic (fromDynamic, toDyn)
+
 import Test.QuickCheck                         (Testable(..), Arbitrary(..))
 import qualified Test.QuickCheck.Test    as QC (isSuccess)
 import qualified Test.QuickCheck         as QC (quickCheckResult, counterexample)
@@ -71,6 +74,7 @@ import Data.SBV.Provers.Prover (defaultSMTCfg, SafeResult(..))
 import Data.SBV.SMT.SMT        (showModel)
 
 import Data.SBV.Utils.Boolean
+import Data.SBV.Utils.Lib      (isKString)
 
 -- Symbolic-Word class instances
 
@@ -181,17 +185,31 @@ instance SymWord Double where
   -- and in the presence of NaN's it would be incorrect to do any optimization
   isConcretely _ _ = False
 
-instance SymWord String where
-  mkSymWord = genMkSymVar KString
-  literal   = SBV . SVal KString . Left . CW KString . CWString
-  fromCW (CW _ (CWString a)) = a
-  fromCW c                   = error $ "SymWord.String: Unexpected non-string value: " ++ show c
-
 instance SymWord Char where
   mkSymWord = genMkSymVar KChar
   literal c = SBV . SVal KChar . Left . CW KChar $ CWChar c
   fromCW (CW _ (CWChar a)) = a
   fromCW c                 = error $ "SymWord.String: Unexpected non-char value: " ++ show c
+
+instance SymWord a => SymWord [a] where
+  mkSymWord
+    | isKString (undefined :: [a]) = genMkSymVar KString
+    | True                         = genMkSymVar (KList (kindOf (undefined :: a)))
+
+  literal as
+    | isKString (undefined :: [a]) = case fromDynamic (toDyn as) of
+                                       Just s  -> SBV . SVal KString . Left . CW KString . CWString $ s
+                                       Nothing -> error "SString: Cannot construct literal string!"
+    | True                         = let k = KList (kindOf (undefined :: a))
+                                         toCWVal a = case literal a of
+                                                       SBV (SVal _ (Left (CW _ cwval))) -> cwval
+                                                       _                                -> error "SymWord.Sequence: could not produce a concrete word for value"
+                                     in SBV $ SVal k $ Left $ CW k $ CWList $ map toCWVal as
+
+  fromCW (CW _ (CWString a)) = fromMaybe (error "SString: Cannot extract a literal string!")
+                                         (fromDynamic (toDyn a))
+  fromCW (CW _ (CWList a))   = fromCW . CW (kindOf (undefined :: a)) <$> a
+  fromCW c                   = error $ "SymWord.fromCW: Unexpected non-list value: " ++ show c
 
 instance IsString SString where
   fromString = literal
@@ -320,6 +338,14 @@ sChars = symbolics
 -- | Declare a list of 'SString's
 sStrings :: [String] -> Symbolic [SString]
 sStrings = symbolics
+
+-- | Declare an 'SList'
+sList :: forall a. SymWord a => String -> Symbolic (SList a)
+sList = symbolic
+
+-- | Declare a list of 'SList's
+sLists :: forall a. SymWord a => [String] -> Symbolic [SList a]
+sLists = symbolics
 
 -- | Convert an SReal to an SInteger. That is, it computes the
 -- largest integer @n@ that satisfies @sIntegerToSReal n <= r@
@@ -865,6 +891,7 @@ instance (SymWord a, Fractional a) => Fractional (SBV a) where
                       k@KBool       -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KString     -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KChar       -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KList{}     -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KUserSort{} -> error $ "Unexpected Fractional case for: " ++ show k
 
 -- | Define Floating instance on SBV's; only for base types that are already floating; i.e., SFloat and SDouble

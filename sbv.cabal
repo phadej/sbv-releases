@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       7.10
+Version:       7.11
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -48,14 +48,17 @@ Library
                     TypeOperators
                     TypeSynonymInstances
   Build-Depends   : base >= 4.9 && < 5
-                  , ghc, QuickCheck, crackNum, template-haskell
+                  , crackNum >= 2.2
+                  , ghc, QuickCheck, template-haskell
                   , array, async, containers, deepseq, directory, filepath, time
-                  , pretty, process, mtl, random, syb, data-binary-ieee754
+                  , pretty, process, mtl, random, syb, reinterpret-cast
                   , generic-deriving
   Exposed-modules : Data.SBV
                   , Data.SBV.Control
                   , Data.SBV.Dynamic
                   , Data.SBV.Internals
+                  , Data.SBV.List
+                  , Data.SBV.List.Bounded
                   , Data.SBV.String
                   , Data.SBV.Char
                   , Data.SBV.RegExp
@@ -80,6 +83,9 @@ Library
                   , Documentation.SBV.Examples.Crypto.RC4
                   , Documentation.SBV.Examples.Existentials.CRCPolynomial
                   , Documentation.SBV.Examples.Existentials.Diophantine
+                  , Documentation.SBV.Examples.Lists.Fibonacci
+                  , Documentation.SBV.Examples.Lists.Nested
+                  , Documentation.SBV.Examples.Lists.BoundedMutex
                   , Documentation.SBV.Examples.Misc.Enumerate
                   , Documentation.SBV.Examples.Misc.Floating
                   , Documentation.SBV.Examples.Misc.ModelExtract
@@ -160,7 +166,7 @@ Test-Suite SBVTest
                   , DeriveDataTypeable
                   , Rank2Types
                   , ScopedTypeVariables
-  Build-depends : base >= 4.9, data-binary-ieee754, filepath, syb
+  Build-depends : base >= 4.9, reinterpret-cast, filepath, syb
                 , sbv, directory, random, mtl, containers
                 , template-haskell, bytestring, tasty, tasty-golden, tasty-hunit, tasty-quickcheck, QuickCheck
   Hs-Source-Dirs  : SBVTestSuite
@@ -187,6 +193,7 @@ Test-Suite SBVTest
                   , TestSuite.Basics.SmallShifts
                   , TestSuite.Basics.SquashReals
                   , TestSuite.Basics.String
+                  , TestSuite.Basics.List
                   , TestSuite.Basics.TOut
                   , TestSuite.BitPrecise.BitTricks
                   , TestSuite.BitPrecise.Legato
@@ -240,6 +247,7 @@ Test-Suite SBVTest
                   , TestSuite.Queries.Int_Yices
                   , TestSuite.Queries.Int_Z3
                   , TestSuite.Queries.Interpolants
+                  , TestSuite.Queries.Lists
                   , TestSuite.Queries.Strings
                   , TestSuite.Queries.Uninterpreted
                   , TestSuite.QuickCheck.QC

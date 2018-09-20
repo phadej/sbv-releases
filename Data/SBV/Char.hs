@@ -1,7 +1,3 @@
-{-# LANGUAGE Rank2Types          #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE OverloadedStrings   #-}
-
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Data.SBV.Char
@@ -23,6 +19,10 @@
 -- which point we will update these functions to match the implementations.
 -- For details, see: <http://smtlib.cs.uiowa.edu/theories-UnicodeStrings.shtml>
 -----------------------------------------------------------------------------
+
+{-# LANGUAGE Rank2Types          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings   #-}
 
 module Data.SBV.Char (
         -- * Occurrence in a string
@@ -48,7 +48,7 @@ import Data.SBV.Utils.Boolean
 
 import qualified Data.Char as C
 
-import Data.SBV.String (isInfixOf, charToStr)
+import Data.SBV.String (isInfixOf, singleton)
 
 -- For doctest use only
 --
@@ -59,7 +59,7 @@ import Data.SBV.String (isInfixOf, charToStr)
 -- | Is the character in the string?
 --
 -- >>> :set -XOverloadedStrings
--- >>> prove $ \c -> c `elem` charToStr c
+-- >>> prove $ \c -> c `elem` singleton c
 -- Q.E.D.
 -- >>> prove $ \c -> bnot (c `elem` "")
 -- Q.E.D.
@@ -70,7 +70,7 @@ c `elem` s
  | Just cs <- unliteral s                            -- If only the second string is concrete, element-wise checking is still much better!
  = bAny (c .==) $ map literal cs
  | True
- = charToStr c `isInfixOf` s
+ = singleton c `isInfixOf` s
 
 -- | Is the character not in the string?
 --

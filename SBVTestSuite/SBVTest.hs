@@ -1,4 +1,16 @@
+-----------------------------------------------------------------------------
+-- |
+-- Module      :  SBVTestSuite.SBVTest.Main
+-- Copyright   :  (c) Levent Erkok
+-- License     :  BSD3
+-- Maintainer  :  erkokl@gmail.com
+-- Stability   :  experimental
+--
+-- Main entry point to the test suite
+-----------------------------------------------------------------------------
+
 {-# LANGUAGE ScopedTypeVariables #-}
+
 module Main(main) where
 
 import Test.Tasty
@@ -20,6 +32,7 @@ import qualified TestSuite.Basics.GenBenchmark
 import qualified TestSuite.Basics.Higher
 import qualified TestSuite.Basics.Index
 import qualified TestSuite.Basics.IteTest
+import qualified TestSuite.Basics.List
 import qualified TestSuite.Basics.ProofTests
 import qualified TestSuite.Basics.PseudoBoolean
 import qualified TestSuite.Basics.QRem
@@ -81,6 +94,7 @@ import qualified TestSuite.Queries.Int_Mathsat
 import qualified TestSuite.Queries.Int_Yices
 import qualified TestSuite.Queries.Int_Z3
 import qualified TestSuite.Queries.Interpolants
+import qualified TestSuite.Queries.Lists
 import qualified TestSuite.Queries.Strings
 import qualified TestSuite.Queries.Uninterpreted
 import qualified TestSuite.QuickCheck.QC
@@ -151,6 +165,7 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Basics.Higher.tests
                , TestSuite.Basics.Index.tests
                , TestSuite.Basics.IteTest.tests
+               , TestSuite.Basics.List.tests
                , TestSuite.Basics.ProofTests.tests
                , TestSuite.Basics.PseudoBoolean.tests
                , TestSuite.Basics.QRem.tests
@@ -204,6 +219,7 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Queries.Enums.tests
                , TestSuite.Queries.FreshVars.tests
                , TestSuite.Queries.Int_Z3.tests
+               , TestSuite.Queries.Lists.tests
                , TestSuite.Queries.Strings.tests
                , TestSuite.Queries.Uninterpreted.tests
                , TestSuite.Uninterpreted.AUF.tests

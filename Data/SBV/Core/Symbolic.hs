@@ -27,7 +27,7 @@
 module Data.SBV.Core.Symbolic
   ( NodeId(..)
   , SW(..), swKind, trueSW, falseSW
-  , Op(..), PBOp(..), OvOp(..), FPOp(..), StrOp(..), RegExp(..)
+  , Op(..), PBOp(..), OvOp(..), FPOp(..), StrOp(..), SeqOp(..), RegExp(..)
   , Quantifier(..), needsExistentials
   , RoundingMode(..)
   , SBVType(..), svUninterpreted, newUninterpreted, addAxiom
@@ -155,6 +155,7 @@ data Op = Plus
         | PseudoBoolean PBOp                    -- Pseudo-boolean ops, categorized separately
         | OverflowOp    OvOp                    -- Overflow-ops, categorized separately
         | StrOp StrOp                           -- String ops, categorized separately
+        | SeqOp SeqOp                           -- Sequence ops, categorized separately
         deriving (Eq, Ord)
 
 -- | Floating point operations
@@ -333,6 +334,30 @@ instance Show StrOp where
   -- Note the breakage here with respect to argument order. We fix this explicitly later.
   show (StrInRe s) = "str.in.re " ++ show s
 
+-- | Sequence operations.
+data SeqOp = SeqConcat    -- ^ See StrConcat
+           | SeqLen       -- ^ See StrLen
+           | SeqUnit      -- ^ See StrUnit
+           | SeqSubseq    -- ^ See StrSubseq
+           | SeqIndexOf   -- ^ See StrIndexOf
+           | SeqContains  -- ^ See StrContains
+           | SeqPrefixOf  -- ^ See StrPrefixOf
+           | SeqSuffixOf  -- ^ See StrSuffixOf
+           | SeqReplace   -- ^ See StrReplace
+  deriving (Eq, Ord)
+
+-- | Show instance for `SeqOp`. Again, mapping is important.
+instance Show SeqOp where
+  show SeqConcat   = "seq.++"
+  show SeqLen      = "seq.len"
+  show SeqUnit     = "seq.unit"
+  show SeqSubseq   = "seq.extract"
+  show SeqIndexOf  = "seq.indexof"
+  show SeqContains = "seq.contains"
+  show SeqPrefixOf = "seq.prefixof"
+  show SeqSuffixOf = "seq.suffixof"
+  show SeqReplace  = "seq.replace"
+
 -- Show instance for 'Op'. Note that this is largely for debugging purposes, not used
 -- for being read by any tool.
 instance Show Op where
@@ -353,6 +378,7 @@ instance Show Op where
   show (PseudoBoolean p) = show p
   show (OverflowOp o)    = show o
   show (StrOp s)         = show s
+  show (SeqOp s)         = show s
   show op
     | Just s <- op `lookup` syms = s
     | True                       = error "impossible happened; can't find op!"
@@ -1335,7 +1361,7 @@ instance NFData Result where
   rnf (Result kindInfo qcInfo obs cgs inps consts tbls arrs uis axs pgm cstr asserts outs)
         = rnf kindInfo `seq` rnf qcInfo  `seq` rnf obs    `seq` rnf cgs
                        `seq` rnf inps    `seq` rnf consts `seq` rnf tbls
-                       `seq` rnf arrs    `seq` rnf uis    `seq` rnf axs 
+                       `seq` rnf arrs    `seq` rnf uis    `seq` rnf axs
                        `seq` rnf pgm     `seq` rnf cstr   `seq` rnf asserts
                        `seq` rnf outs
 instance NFData Kind         where rnf a          = seq a ()
@@ -1363,16 +1389,17 @@ instance NFData SMTScript where
 
 -- | Translation tricks needed for specific capabilities afforded by each solver
 data SolverCapabilities = SolverCapabilities {
-         supportsQuantifiers        :: Bool    -- ^ Support for SMT-Lib2 style quantifiers?
-       , supportsUninterpretedSorts :: Bool    -- ^ Support for SMT-Lib2 style uninterpreted-sorts
-       , supportsUnboundedInts      :: Bool    -- ^ Support for unbounded integers?
-       , supportsReals              :: Bool    -- ^ Support for reals?
-       , supportsApproxReals        :: Bool    -- ^ Supports printing of approximations of reals?
-       , supportsIEEE754            :: Bool    -- ^ Support for floating point numbers?
-       , supportsOptimization       :: Bool    -- ^ Support for optimization routines?
-       , supportsPseudoBooleans     :: Bool    -- ^ Support for pseudo-boolean operations?
-       , supportsCustomQueries      :: Bool    -- ^ Support for interactive queries per SMT-Lib?
-       , supportsGlobalDecls        :: Bool    -- ^ Support for global decls, needed for push-pop.
+         supportsQuantifiers        :: Bool           -- ^ Support for SMT-Lib2 style quantifiers?
+       , supportsUninterpretedSorts :: Bool           -- ^ Support for SMT-Lib2 style uninterpreted-sorts
+       , supportsUnboundedInts      :: Bool           -- ^ Support for unbounded integers?
+       , supportsReals              :: Bool           -- ^ Support for reals?
+       , supportsApproxReals        :: Bool           -- ^ Supports printing of approximations of reals?
+       , supportsIEEE754            :: Bool           -- ^ Support for floating point numbers?
+       , supportsOptimization       :: Bool           -- ^ Support for optimization routines?
+       , supportsPseudoBooleans     :: Bool           -- ^ Support for pseudo-boolean operations?
+       , supportsCustomQueries      :: Bool           -- ^ Support for interactive queries per SMT-Lib?
+       , supportsGlobalDecls        :: Bool           -- ^ Support for global decls, needed for push-pop.
+       , supportsFlattenedSequences :: Maybe [String] -- ^ Supports flattened sequence output, with given config lines
        }
 
 -- | Rounding mode to be used for the IEEE floating-point operations.

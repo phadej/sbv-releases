@@ -280,39 +280,39 @@ eqOptBool op w x y
 
 -- | Equality.
 svEqual :: SVal -> SVal -> SVal
-svEqual = liftSym2B (mkSymOpSC (eqOptBool Equal trueSW) Equal) rationalCheck (==) (==) (==) (==) (==) (==) (==)
+svEqual = liftSym2B (mkSymOpSC (eqOptBool Equal trueSW) Equal) rationalCheck (==) (==) (==) (==) (==) (==) (==) (==)
 
 -- | Inequality.
 svNotEqual :: SVal -> SVal -> SVal
-svNotEqual = liftSym2B (mkSymOpSC (eqOptBool NotEqual falseSW) NotEqual) rationalCheck (/=) (/=) (/=) (/=) (/=) (/=) (/=)
+svNotEqual = liftSym2B (mkSymOpSC (eqOptBool NotEqual falseSW) NotEqual) rationalCheck (/=) (/=) (/=) (/=) (/=) (/=) (/=) (/=)
 
 -- | Less than.
 svLessThan :: SVal -> SVal -> SVal
 svLessThan x y
   | isConcreteMax x = svFalse
   | isConcreteMin y = svFalse
-  | True            = liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan) rationalCheck (<) (<) (<) (<) (<) (<) (uiLift "<" (<)) x y
+  | True            = liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan) rationalCheck (<) (<) (<) (<) (<) (<) (<) (uiLift "<" (<)) x y
 
 -- | Greater than.
 svGreaterThan :: SVal -> SVal -> SVal
 svGreaterThan x y
   | isConcreteMin x = svFalse
   | isConcreteMax y = svFalse
-  | True            = liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) rationalCheck (>) (>) (>) (>) (>) (>) (uiLift ">"  (>)) x y
+  | True            = liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) rationalCheck (>) (>) (>) (>) (>) (>) (>) (uiLift ">"  (>)) x y
 
 -- | Less than or equal to.
 svLessEq :: SVal -> SVal -> SVal
 svLessEq x y
   | isConcreteMin x = svTrue
   | isConcreteMax y = svTrue
-  | True            = liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq) rationalCheck (<=) (<=) (<=) (<=) (<=) (<=) (uiLift "<=" (<=)) x y
+  | True            = liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq) rationalCheck (<=) (<=) (<=) (<=) (<=) (<=) (<=) (uiLift "<=" (<=)) x y
 
 -- | Greater than or equal to.
 svGreaterEq :: SVal -> SVal -> SVal
 svGreaterEq x y
   | isConcreteMax x = svTrue
   | isConcreteMin y = svTrue
-  | True            = liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq) rationalCheck (>=) (>=) (>=) (>=) (>=) (>=) (uiLift ">=" (>=)) x y
+  | True            = liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq) rationalCheck (>=) (>=) (>=) (>=) (>=) (>=) (>=) (uiLift ">=" (>=)) x y
 
 -- | Bitwise and.
 svAnd :: SVal -> SVal -> SVal
@@ -1198,9 +1198,9 @@ liftSym2 :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgRe
 liftSym2 _   okCW opCR opCI opCF opCD   (SVal k (Left a)) (SVal _ (Left b)) | okCW a b = SVal k . Left  $! mapCW2 opCR opCI opCF opCD noCharLift2 noStringLift2 noUnint2 a b
 liftSym2 opS _    _    _    _    _    a@(SVal k _)        b                            = SVal k $ Right $  liftSW2 opS k a b
 
-liftSym2B :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgReal -> AlgReal -> Bool) -> (Integer -> Integer -> Bool) -> (Float -> Float -> Bool) -> (Double -> Double -> Bool) -> (Char -> Char -> Bool) -> (String -> String -> Bool) -> ((Maybe Int, String) -> (Maybe Int, String) -> Bool) -> SVal -> SVal -> SVal
-liftSym2B _   okCW opCR opCI opCF opCD opCC opCS opUI (SVal _ (Left a)) (SVal _ (Left b)) | okCW a b = svBool (liftCW2 opCR opCI opCF opCD opCC opCS opUI a b)
-liftSym2B opS _    _    _    _    _    _    _    _    a                 b                            = SVal KBool $ Right $ liftSW2 opS KBool a b
+liftSym2B :: (State -> Kind -> SW -> SW -> IO SW) -> (CW -> CW -> Bool) -> (AlgReal -> AlgReal -> Bool) -> (Integer -> Integer -> Bool) -> (Float -> Float -> Bool) -> (Double -> Double -> Bool) -> (Char -> Char -> Bool) -> (String -> String -> Bool) -> ([CWVal] -> [CWVal] -> Bool) -> ((Maybe Int, String) -> (Maybe Int, String) -> Bool) -> SVal -> SVal -> SVal
+liftSym2B _   okCW opCR opCI opCF opCD opCC opCS opCSeq opUI (SVal _ (Left a)) (SVal _ (Left b)) | okCW a b = svBool (liftCW2 opCR opCI opCF opCD opCC opCS opCSeq opUI a b)
+liftSym2B opS _    _    _    _    _    _    _    _      _    a                 b                            = SVal KBool $ Right $ liftSW2 opS KBool a b
 
 -- | Create a symbolic two argument operation; with shortcut optimizations
 mkSymOpSC :: (SW -> SW -> Maybe SW) -> Op -> State -> Kind -> SW -> SW -> IO SW
@@ -1232,21 +1232,29 @@ uiLift _ cmp (Just i, _) (Just j, _) = i `cmp` j
 uiLift w _   a           b           = error $ "Data.SBV.Core.Operations: Impossible happened while trying to lift " ++ w ++ " over " ++ show (a, b)
 
 -- | Predicate for optimizing word operations like (+) and (*).
+-- NB. We specifically do *not* match for Double/Float; because
+-- FP-arithmetic doesn't obey traditional rules. For instance,
+-- 0 * x = 0 fails if x happens to be NaN or +/- Infinity. So,
+-- we merely return False when given a floating-point value here.
 isConcreteZero :: SVal -> Bool
 isConcreteZero (SVal _     (Left (CW _     (CWInteger n)))) = n == 0
 isConcreteZero (SVal KReal (Left (CW KReal (CWAlgReal v)))) = isExactRational v && v == 0
 isConcreteZero _                                            = False
 
 -- | Predicate for optimizing word operations like (+) and (*).
+-- NB. See comment on 'isConcreteZero' for why we don't match
+-- for Float/Double values here.
 isConcreteOne :: SVal -> Bool
 isConcreteOne (SVal _     (Left (CW _     (CWInteger 1)))) = True
 isConcreteOne (SVal KReal (Left (CW KReal (CWAlgReal v)))) = isExactRational v && v == 1
 isConcreteOne _                                            = False
 
--- | Predicate for optimizing bitwise operations.
+-- | Predicate for optimizing bitwise operations. The unbounded integer case of checking
+-- against -1 might look dubious, but that's how Haskell treats 'Integer' as a member
+-- of the Bits class, try @(-1 :: Integer) `testBit` i@ for any @i@ and you'll get 'True'.
 isConcreteOnes :: SVal -> Bool
 isConcreteOnes (SVal _ (Left (CW (KBounded b w) (CWInteger n)))) = n == if b then -1 else bit w - 1
-isConcreteOnes (SVal _ (Left (CW KUnbounded     (CWInteger n)))) = n == -1
+isConcreteOnes (SVal _ (Left (CW KUnbounded     (CWInteger n)))) = n == -1  -- see comment above
 isConcreteOnes (SVal _ (Left (CW KBool          (CWInteger n)))) = n == 1
 isConcreteOnes _                                                 = False
 

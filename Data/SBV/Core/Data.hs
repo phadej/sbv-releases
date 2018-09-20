@@ -11,9 +11,11 @@
 
 {-# LANGUAGE CPP                   #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
+{-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE InstanceSigs          #-}
 {-# LANGUAGE PatternGuards         #-}
@@ -24,7 +26,7 @@
 
 module Data.SBV.Core.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
- , SInt8, SInt16, SInt32, SInt64, SInteger, SReal, SFloat, SDouble, SChar, SString
+ , SInt8, SInt16, SInt32, SInt64, SInteger, SReal, SFloat, SDouble, SChar, SString, SList
  , nan, infinity, sNaN, sInfinity, RoundingMode(..), SRoundingMode
  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero
  , sRNE, sRNA, sRTP, sRTN, sRTZ
@@ -38,7 +40,7 @@ module Data.SBV.Core.Data
  , sbvToSW, sbvToSymSW, forceSWArg
  , SBVExpr(..), newExpr
  , cache, Cached, uncache, uncacheAI, HasKind(..)
- , Op(..), PBOp(..), FPOp(..), StrOp(..), RegExp(..), NamedSymVar, getTableIndex
+ , Op(..), PBOp(..), FPOp(..), StrOp(..), SeqOp(..), RegExp(..), NamedSymVar, getTableIndex
  , SBVPgm(..), Symbolic, runSymbolic, State, getPathCondition, extendPathCondition
  , inSMTMode, SBVRunMode(..), Kind(..), Outputtable(..), Result(..)
  , SolverContext(..), internalVariable, internalConstraint, isCodeGenMode
@@ -53,6 +55,7 @@ module Data.SBV.Core.Data
  ) where
 
 import GHC.Generics (Generic)
+import GHC.Exts     (IsList(..))
 
 import Control.DeepSeq      (NFData(..))
 import Control.Monad.Reader (ask)
@@ -60,6 +63,8 @@ import Control.Monad.Trans  (liftIO)
 import Data.Int             (Int8, Int16, Int32, Int64)
 import Data.Word            (Word8, Word16, Word32, Word64)
 import Data.List            (elemIndex)
+import Data.Maybe           (fromMaybe)
+import Data.Typeable        (Typeable)
 
 import qualified Data.Generics as G    (Data(..))
 
@@ -142,9 +147,22 @@ type SChar = SBV Char
 
 -- | A symbolic string. Note that a symbolic string is /not/ a list of symbolic characters,
 -- that is, it is not the case that @SString = [SChar]@, unlike what one might expect following
--- Haskell strings. An 'SString' is a symbolic value of its own, of possibly arbitrary length,
+-- Haskell strings. An 'SString' is a symbolic value of its own, of possibly arbitrary but finite length,
 -- and internally processed as one unit as opposed to a fixed-length list of characters.
 type SString = SBV String
+
+-- | A symbolic list of items. Note that a symbolic list is /not/ a list of symbolic items,
+-- that is, it is not the case that @SList a = [a]@, unlike what one might expect following
+-- haskell lists\/sequences. An 'SList' is a symbolic value of its own, of possibly arbitrary but finite
+-- length, and internally processed as one unit as opposed to a fixed-length list of items.
+-- Note that lists can be nested, i.e., we do allow lists of lists of ... items.
+type SList a = SBV [a]
+
+-- | IsList instance allows list literals to be written compactly.
+instance SymWord [a] => IsList (SList a) where
+  type Item (SList a) = a
+  fromList = literal
+  toList x = fromMaybe (error "IsList.toList used in a symbolic context!") (unliteral x)
 
 -- | Not-A-Number for 'Double' and 'Float'. Surprisingly, Haskell
 -- Prelude doesn't have this value defined, so we provide it here.
@@ -334,7 +352,7 @@ instance (Outputtable a, Outputtable b, Outputtable c, Outputtable d, Outputtabl
 -- to be fed to a symbolic program. Note that these methods are typically not needed
 -- in casual uses with 'prove', 'sat', 'allSat' etc, as default instances automatically
 -- provide the necessary bits.
-class (HasKind a, Ord a) => SymWord a where
+class (HasKind a, Ord a, Typeable a) => SymWord a where
   -- | Create a user named input (universal)
   forall :: String -> Symbolic (SBV a)
   -- | Create an automatically named input

@@ -8,6 +8,7 @@
 --
 -- Conversion of symbolic programs to SMTLib format, Using v2 of the standard
 -----------------------------------------------------------------------------
+
 {-# LANGUAGE PatternGuards #-}
 
 module Data.SBV.SMT.SMTLib2(cvt, cvtInc) where
@@ -22,6 +23,7 @@ import qualified Data.IntMap.Strict   as IM
 import qualified Data.Set             as Set
 
 import Data.SBV.Core.Data
+import Data.SBV.Core.Kind (smtType)
 import Data.SBV.SMT.Utils
 import Data.SBV.Control.Types
 
@@ -43,6 +45,7 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
         usorts         = [(s, dt) | KUserSort s dt <- Set.toList kindInfo]
         hasNonBVArrays = (not . null) [() | (_, (_, (k1, k2), _)) <- arrs, not (isBounded k1 && isBounded k2)]
         hasArrayInits  = (not . null) [() | (_, (_, _, ArrayFree (Just _))) <- arrs]
+        hasList        = any isList kindInfo
         rm             = roundingMode cfg
         solverCaps     = capabilities (solver cfg)
 
@@ -64,11 +67,11 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
            -- NB. This isn't really fool proof!
 
            -- we never set QF_S (ALL seems to work better in all cases)
-           
+
            | hasArrayInits
            = ["(set-logic ALL)"]
 
-           | hasString
+           | hasString || hasList
            = ["(set-logic ALL)"]
 
            | hasDouble || hasFloat
@@ -94,7 +97,8 @@ cvt kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arrs ui
                     | True                     = "UF"
 
         -- SBV always requires the production of models!
-        getModels   = ["(set-option :produce-models true)"]
+        getModels   = "(set-option :produce-models true)"
+                    : concat [flattenConfig | hasList, Just flattenConfig <- [supportsFlattenedSequences solverCaps]]
 
         -- process all other settings we're given
         userSettings = concatMap opts $ solverSetOptions cfg
@@ -432,17 +436,6 @@ swType s = smtType (kindOf s)
 swFunType :: [SW] -> SW -> String
 swFunType ss s = "(" ++ unwords (map swType ss) ++ ") " ++ swType s
 
-smtType :: Kind -> String
-smtType KBool           = "Bool"
-smtType (KBounded _ sz) = "(_ BitVec " ++ show sz ++ ")"
-smtType KUnbounded      = "Int"
-smtType KReal           = "Real"
-smtType KFloat          = "(_ FloatingPoint  8 24)"
-smtType KDouble         = "(_ FloatingPoint 11 53)"
-smtType KString         = "String"
-smtType KChar           = "(_ BitVec 8)"
-smtType (KUserSort s _) = s
-
 cvtType :: SBVType -> String
 cvtType (SBVType []) = error "SBV.SMT.SMTLib2.cvtType: internal: received an empty type!"
 cvtType (SBVType xs) = "(" ++ unwords (map smtType body) ++ ") " ++ smtType ret
@@ -478,8 +471,9 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         doubleOp = any isDouble  arguments
         floatOp  = any isFloat   arguments
         boolOp   = all isBoolean arguments
-        charOp   = all isChar    arguments
-        stringOp = all isString  arguments
+        charOp   = any isChar    arguments
+        stringOp = any isString  arguments
+        listOp   = any isList    arguments
 
         bad | intOp = error $ "SBV.SMTLib2: Unsupported operation on unbounded integers: " ++ show expr
             | True  = error $ "SBV.SMTLib2: Unsupported operation on real values: " ++ show expr
@@ -560,6 +554,14 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
             in "(" ++ o ++ " " ++ a1 ++ " " ++ a2 ++ ")"
         stringCmp _ o sbvs = error $ "SBV.SMT.SMTLib2.sh.stringCmp: Unexpected arguments: " ++ show (o, sbvs)
 
+        -- NB. Likewise for sequences
+        seqCmp swap o [a, b]
+          | KList{} <- kindOf (head arguments)
+          = let [a1, a2] | swap = [b, a]
+                         | True = [a, b]
+            in "(" ++ o ++ " " ++ a1 ++ " " ++ a2 ++ ")"
+        seqCmp _ o sbvs = error $ "SBV.SMT.SMTLib2.sh.seqCmp: Unexpected arguments: " ++ show (o, sbvs)
+
         lift1  o _ [x]    = "(" ++ o ++ " " ++ x ++ ")"
         lift1  o _ sbvs   = error $ "SBV.SMT.SMTLib2.sh.lift1: Unexpected arguments: "   ++ show (o, sbvs)
 
@@ -577,6 +579,7 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                               KDouble       -> error "SBV.SMT.SMTLib2.cvtExp: unexpected double valued index"
                               KChar         -> error "SBV.SMT.SMTLib2.cvtExp: unexpected char valued index"
                               KString       -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
+                              KList k       -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected list valued: " ++ show k
                               KUserSort s _ -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected uninterpreted valued index: " ++ s
                 lkUp = "(" ++ getTable tableMap t ++ " " ++ ssw i ++ ")"
                 cond
@@ -591,6 +594,7 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                 KDouble       -> ("fp.lt", "fp.geq")
                                 KChar         -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
                                 KString       -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
+                                KList k       -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected sequence valued index: " ++ show k
                                 KUserSort s _ -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected uninterpreted valued index: " ++ s
                 mkCnst = cvtCW rm . mkConstCW (kindOf i)
                 le0  = "(" ++ less ++ " " ++ ssw i ++ " " ++ mkCnst 0 ++ ")"
@@ -652,6 +656,8 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         sh (SBVApp (StrOp (StrInRe r)) args) = "(str.in.re " ++ unwords (map ssw args) ++ " " ++ show r ++ ")"
         sh (SBVApp (StrOp op)          args) = "(" ++ show op ++ " " ++ unwords (map ssw args) ++ ")"
 
+        sh (SBVApp (SeqOp op) args) = "(" ++ show op ++ " " ++ unwords (map ssw args) ++ ")"
+
         sh inp@(SBVApp op args)
           | intOp, Just f <- lookup op smtOpIntTable
           = f True (map ssw args)
@@ -666,6 +672,8 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
           | charOp, Just f <- lookup op smtCharTable
           = f False (map ssw args)
           | stringOp, Just f <- lookup op smtStringTable
+          = f (map ssw args)
+          | listOp, Just f <- lookup op smtListTable
           = f (map ssw args)
           | Just f <- lookup op uninterpretedTable
           = f (map ssw args)
@@ -744,6 +752,15 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                  , (LessEq,      stringCmp False "str.<=")
                                  , (GreaterEq,   stringCmp True  "str.<=")
                                  ]
+                -- For lists, equality is really the only operator
+                -- Likewise here, things might change for comparisons
+                smtListTable = [ (Equal,       lift2S "="        "="        True)
+                               , (NotEqual,    liftNS "distinct" "distinct" True)
+                               , (LessThan,    seqCmp False "seq.<")
+                               , (GreaterThan, seqCmp True  "seq.<")
+                               , (LessEq,      seqCmp False "seq.<=")
+                               , (GreaterEq,   seqCmp True  "seq.<=")
+                               ]
 
 -----------------------------------------------------------------------------------------------
 -- Casts supported by SMTLib. (From: <http://smtlib.cs.uiowa.edu/theories-FloatingPoint.shtml>)

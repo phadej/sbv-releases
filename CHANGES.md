@@ -1,7 +1,27 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 7.10, 2018-07-20
+* Latest Hackage released version: 7.11, 2018-09-20
+
+### Version 7.11, 2018-09-20
+
+  * Add support for symbolic lists. (That is, arbitrary but fixed length symbolic
+    lists of integers, floats, reals, etc. Nested lists are allowed as well.)
+    This is building on top of Joel Burget's initial work for supporting symbolic
+    strings and sequences, as supported by Z3. Note that the list theory solvers
+    are incomplete, so some queries might receive an unknown answer. See
+    "Documentation/SBV/Examples/Lists/Fibonacci.hs" for an example, and the
+    module "Data.SBV.List" for details.
+
+  * A new module 'Data.SBV.List.Bounded' provides extra functions to manipulate
+    lists with given concrete bounds. Note that SMT solvers cannot deal with
+    recursive functions/inductive proofs in general, so the utilities in this
+    file can come in handy when expressing bounded-model-checking style
+    algorithms. See "Documentation/SBV/Examples/Lists/BoundedMutex.hs" for a
+    simple mutex algorithm proof.
+
+  * Remove dependency on data-binary-ieee754 package; which is no longer
+    supported.
 
 ### Version 7.10, 2018-07-20
 
