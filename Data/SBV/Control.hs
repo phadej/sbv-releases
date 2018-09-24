@@ -131,8 +131,8 @@ they allow direct control of the solver. Here's a simple example:
                                                 return $ Just (xv2, yv2)
 @
 
-Note the type of 'test', it returns an optional pair of integers in the 'Symbolic' monad. We turn
-it into an IO value with the 'runSMT' function: (There's also 'runSMTWith' that uses a user specified
+Note the type of @test@: it returns an optional pair of integers in the 'Symbolic' monad. We turn
+it into an IO value with the 'Data.SBV.Control.runSMT' function: (There's also 'Data.SBV.Control.runSMTWith' that uses a user specified
 solver instead of the default.)
 
 @
@@ -153,7 +153,7 @@ provides access to many SMTLib features in the query mode, as exported from this
 
 For other examples see:
 
-  - "Documentation.SBV.Examples.Queries.AllSat": Simulating SBV's 'allSat' using queries.
+  - "Documentation.SBV.Examples.Queries.AllSat": Simulating SBV's 'Data.SBV.allSat' using queries.
   - "Documentation.SBV.Examples.Queries.CaseSplit": Performing a case-split during a query.
   - "Documentation.SBV.Examples.Queries.Enums": Using enumerations in queries.
   - "Documentation.SBV.Examples.Queries.FourFours": Solution to a fun arithmetic puzzle, coded using queries.

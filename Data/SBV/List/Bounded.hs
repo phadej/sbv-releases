@@ -19,8 +19,8 @@
 module Data.SBV.List.Bounded (
      -- * General folds
      bfoldr, bfoldl
-     -- * Map, filter, zipWith
-   , bmap, bfilter, bzipWith
+     -- * Map, filter, zipWith, elem
+   , bmap, bfilter, bzipWith, belem
      -- * Aggregates
    , bsum, bprod, band, bor, bany, ball, bmaximum, bminimum
    )
@@ -36,13 +36,13 @@ lcase s e c = ite (L.null s) e (c (L.head s) (L.tail s))
 
 -- | Bounded fold from the right.
 bfoldr :: (SymWord a, SymWord b) => Int -> (SBV a -> SBV b -> SBV b) -> SBV b -> SList a -> SBV b
-bfoldr cnt f b = go cnt
+bfoldr cnt f b = go (cnt `max` 0)
   where go 0 _ = b
         go i s = lcase s b (\h t -> h `f` go (i-1) t)
 
 -- | Bounded fold from the left.
 bfoldl :: (SymWord a, SymWord b) => Int -> (SBV b -> SBV a -> SBV b) -> SBV b -> SList a -> SBV b
-bfoldl cnt f = go cnt
+bfoldl cnt f = go (cnt `max` 0)
   where go 0 b _ = b
         go i b s = lcase s b (\h t -> go (i-1) (b `f` h) t)
 
@@ -66,7 +66,7 @@ bfilter i f = bfoldr i (\x y -> ite (f x) (x .: y) y) []
 band :: Int -> SList Bool -> SBool
 band i = bfoldr i (&&&) (true  :: SBool)
 
--- | Bounded logical and
+-- | Bounded logical or
 bor :: Int -> SList Bool -> SBool
 bor i = bfoldr i (|||) (false :: SBool)
 
@@ -88,8 +88,12 @@ bminimum i l = bfoldl (i-1) smin (L.head l) (L.tail l)
 
 -- | Bounded zipWith
 bzipWith :: (SymWord a, SymWord b, SymWord c) => Int -> (SBV a -> SBV b -> SBV c) -> SList a -> SList b -> SList c
-bzipWith cnt f = go cnt
+bzipWith cnt f = go (cnt `max` 0)
    where go 0 _  _  = []
          go i xs ys = ite (L.null xs ||| L.null ys)
                           []
                           (f (L.head xs) (L.head ys) .: go (i-1) (L.tail xs) (L.tail ys))
+
+-- | Bounded element check
+belem :: SymWord a => Int -> SBV a -> SList a -> SBool
+belem i e = bany i (e .==)

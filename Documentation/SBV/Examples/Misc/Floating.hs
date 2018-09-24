@@ -142,9 +142,8 @@ multInverse = prove $ do a <- sDouble "a"
 -- can effect the results of a computation if the exact result cannot be precisely
 -- represented. SBV exports the functions 'fpAdd', 'fpSub', 'fpMul', 'fpDiv', 'fpFMA'
 -- and 'fpSqrt' which allows users to specify the IEEE supported 'RoundingMode' for
--- the operation. (Also see the class 'RoundingFloat'.) This example illustrates how SBV
--- can be used to find rounding-modes where, for instance, addition can produce different
--- results. We have:
+-- the operation. This example illustrates how SBV can be used to find rounding-modes
+-- where, for instance, addition can produce different results. We have:
 --
 -- >>> roundingAdd
 -- Satisfiable. Model:
@@ -166,7 +165,7 @@ multInverse = prove $ do a <- sDouble "a"
 -- Satisfiable. Model:
 --   s0 = 0.999939 :: Float
 --
--- We can see why these two resuls are indeed different: The 'RoundTowardsPositive'
+-- We can see why these two resuls are indeed different: The 'RoundTowardPositive'
 -- (which rounds towards positive-infinity) produces a larger result. Indeed, if we treat these numbers
 -- as 'Double' values, we get:
 --

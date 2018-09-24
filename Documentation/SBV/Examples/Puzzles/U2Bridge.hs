@@ -83,7 +83,7 @@ here, there :: SLocation
 --
 -- This type is equipped with an automatically derived 'Mergeable' instance
 -- because each field is 'Mergeable'. A 'Generic' instance must also be derived
--- for this to work, and the 'DeriveAnyClass' language extension must be
+-- for this to work, and the @DeriveAnyClass@ language extension must be
 -- enabled. The derived 'Mergeable' instance simply walks down the structure
 -- field by field and merges each one. An equivalent hand-written 'Mergeable'
 -- instance is provided in a comment below.
@@ -146,7 +146,7 @@ xferFlash = modify $ \s -> s{flash = ite (flash s .== here) there here}
 
 -- | Transferring a person to the other side
 xferPerson :: SU2Member -> Move ()
-xferPerson p =  do [lb, le, la, ll] <- mapM peek [lBono, lEdge, lAdam, lLarry]
+xferPerson p =  do ~[lb, le, la, ll] <- mapM peek [lBono, lEdge, lAdam, lLarry]
                    let move l = ite (l .== here) there here
                        lb' = ite (p .== bono)  (move lb) lb
                        le' = ite (p .== edge)  (move le) le
@@ -162,7 +162,7 @@ bumpTime1 p = modify $ \s -> s{time = time s + sCrossTime p}
 bumpTime2 :: SU2Member -> SU2Member -> Move ()
 bumpTime2 p1 p2 = modify $ \s -> s{time = time s + sCrossTime p1 `smax` sCrossTime p2}
 
--- | Symbolic version of 'when'
+-- | Symbolic version of 'Control.Monad.when'
 whenS :: SBool -> Move () -> Move ()
 whenS t a = ite t a (return ())
 

@@ -91,7 +91,7 @@ getPathCondition st = SBV (getSValPathCondition st)
 extendPathCondition :: State -> (SBool -> SBool) -> State
 extendPathCondition st f = extendSValPathCondition st (unSBV . f . SBV)
 
--- | The "Symbolic" value. The parameter 'a' is phantom, but is
+-- | The "Symbolic" value. The parameter @a@ is phantom, but is
 -- extremely important in keeping the user interface strongly typed.
 newtype SBV a = SBV { unSBV :: SVal }
               deriving (Generic, NFData)
@@ -210,7 +210,7 @@ sRoundNearestTiesToEven = literal RoundNearestTiesToEven
 sRoundNearestTiesToAway :: SRoundingMode
 sRoundNearestTiesToAway = literal RoundNearestTiesToAway
 
--- | Symbolic variant of 'RoundNearestPositive'
+-- | Symbolic variant of 'RoundTowardPositive'
 sRoundTowardPositive :: SRoundingMode
 sRoundTowardPositive = literal RoundTowardPositive
 
@@ -298,7 +298,7 @@ class SolverContext m where
    -- | Set a solver time-out value, in milli-seconds. This function
    -- essentially translates to the SMTLib call @(set-info :timeout val)@,
    -- and your backend solver may or may not support it! The amount given
-   -- is in milliseconds. Also see the function 'timeOut' for finer level
+   -- is in milliseconds. Also see the function 'Data.SBV.Control.timeOut' for finer level
    -- control of time-outs, directly from SBV.
    setTimeOut :: Integer -> m ()
 
@@ -350,8 +350,8 @@ instance (Outputtable a, Outputtable b, Outputtable c, Outputtable d, Outputtabl
 -------------------------------------------------------------------------------
 -- | A 'SymWord' is a potential symbolic bitvector that can be created instances of
 -- to be fed to a symbolic program. Note that these methods are typically not needed
--- in casual uses with 'prove', 'sat', 'allSat' etc, as default instances automatically
--- provide the necessary bits.
+-- in casual uses with 'Data.SBV.prove', 'Data.SBV.sat', 'Data.SBV.allSat' etc, as
+-- default instances automatically provide the necessary bits.
 class (HasKind a, Ord a, Typeable a) => SymWord a where
   -- | Create a user named input (universal)
   forall :: String -> Symbolic (SBV a)
@@ -453,7 +453,7 @@ instance (Random a, SymWord a) => Random (SBV a) where
 --
 --    * 'SArray' produces SMTLib arrays, and requires a solver that understands the
 --      array theory. 'SFunArray' is internally handled, and thus can be used with
---      any solver. (Note that all solvers except 'abc' support arrays, so this isn't
+--      any solver. (Note that all solvers except 'Data.SBV.abc' support arrays, so this isn't
 --      a big decision factor.)
 --
 --    * For both arrays, if a default value is supplied, then reading from uninitialized
