@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       7.12
+Version:       7.13
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -48,10 +48,10 @@ Library
                     TypeOperators
                     TypeSynonymInstances
   Build-Depends   : base >= 4.9 && < 5
-                  , crackNum >= 2.2
+                  , crackNum >= 2.3
                   , ghc, QuickCheck, template-haskell
                   , array, async, containers, deepseq, directory, filepath, time
-                  , pretty, process, mtl, random, syb, reinterpret-cast
+                  , pretty, process, mtl, random, syb
                   , generic-deriving
   Exposed-modules : Data.SBV
                   , Data.SBV.Control
@@ -66,6 +66,8 @@ Library
                   , Data.SBV.Tools.GenTest
                   , Data.SBV.Tools.Overflow
                   , Data.SBV.Tools.Polynomial
+                  , Data.SBV.Tools.Range
+                  , Data.SBV.Tools.BoundedFix
                   , Data.SBV.Tools.STree
                   , Documentation.SBV.Examples.BitPrecise.BitTricks
                   , Documentation.SBV.Examples.BitPrecise.BrokenSearch
@@ -104,7 +106,9 @@ Library
                   , Documentation.SBV.Examples.Puzzles.DogCatMouse
                   , Documentation.SBV.Examples.Puzzles.Euler185
                   , Documentation.SBV.Examples.Puzzles.Fish
+                  , Documentation.SBV.Examples.Puzzles.Garden
                   , Documentation.SBV.Examples.Puzzles.HexPuzzle
+                  , Documentation.SBV.Examples.Puzzles.LadyAndTigers
                   , Documentation.SBV.Examples.Puzzles.MagicSquare
                   , Documentation.SBV.Examples.Puzzles.NQueens
                   , Documentation.SBV.Examples.Puzzles.SendMoreMoney
@@ -166,7 +170,7 @@ Test-Suite SBVTest
                   , DeriveDataTypeable
                   , Rank2Types
                   , ScopedTypeVariables
-  Build-depends : base >= 4.9, reinterpret-cast, filepath, syb
+  Build-depends : base >= 4.9, filepath, syb, crackNum >= 2.3
                 , sbv, directory, random, mtl, containers
                 , template-haskell, bytestring, tasty, tasty-golden, tasty-hunit, tasty-quickcheck, QuickCheck
   Hs-Source-Dirs  : SBVTestSuite
@@ -180,6 +184,7 @@ Test-Suite SBVTest
                   , TestSuite.Basics.ArithSolver
                   , TestSuite.Basics.Assert
                   , TestSuite.Basics.BasicTests
+                  , TestSuite.Basics.BoundedList
                   , TestSuite.Basics.Exceptions
                   , TestSuite.Basics.GenBenchmark
                   , TestSuite.Basics.Higher

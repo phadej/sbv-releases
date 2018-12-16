@@ -36,6 +36,7 @@ import qualified Prelude as P
 
 import Data.SBV.Core.Data hiding (SeqOp(..))
 import Data.SBV.Core.Model
+import Data.SBV.Utils.Boolean ((==>))
 
 import qualified Data.Char as C
 import Data.List (genericLength, genericIndex, genericDrop, genericTake)
@@ -45,7 +46,7 @@ import qualified Data.List as L (tails, isSuffixOf, isPrefixOf, isInfixOf)
 --
 -- $setup
 -- >>> import Data.SBV.Provers.Prover (prove, sat)
--- >>> import Data.SBV.Utils.Boolean  ((==>), (&&&), bnot, (<=>))
+-- >>> import Data.SBV.Utils.Boolean  ((&&&), bnot, (<=>))
 -- >>> :set -XOverloadedStrings
 
 -- | Length of a string.
@@ -124,7 +125,7 @@ singleton = lift1 StrUnit (Just wrap)
 -- Q.E.D.
 -- >>> sat $ \s -> length s .>= 2 &&& strToStrAt s 0 ./= strToStrAt s (length s - 1)
 -- Satisfiable. Model:
---   s0 = "\NUL\NUL\EOT" :: String
+--   s0 = "\NUL\NUL\128" :: String
 strToStrAt :: SString -> SInteger -> SString
 strToStrAt s offset = subStr s offset 1
 
@@ -149,7 +150,7 @@ strToCharAt s i
         y si st = do c <- internalVariable st w8
                      cs <- newExpr st KString (SBVApp (StrOp StrUnit) [c])
                      let csSBV = SBV (SVal KString (Right (cache (\_ -> return cs))))
-                     internalConstraint st False [] $ unSBV $ csSBV .== si
+                     internalConstraint st False [] $ unSBV $ length s .> i ==> csSBV .== si
                      return c
 
 -- | Short cut for 'strToCharAt'
@@ -304,8 +305,8 @@ replace s src dst
 -- Q.E.D.
 -- >>> prove $ \s i -> i .> 0 &&& i .< length s ==> indexOf s (subStr s i 1) .== i
 -- Falsifiable. Counter-example:
---   s0 = "\NUL\NUL\NUL\NUL\NUL" :: String
---   s1 =                      3 :: Integer
+--   s0 = " \NUL\NUL\NUL\NUL\NUL" :: String
+--   s1 =                       3 :: Integer
 -- >>> prove $ \s1 s2 -> length s2 .> length s1 ==> indexOf s1 s2 .== -1
 -- Q.E.D.
 indexOf :: SString -> SString -> SInteger

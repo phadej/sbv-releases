@@ -103,24 +103,27 @@ exploitRe = R.KPlus (statementRe * "; ")
 -- Remember that our example program (in pseudo-code) is:
 --
 -- @
---   query ("SELECT msg FROM msgs where topicid='" ++ my_topicid ++ "'")
+--   query ("SELECT msg FROM msgs WHERE topicid='" ++ my_topicid ++ "'")
 -- @
 --
--- We have: (NB. Turning this doctest off, since Z3 no longer can handle
--- it, see: <http://github.com/LeventErkok/sbv/issues/418>.)
+-- We have:
 --
--- @
---   findInjection exampleProgram
---   "h'; DROP TABLE 'users"
--- @
+-- >>> findInjection exampleProgram
+-- "  f'; DROP TABLE 'users"
 --
 -- Indeed, if we substitute the suggested string, we get the program:
 --
--- > query ("SELECT msg FROM msgs where topicid='h'; DROP TABLE 'users'")
+-- > query ("SELECT msg FROM msgs WHERE topicid='  f'; DROP TABLE 'users'")
 --
--- which would query for topic @h@ and then delete the users table!
+-- which would query for topic @'  f'@ and then delete the users table!
 findInjection :: SQLExpr -> IO String
 findInjection expr = runSMT $ do
+
+    -- This example generates different outputs on different platforms (Mac vs Linux).
+    -- So, we explicitly set the random-seed to get a consistent doctest output
+    -- Otherwise the following line isn't needed.
+    setOption $ OptionKeyword ":smt.random_seed" ["1"]
+
     badTopic <- sString "badTopic"
 
     -- Create an initial environment that returns the symbolic

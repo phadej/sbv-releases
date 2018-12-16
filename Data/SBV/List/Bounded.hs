@@ -14,20 +14,24 @@
 -- bounded prefix of this list, at which point these functions come in handy.
 -----------------------------------------------------------------------------
 --
-{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE OverloadedLists     #-}
+{-# LANGUAGE Rank2Types          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Data.SBV.List.Bounded (
      -- * General folds
-     bfoldr, bfoldl
+     bfoldr, bfoldrM, bfoldl, bfoldlM
      -- * Map, filter, zipWith, elem
-   , bmap, bfilter, bzipWith, belem
+   , bmap, bmapM, bfilter, bzipWith, belem
      -- * Aggregates
    , bsum, bprod, band, bor, bany, ball, bmaximum, bminimum
+     -- * Miscellaneous: Reverse and sort
+   , breverse, bsort
    )
    where
 
 import Data.SBV
-import Data.SBV.List ((.:))
+import Data.SBV.List ((.:), (.++))
 import qualified Data.SBV.List as L
 
 -- | Case analysis on a symbolic list. (Not exported.)
@@ -40,11 +44,27 @@ bfoldr cnt f b = go (cnt `max` 0)
   where go 0 _ = b
         go i s = lcase s b (\h t -> h `f` go (i-1) t)
 
+-- | Bounded monadic fold from the right.
+bfoldrM :: forall a b m. (SymWord a, SymWord b, Monad m, Mergeable (m (SBV b)))
+        => Int -> (SBV a -> SBV b -> m (SBV b)) -> SBV b -> SList a -> m (SBV b)
+bfoldrM cnt f b = go (cnt `max` 0)
+  where go :: Int -> SList a -> m (SBV b)
+        go 0 _ = return b
+        go i s = lcase s (return b) (\h t -> f h =<< go (i-1) t)
+
 -- | Bounded fold from the left.
 bfoldl :: (SymWord a, SymWord b) => Int -> (SBV b -> SBV a -> SBV b) -> SBV b -> SList a -> SBV b
 bfoldl cnt f = go (cnt `max` 0)
   where go 0 b _ = b
         go i b s = lcase s b (\h t -> go (i-1) (b `f` h) t)
+
+-- | Bounded monadic fold from the left.
+bfoldlM :: forall a b m. (SymWord a, SymWord b, Monad m, Mergeable (m (SBV b)))
+        => Int -> (SBV b -> SBV a -> m (SBV b)) -> SBV b -> SList a -> m (SBV b)
+bfoldlM cnt f = go (cnt `max` 0)
+  where go :: Int -> SBV b -> SList a -> m (SBV b)
+        go 0 b _ = return b
+        go i b s = lcase s (return b) (\h t -> do { fbh <- f b h; go (i-1) fbh t })
 
 -- | Bounded sum.
 bsum :: (SymWord a, Num a) => Int -> SList a -> SBV a
@@ -57,6 +77,11 @@ bprod i = bfoldl i (*) 1
 -- | Bounded map.
 bmap :: (SymWord a, SymWord b) => Int -> (SBV a -> SBV b) -> SList a -> SList b
 bmap i f = bfoldr i (\x -> (f x .:)) []
+
+-- | Bounded monadic map.
+bmapM :: (SymWord a, SymWord b, Monad m, Mergeable (m (SBV [b])))
+      => Int -> (SBV a -> m (SBV b)) -> SList a -> m (SList b)
+bmapM i f = bfoldrM i (\a bs -> (.:) <$> f a <*> pure bs) []
 
 -- | Bounded filter.
 bfilter :: SymWord a => Int -> (SBV a -> SBool) -> SList a -> SList a
@@ -79,11 +104,11 @@ ball :: SymWord a => Int -> (SBV a -> SBool) -> SList a -> SBool
 ball i f = band i . bmap i f
 
 -- | Bounded maximum. Undefined if list is empty.
-bmaximum :: (SymWord a, Num a) => Int -> SList a -> SBV a
+bmaximum :: SymWord a => Int -> SList a -> SBV a
 bmaximum i l = bfoldl (i-1) smax (L.head l) (L.tail l)
 
 -- | Bounded minimum. Undefined if list is empty.
-bminimum :: (SymWord a, Num a) => Int -> SList a -> SBV a
+bminimum :: SymWord a => Int -> SList a -> SBV a
 bminimum i l = bfoldl (i-1) smin (L.head l) (L.tail l)
 
 -- | Bounded zipWith
@@ -97,3 +122,24 @@ bzipWith cnt f = go (cnt `max` 0)
 -- | Bounded element check
 belem :: SymWord a => Int -> SBV a -> SList a -> SBool
 belem i e = bany i (e .==)
+
+-- | Bounded reverse
+breverse :: SymWord a => Int -> SList a -> SList a
+breverse cnt = bfoldr cnt (\a b -> b .++ L.singleton a) []
+
+-- | Bounded paramorphism (not exported).
+bpara :: (SymWord a, SymWord b) => Int -> (SBV a -> SBV [a] -> SBV b -> SBV b) -> SBV b -> SList a -> SBV b
+bpara cnt f b = go (cnt `max` 0)
+  where go 0 _ = b
+        go i s = lcase s b (\h t -> f h t (go (i-1) t))
+
+-- | Insert an element into a sorted list (not exported).
+binsert :: SymWord a => Int -> SBV a -> SList a -> SList a
+binsert cnt a = bpara cnt f (L.singleton a)
+  where f sortedHd sortedTl sortedTl' = ite (a .< sortedHd)
+                                            (a .: sortedHd .: sortedTl)
+                                            (sortedHd .: sortedTl')
+
+-- | Bounded insertion sort
+bsort :: SymWord a => Int -> SList a -> SList a
+bsort cnt = bfoldr cnt (binsert cnt) []

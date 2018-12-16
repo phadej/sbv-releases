@@ -19,7 +19,7 @@
 --
 -- >>> prove $ \x -> x `shiftL` 2 .== 2 * (x :: SWord8)
 -- Falsifiable. Counter-example:
---   s0 = 32 :: Word8
+--   s0 = 64 :: Word8
 --
 -- The function 'prove' has the following type:
 --
@@ -240,7 +240,7 @@ module Data.SBV (
   , OptimizeStyle(..)
   -- ** Objectives
   , Objective(..), Metric(..)
-  -- ** Soft assumptions
+  -- ** Soft assertions
   -- $softAssertions
   , assertWithPenalty , Penalty(..)
   -- ** Field extensions
@@ -501,8 +501,8 @@ We can use 'safe' to statically see if such a violation is possible before we us
 
 >>> safe (sub :: SInt8 -> SInt8 -> SInt8)
 [sub: x >= y must hold!: Violated. Model:
-  s0 = 30 :: Int8
-  s1 = 32 :: Int8]
+  s0 = 6 :: Int8
+  s1 = 8 :: Int8]
 
 What happens if we make sure to arrange for this invariant? Consider this version:
 
@@ -995,9 +995,7 @@ prove $ do a1 <- free "i1"
                res  = ite (a1 .== 12 &&& a2 .== 22)   -- insert a malicious bug!
                           1
                           (a1 + a2)
-           observe "Expected" spec
-           observe "Result"   res
-           return $ spec .== res
+           return $ observe "Expected" spec .== observe "Result" res
 :}
 Falsifiable. Counter-example:
   i1       = 12 :: Word8

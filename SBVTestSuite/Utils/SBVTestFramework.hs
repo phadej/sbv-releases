@@ -198,9 +198,6 @@ qc1 nm opC opS = [cf, sm]
                             expected = literal $ opC v
                             result   = opS i
 
-                        observe "Expected" expected
-                        observe "Result"   result
-
                         case (unliteral expected, unliteral result) of
                            (Just _, Just _) -> return $ expected .== result
                            _                -> return false
@@ -255,9 +252,6 @@ qc2 nm opC opS = [cf, sm]
                             expected = literal $ opC v1 v2
                             result   = opS i1 i2
 
-                        observe "Expected" expected
-                        observe "Result"   result
-
                         case (unliteral expected, unliteral result) of
                            (Just _, Just _) -> return $ expected .== result
                            _                -> return false
@@ -305,9 +299,6 @@ pickTests :: Int -> TestTree -> IO TestTree
 pickTests d origTests = fromMaybe noTestsSelected <$> walk origTests
    where noTestsSelected = TestGroup "pickTests.NoTestsSelected" []
 
-         walk PlusTestOptions{} = error "pickTests: Unexpected PlusTestOptions"
-         walk WithResource{}    = error "pickTests: Unexpected WithResource"
-         walk AskOptions{}      = error "pickTests: Unexpected AskOptions"
          walk t@SingleTest{}    = do c <- randomRIO (0, 99)
                                      if c < d
                                         then return $ Just t
@@ -316,5 +307,6 @@ pickTests d origTests = fromMaybe noTestsSelected <$> walk origTests
                                      case cs of
                                        [] -> return Nothing
                                        _  -> return $ Just $ TestGroup tn cs
+         walk _                 = error "pickTests: Unexpected test group!"
 
 {-# ANN module ("HLint: ignore Reduce duplication" :: String) #-}
