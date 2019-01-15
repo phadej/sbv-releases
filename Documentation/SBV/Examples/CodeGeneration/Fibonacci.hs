@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.CodeGeneration.Fibonacci
--- Copyright   :  (c) Lee Pike, Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.CodeGeneration.Fibonacci
+-- Author    : Lee Pike, Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Computing Fibonacci numbers and generating C code. Inspired by Lee Pike's
 -- original implementation, modified for inclusion in the package. It illustrates
@@ -35,7 +35,7 @@ import Data.SBV.Tools.CodeGen
 -- after a certain number of unrollings, but this would be quite expensive to
 -- implement, and would be impractical.)
 fib0 :: SWord64 -> SWord64
-fib0 n = ite (n .== 0 ||| n .== 1)
+fib0 n = ite (n .== 0 .|| n .== 1)
              n
              (fib0 (n-1) + fib0 (n-2))
 
@@ -64,7 +64,7 @@ can produce code as the unrolling will eventually stop.
 fib1 :: SWord64 -> SWord64 -> SWord64
 fib1 top n = fib' 0 1 0
   where fib' :: SWord64 -> SWord64 -> SWord64 -> SWord64
-        fib' prev' prev m = ite (m .== top ||| m .== n)          -- did we reach recursion depth, or the index we're looking for
+        fib' prev' prev m = ite (m .== top .|| m .== n)          -- did we reach recursion depth, or the index we're looking for
                                 prev'                            -- stop and return the result
                                 (fib' prev (prev' + prev) (m+1)) -- otherwise recurse
 

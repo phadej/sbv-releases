@@ -1,21 +1,22 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Control
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Control
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Control sublanguage for interacting with SMT solvers.
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE NamedFieldPuns  #-}
 
 module Data.SBV.Control (
      -- $queryIntro
 
      -- * User queries
-       Query, query
+       ExtractIO(..), MonadQuery(..), Queriable(..), Query, query
 
      -- * Create a fresh variable
      , freshVar_, freshVar
@@ -24,11 +25,11 @@ module Data.SBV.Control (
      , freshArray_, freshArray
 
      -- * Checking satisfiability
-     , CheckSatResult(..), checkSat, checkSatUsing, checkSatAssuming, checkSatAssumingWithUnsatisfiableSet
+     , CheckSatResult(..), checkSat, ensureSat, checkSatUsing, checkSatAssuming, checkSatAssumingWithUnsatisfiableSet
 
      -- * Querying the solver
      -- ** Extracting values
-     , SMTValue(..), getValue, getUninterpretedValue, getModel, getAssignment, getSMTResult, getUnknownReason
+     , SMTValue(..), getValue, getUninterpretedValue, getModel, getAssignment, getSMTResult, getUnknownReason, getObservables
 
      -- ** Extracting the unsat core
      , getUnsatCore
@@ -75,14 +76,33 @@ module Data.SBV.Control (
      ) where
 
 import Data.SBV.Core.Data     (SMTConfig(..))
-import Data.SBV.Core.Symbolic (Query, Symbolic, Query(..), QueryContext(..))
+import Data.SBV.Core.Symbolic (MonadQuery(..), Query, Queriable(..), Symbolic, QueryContext(..))
 
-import Data.SBV.Control.Query
-import Data.SBV.Control.Utils (SMTValue(..), queryDebug, executeQuery)
+import Data.SBV.Control.BaseIO
+import Data.SBV.Control.Query hiding (  getInfo, getOption, getUnknownReason, getObservables
+                                      , getSMTResult, getLexicographicOptResults
+                                      , getIndependentOptResults
+                                      , getParetoOptResults, getModel
+                                      , checkSatAssuming
+                                      , checkSatAssumingWithUnsatisfiableSet
+                                      , getAssertionStackDepth
+                                      , inNewAssertionStack, push, pop
+                                      , caseSplit, resetAssertions, echo, exit
+                                      , getUnsatCore, getProof, getInterpolant
+                                      , getAssertions, getAssignment
+                                      , mkSMTResult, freshVar_, freshVar
+                                      , freshArray, freshArray_, checkSat, ensureSat
+                                      , checkSatUsing, getValue
+                                      , getUninterpretedValue, timeout, io)
+import Data.SBV.Control.Utils (SMTValue)
+
+import Data.SBV.Utils.ExtractIO (ExtractIO(..))
+
+import qualified Data.SBV.Control.Utils as Trans
 
 -- | Run a custom query
 query :: Query a -> Symbolic a
-query = executeQuery QueryExternal
+query = Trans.executeQuery QueryExternal
 
 {- $queryIntro
 In certain cases, the user might want to take over the communication with the solver, programmatically

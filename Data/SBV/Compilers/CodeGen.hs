@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Compilers.CodeGen
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Compilers.CodeGen
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Code generation utilities
 -----------------------------------------------------------------------------
@@ -41,8 +41,7 @@ module Data.SBV.Compilers.CodeGen (
         ) where
 
 import Control.Monad             (filterM, replicateM, unless)
-import Control.Monad.Reader      (ask)
-import Control.Monad.Trans       (MonadIO, lift, liftIO)
+import Control.Monad.Trans       (MonadIO(liftIO), lift)
 import Control.Monad.State.Lazy  (MonadState, StateT(..), modify')
 import Data.Char                 (toLower, isSpace)
 import Data.List                 (nub, isPrefixOf, intercalate, (\\))
@@ -54,7 +53,7 @@ import           Text.PrettyPrint.HughesPJ      (Doc, vcat)
 import qualified Text.PrettyPrint.HughesPJ as P (render)
 
 import Data.SBV.Core.Data
-import Data.SBV.Core.Symbolic (svToSymSW, svMkSymVar, outputSVal)
+import Data.SBV.Core.Symbolic (MonadSymbolic(..), svToSymSV, svMkSymVar, outputSVal)
 
 #if MIN_VERSION_base(4,11,0)
 import Control.Monad.Fail as Fail
@@ -90,8 +89,8 @@ defaultCgConfig = CgConfig { cgRTC                = False
                            }
 
 -- | Abstraction of target language values
-data CgVal = CgAtomic SW
-           | CgArray  [SW]
+data CgVal = CgAtomic SV
+           | CgArray  [SV]
 
 -- | Code-generation state
 data CgState = CgState {
@@ -121,6 +120,7 @@ initCgState = CgState {
 -- and return values.
 newtype SBVCodeGen a = SBVCodeGen (StateT CgState Symbolic a)
                    deriving ( Applicative, Functor, Monad, MonadIO, MonadState CgState
+                            , MonadSymbolic
 #if MIN_VERSION_base(4,11,0)
                             , Fail.MonadFail
 #endif
@@ -129,10 +129,6 @@ newtype SBVCodeGen a = SBVCodeGen (StateT CgState Symbolic a)
 -- | Reach into symbolic monad from code-generation
 cgSym :: Symbolic a -> SBVCodeGen a
 cgSym = SBVCodeGen . lift
-
--- | Reach into symbolic monad and output a value. Returns the corresponding SW
-cgSBVToSW :: SBV a -> SBVCodeGen SW
-cgSBVToSW = cgSym . sbvToSymSW
 
 -- | Sets RTC (run-time-checks) for index-out-of-bounds, shift-with-large value etc. on/off. Default: 'False'.
 cgPerformRTCs :: Bool -> SBVCodeGen ()
@@ -210,93 +206,93 @@ cgAddLDFlags ss = modify' (\s -> s { cgLDFlags = cgLDFlags s ++ ss })
 
 -- | Creates an atomic input in the generated code.
 svCgInput :: Kind -> String -> SBVCodeGen SVal
-svCgInput k nm = do r  <- cgSym (ask >>= liftIO . svMkSymVar (Just ALL) k Nothing)
-                    sw <- cgSym (svToSymSW r)
-                    modify' (\s -> s { cgInputs = (nm, CgAtomic sw) : cgInputs s })
+svCgInput k nm = do r  <- symbolicEnv >>= liftIO . svMkSymVar (Just ALL) k Nothing
+                    sv <- svToSymSV r
+                    modify' (\s -> s { cgInputs = (nm, CgAtomic sv) : cgInputs s })
                     return r
 
 -- | Creates an array input in the generated code.
 svCgInputArr :: Kind -> Int -> String -> SBVCodeGen [SVal]
 svCgInputArr k sz nm
   | sz < 1 = error $ "SBV.cgInputArr: Array inputs must have at least one element, given " ++ show sz ++ " for " ++ show nm
-  | True   = do rs  <- cgSym $ ask >>= liftIO . replicateM sz . svMkSymVar (Just ALL) k Nothing
-                sws <- cgSym $ mapM svToSymSW rs
+  | True   = do rs  <- symbolicEnv >>= liftIO . replicateM sz . svMkSymVar (Just ALL) k Nothing
+                sws <- mapM svToSymSV rs
                 modify' (\s -> s { cgInputs = (nm, CgArray sws) : cgInputs s })
                 return rs
 
 -- | Creates an atomic output in the generated code.
 svCgOutput :: String -> SVal -> SBVCodeGen ()
-svCgOutput nm v = do _ <- cgSym (outputSVal v)
-                     sw <- cgSym (svToSymSW v)
-                     modify' (\s -> s { cgOutputs = (nm, CgAtomic sw) : cgOutputs s })
+svCgOutput nm v = do _ <- outputSVal v
+                     sv <- svToSymSV v
+                     modify' (\s -> s { cgOutputs = (nm, CgAtomic sv) : cgOutputs s })
 
 -- | Creates an array output in the generated code.
 svCgOutputArr :: String -> [SVal] -> SBVCodeGen ()
 svCgOutputArr nm vs
   | sz < 1 = error $ "SBV.cgOutputArr: Array outputs must have at least one element, received " ++ show sz ++ " for " ++ show nm
-  | True   = do _ <- cgSym (mapM outputSVal vs)
-                sws <- cgSym (mapM svToSymSW vs)
+  | True   = do mapM_ outputSVal vs
+                sws <- mapM svToSymSV vs
                 modify' (\s -> s { cgOutputs = (nm, CgArray sws) : cgOutputs s })
   where sz = length vs
 
 -- | Creates a returned (unnamed) value in the generated code.
 svCgReturn :: SVal -> SBVCodeGen ()
-svCgReturn v = do _ <- cgSym (outputSVal v)
-                  sw <- cgSym (svToSymSW v)
-                  modify' (\s -> s { cgReturns = CgAtomic sw : cgReturns s })
+svCgReturn v = do _ <- outputSVal v
+                  sv <- svToSymSV v
+                  modify' (\s -> s { cgReturns = CgAtomic sv : cgReturns s })
 
 -- | Creates a returned (unnamed) array value in the generated code.
 svCgReturnArr :: [SVal] -> SBVCodeGen ()
 svCgReturnArr vs
   | sz < 1 = error $ "SBV.cgReturnArr: Array returns must have at least one element, received " ++ show sz
-  | True   = do _ <- cgSym (mapM outputSVal vs)
-                sws <- cgSym (mapM svToSymSW vs)
+  | True   = do mapM_ outputSVal vs
+                sws <- mapM svToSymSV vs
                 modify' (\s -> s { cgReturns = CgArray sws : cgReturns s })
   where sz = length vs
 
 -- | Creates an atomic input in the generated code.
-cgInput :: SymWord a => String -> SBVCodeGen (SBV a)
-cgInput nm = do r <- cgSym forall_
-                sw <- cgSBVToSW r
-                modify' (\s -> s { cgInputs = (nm, CgAtomic sw) : cgInputs s })
+cgInput :: SymVal a => String -> SBVCodeGen (SBV a)
+cgInput nm = do r <- forall_
+                sv <- sbvToSymSV r
+                modify' (\s -> s { cgInputs = (nm, CgAtomic sv) : cgInputs s })
                 return r
 
 -- | Creates an array input in the generated code.
-cgInputArr :: SymWord a => Int -> String -> SBVCodeGen [SBV a]
+cgInputArr :: SymVal a => Int -> String -> SBVCodeGen [SBV a]
 cgInputArr sz nm
   | sz < 1 = error $ "SBV.cgInputArr: Array inputs must have at least one element, given " ++ show sz ++ " for " ++ show nm
-  | True   = do rs <- cgSym $ mapM (const forall_) [1..sz]
-                sws <- mapM cgSBVToSW rs
+  | True   = do rs <- mapM (const forall_) [1..sz]
+                sws <- mapM sbvToSymSV rs
                 modify' (\s -> s { cgInputs = (nm, CgArray sws) : cgInputs s })
                 return rs
 
 -- | Creates an atomic output in the generated code.
 cgOutput :: String -> SBV a -> SBVCodeGen ()
-cgOutput nm v = do _ <- cgSym (output v)
-                   sw <- cgSBVToSW v
-                   modify' (\s -> s { cgOutputs = (nm, CgAtomic sw) : cgOutputs s })
+cgOutput nm v = do _ <- output v
+                   sv <- sbvToSymSV v
+                   modify' (\s -> s { cgOutputs = (nm, CgAtomic sv) : cgOutputs s })
 
 -- | Creates an array output in the generated code.
-cgOutputArr :: SymWord a => String -> [SBV a] -> SBVCodeGen ()
+cgOutputArr :: SymVal a => String -> [SBV a] -> SBVCodeGen ()
 cgOutputArr nm vs
   | sz < 1 = error $ "SBV.cgOutputArr: Array outputs must have at least one element, received " ++ show sz ++ " for " ++ show nm
-  | True   = do _ <- cgSym (mapM output vs)
-                sws <- mapM cgSBVToSW vs
+  | True   = do mapM_ output vs
+                sws <- mapM sbvToSymSV vs
                 modify' (\s -> s { cgOutputs = (nm, CgArray sws) : cgOutputs s })
   where sz = length vs
 
 -- | Creates a returned (unnamed) value in the generated code.
 cgReturn :: SBV a -> SBVCodeGen ()
-cgReturn v = do _ <- cgSym (output v)
-                sw <- cgSBVToSW v
-                modify' (\s -> s { cgReturns = CgAtomic sw : cgReturns s })
+cgReturn v = do _ <- output v
+                sv <- sbvToSymSV v
+                modify' (\s -> s { cgReturns = CgAtomic sv : cgReturns s })
 
 -- | Creates a returned (unnamed) array value in the generated code.
-cgReturnArr :: SymWord a => [SBV a] -> SBVCodeGen ()
+cgReturnArr :: SymVal a => [SBV a] -> SBVCodeGen ()
 cgReturnArr vs
   | sz < 1 = error $ "SBV.cgReturnArr: Array returns must have at least one element, received " ++ show sz
-  | True   = do _ <- cgSym (mapM output vs)
-                sws <- mapM cgSBVToSW vs
+  | True   = do mapM_ output vs
+                sws <- mapM sbvToSymSV vs
                 modify' (\s -> s { cgReturns = CgArray sws : cgReturns s })
   where sz = length vs
 

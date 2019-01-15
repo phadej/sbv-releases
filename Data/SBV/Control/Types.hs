@@ -1,16 +1,16 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Control.Types
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Control.Types
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Types related to interactive queries
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE DeriveGeneric  #-}
 {-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric  #-}
 
 module Data.SBV.Control.Types (
        CheckSatResult(..)

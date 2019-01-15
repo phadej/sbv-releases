@@ -1,14 +1,15 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Utils.SBVTestFramework
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Utils.SBVTestFramework
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Various goodies for testing SBV
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -148,7 +149,7 @@ doTheDiff nm ref new act = goldenTest nm (BS.readFile ref) (act >> BS.readFile n
                 diff    = concatMap pick $ zip3 [1..diffLen] (lxs ++ repeat "") (lys ++ repeat "")
 
                 pick (i, expected, got)
-                  | expected == got
+                  | filter (/= '\r') expected == filter (/= '\r') got
                   = []
                   | True
                   = [ "== Line " ++ show i ++ " =="
@@ -186,21 +187,21 @@ assertIsntSat :: Provable a => a -> Assertion
 assertIsntSat p = assert (fmap not (isSatisfiable p))
 
 -- | Quick-check a unary function, creating one version for constant folding, and another for solver
-qc1 :: (SymWord a, SymWord b, Show a, QC.Arbitrary a, SMTValue b) => String -> (a -> b) -> (SBV a -> SBV b) -> [TestTree]
+qc1 :: (SymVal a, SymVal b, Show a, QC.Arbitrary a, SMTValue b) => String -> (a -> b) -> (SBV a -> SBV b) -> [TestTree]
 qc1 nm opC opS = [cf, sm]
    where cf = QC.testProperty (nm ++ ".constantFold") $ do
                         i <- free "i"
 
-                        let extract n = fromMaybe (error $ "qc1." ++ nm ++ ": Cannot extract value for: " ++ n) . unliteral
+                        let grab n = fromMaybe (error $ "qc1." ++ nm ++ ": Cannot extract value for: " ++ n) . unliteral
 
-                            v = extract "i" i
+                            v = grab "i" i
 
                             expected = literal $ opC v
                             result   = opS i
 
                         case (unliteral expected, unliteral result) of
                            (Just _, Just _) -> return $ expected .== result
-                           _                -> return false
+                           _                -> return sFalse
 
          sm = QC.testProperty (nm ++ ".symbolic") $ QC.monadicIO $ do
                         ((i, expected), result) <- QC.run $ runSMT $ do v   <- liftIO $ QC.generate QC.arbitrary
@@ -219,15 +220,15 @@ qc1 nm opC opS = [cf, sm]
                                                                                      Sat   -> do r <- getValue res
                                                                                                  return (pre, Right r)
 
-                        let getCW vnm (SBV (SVal _ (Left c))) = (vnm, c)
-                            getCW vnm (SBV (SVal k _       )) = error $ "qc2.getCW: Impossible happened, non-CW value while extracting: " ++ show (vnm, k)
+                        let getCV vnm (SBV (SVal _ (Left c))) = (vnm, c)
+                            getCV vnm (SBV (SVal k _       )) = error $ "qc2.getCV: Impossible happened, non-CV value while extracting: " ++ show (vnm, k)
 
-                            vals = [ getCW "i"        (literal i)
-                                   , getCW "Expected" (literal expected)
+                            vals = [ getCV "i"        (literal i)
+                                   , getCV "Expected" (literal expected)
                                    ]
 
                             model = case result of
-                                      Right v -> showModel defaultSMTCfg (SMTModel [] (vals ++ [getCW "Result" (literal v)]))
+                                      Right v -> showModel defaultSMTCfg (SMTModel [] (vals ++ [getCV "Result" (literal v)]))
                                       Left  e -> showModel defaultSMTCfg (SMTModel [] vals) ++ "\n" ++ e
 
                         QC.monitor (QC.counterexample model)
@@ -238,23 +239,23 @@ qc1 nm opC opS = [cf, sm]
 
 
 -- | Quick-check a binary function, creating one version for constant folding, and another for solver
-qc2 :: (SymWord a, SymWord b, SymWord c, Show a, Show b, QC.Arbitrary a, QC.Arbitrary b, SMTValue c) => String -> (a -> b -> c) -> (SBV a -> SBV b -> SBV c) -> [TestTree]
+qc2 :: (SymVal a, SymVal b, SymVal c, Show a, Show b, QC.Arbitrary a, QC.Arbitrary b, SMTValue c) => String -> (a -> b -> c) -> (SBV a -> SBV b -> SBV c) -> [TestTree]
 qc2 nm opC opS = [cf, sm]
    where cf = QC.testProperty (nm ++ ".constantFold") $ do
                         i1 <- free "i1"
                         i2 <- free "i2"
 
-                        let extract n = fromMaybe (error $ "qc2." ++ nm ++ ": Cannot extract value for: " ++ n) . unliteral
+                        let grab n = fromMaybe (error $ "qc2." ++ nm ++ ": Cannot extract value for: " ++ n) . unliteral
 
-                            v1 = extract "i1" i1
-                            v2 = extract "i2" i2
+                            v1 = grab "i1" i1
+                            v2 = grab "i2" i2
 
                             expected = literal $ opC v1 v2
                             result   = opS i1 i2
 
                         case (unliteral expected, unliteral result) of
                            (Just _, Just _) -> return $ expected .== result
-                           _                -> return false
+                           _                -> return sFalse
 
          sm = QC.testProperty (nm ++ ".symbolic") $ QC.monadicIO $ do
                         ((i1, i2, expected), result) <- QC.run $ runSMT $ do v1  <- liftIO $ QC.generate QC.arbitrary
@@ -276,16 +277,16 @@ qc2 nm opC opS = [cf, sm]
                                                                                           Sat   -> do r <- getValue res
                                                                                                       return (pre, Right r)
 
-                        let getCW vnm (SBV (SVal _ (Left c))) = (vnm, c)
-                            getCW vnm (SBV (SVal k _       )) = error $ "qc2.getCW: Impossible happened, non-CW value while extracting: " ++ show (vnm, k)
+                        let getCV vnm (SBV (SVal _ (Left c))) = (vnm, c)
+                            getCV vnm (SBV (SVal k _       )) = error $ "qc2.getCV: Impossible happened, non-CV value while extracting: " ++ show (vnm, k)
 
-                            vals = [ getCW "i1"       (literal i1)
-                                   , getCW "i2"       (literal i2)
-                                   , getCW "Expected" (literal expected)
+                            vals = [ getCV "i1"       (literal i1)
+                                   , getCV "i2"       (literal i2)
+                                   , getCV "Expected" (literal expected)
                                    ]
 
                             model = case result of
-                                      Right v -> showModel defaultSMTCfg (SMTModel [] (vals ++ [getCW "Result" (literal v)]))
+                                      Right v -> showModel defaultSMTCfg (SMTModel [] (vals ++ [getCV "Result" (literal v)]))
                                       Left  e -> showModel defaultSMTCfg (SMTModel [] vals) ++ "\n" ++ e
 
                         QC.monitor (QC.counterexample model)

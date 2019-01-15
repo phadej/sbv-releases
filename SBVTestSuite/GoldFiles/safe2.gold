@@ -7,9 +7,8 @@
 [GOOD] (set-option :produce-models true)
 [GOOD] (set-logic ALL) ; has unbounded values, using catch-all.
 [GOOD] ; --- uninterpreted sorts ---
+[GOOD] ; --- tuples ---
 [GOOD] ; --- literal constants ---
-[GOOD] (define-fun s_2 () Bool false)
-[GOOD] (define-fun s_1 () Bool true)
 [GOOD] (define-fun s1 () Int 12)
 [GOOD] (define-fun s2 () Int 2)
 [GOOD] ; --- skolem constants ---
@@ -22,7 +21,6 @@
 [GOOD] ; --- formula ---
 [GOOD] (define-fun s3 () Bool (> s0 s2))
 [GOOD] (define-fun s4 () Bool (not s3))
-[GOOD] (assert s_1)
 [GOOD] (push 1)
 [GOOD] (assert s4)
 [SEND] (check-sat)

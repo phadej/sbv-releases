@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Provers.Yices
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Provers.Yices
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- The connection to the Yices SMT solver
 -----------------------------------------------------------------------------
@@ -23,6 +23,7 @@ yices :: SMTSolver
 yices = SMTSolver {
            name         = Yices
          , executable   = "yices-smt2"
+         , preprocess   = id
          , options      = const ["--incremental"]
          , engine       = standardEngine "SBV_YICES" "SBV_YICES_OPTIONS"
          , capabilities = SolverCapabilities {

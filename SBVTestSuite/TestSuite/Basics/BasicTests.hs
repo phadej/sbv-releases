@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Basics.BasicTests
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Basics.BasicTests
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for Examples.Basics.BasicTests
 -----------------------------------------------------------------------------
@@ -14,7 +14,7 @@
 
 module TestSuite.Basics.BasicTests(tests) where
 
-import Data.SBV.Internals
+import Data.SBV.Internals hiding (forall, output)
 import Utils.SBVTestFramework
 
 -- Test suite

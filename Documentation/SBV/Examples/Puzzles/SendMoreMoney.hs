@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Puzzles.SendMoreMoney
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Puzzles.SendMoreMoney
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Solves the classic @send + more = money@ puzzle.
 -----------------------------------------------------------------------------
@@ -34,12 +34,12 @@ import Data.SBV
 sendMoreMoney :: IO AllSatResult
 sendMoreMoney = allSat $ do
         ds@[s,e,n,d,m,o,r,y] <- mapM sInteger ["s", "e", "n", "d", "m", "o", "r", "y"]
-        let isDigit x = x .>= 0 &&& x .<= 9
+        let isDigit x = x .>= 0 .&& x .<= 9
             val xs    = sum $ zipWith (*) (reverse xs) (iterate (*10) 1)
             send      = val [s,e,n,d]
             more      = val [m,o,r,e]
             money     = val [m,o,n,e,y]
-        constrain $ bAll isDigit ds
+        constrain $ sAll isDigit ds
         constrain $ distinct ds
-        constrain $ s ./= 0 &&& m ./= 0
+        constrain $ s ./= 0 .&& m ./= 0
         solve [send + more .== money]

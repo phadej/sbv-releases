@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Uninterpreted.Sort
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Uninterpreted.Sort
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Demonstrates uninterpreted sorts, together with axioms.
 -----------------------------------------------------------------------------
@@ -21,7 +21,7 @@ import Data.SBV
 -- in the backend SMT solver. Note the custom @deriving@ clause, which
 -- takes care of most of the boilerplate. The () field is needed so
 -- SBV will not translate it to an enumerated data-type
-newtype Q = Q () deriving (Eq, Ord, Data, Read, Show, SymWord, HasKind)
+newtype Q = Q () deriving (Eq, Ord, Data, Read, Show, SymVal, HasKind)
 
 -- | Declare an uninterpreted function that works over Q's
 f :: SBV Q -> SBV Q

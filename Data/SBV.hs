@@ -1,10 +1,10 @@
----------------------------------------------------------------------------------
+-----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- (The sbv library is hosted at <http://github.com/LeventErkok/sbv>.
 -- Comments, bug reports, and patches are always welcome.)
@@ -110,14 +110,7 @@
 --
 -- Support for other compliant solvers can be added relatively easily, please
 -- get in touch if there is a solver you'd like to see included.
----------------------------------------------------------------------------------
-
-{-# LANGUAGE    FlexibleInstances   #-}
-{-# LANGUAGE    QuasiQuotes         #-}
-{-# LANGUAGE    TemplateHaskell     #-}
-{-# LANGUAGE    ScopedTypeVariables #-}
-{-# LANGUAGE    StandaloneDeriving  #-}
-{-# OPTIONS_GHC -fno-warn-orphans  #-}
+-----------------------------------------------------------------------------
 
 module Data.SBV (
   -- $progIntro
@@ -125,11 +118,11 @@ module Data.SBV (
   -- * Symbolic types
 
   -- ** Booleans
-    SBool, oneIf
-  -- *** The Boolean class
-  , Boolean(..)
-  -- *** Logical operations
-  , bAnd, bOr, bAny, bAll
+    SBool
+  -- *** Boolean values and functions
+  , sTrue, sFalse, sNot, (.&&), (.||), (.<+>), (.~&), (.~|), (.=>), (.<=>), fromBool, oneIf
+  -- *** Logical aggregations
+  , sAnd, sOr, sAny, sAll
   -- ** Bit-vectors
   -- *** Unsigned bit-vectors
   , SWord8, SWord16, SWord32, SWord64
@@ -150,17 +143,20 @@ module Data.SBV (
   -- ** Symbolic lists
   -- $lists
   , SList
+  -- ** Tuples
+  -- $tuples
+  , STuple2, STuple3, STuple4, STuple5, STuple6, STuple7, STuple8
   -- * Arrays of symbolic values
-  , SymArray(newArray_, newArray, readArray, writeArray), SArray, SFunArray
+  , SymArray(readArray, writeArray, mergeArrays), newArray_, newArray, SArray, SFunArray
 
   -- * Creating symbolic values
   -- ** Single value
   -- $createSym
-  , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble, sChar, sString, sList
+  , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble, sChar, sString, sList, sTuple
 
   -- ** List of values
   -- $createSyms
-  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReals, sFloats, sDoubles, sChars, sStrings, sLists
+  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReals, sFloats, sDoubles, sChars, sStrings, sLists, sTuples
 
   -- * Symbolic Equality and Comparisons
   , EqSymbolic(..), OrdSymbolic(..), Equality(..)
@@ -204,7 +200,13 @@ module Data.SBV (
   -- $proveIntro
   -- $noteOnNestedQuantifiers
   -- $multiIntro
-  , Predicate, Goal, Provable(..), solve
+  , Predicate, Goal
+  , Provable, forAll_, forAll, forSome_, forSome, prove, proveWith, sat
+  , satWith, allSat, allSatWith, optimize, optimizeWith, isVacuous
+  , isVacuousWith, isTheorem, isTheoremWith, isSatisfiable, isSatisfiableWith
+  , proveWithAll, proveWithAny, satWithAll
+  , satWithAny, generateSMTBenchmark
+  , solve
   -- * Constraints
   -- $constrainIntro
   -- ** General constraints
@@ -227,7 +229,7 @@ module Data.SBV (
 
   -- * Checking safety
   -- $safeIntro
-  , sAssert, isSafe, SExecutable(..)
+  , sAssert, isSafe, SExecutable, sName_, sName, safe, safeWith
 
   -- * Quick-checking
   , sbvQuickCheck
@@ -239,13 +241,14 @@ module Data.SBV (
   -- $multiOpt
   , OptimizeStyle(..)
   -- ** Objectives
-  , Objective(..), Metric(..)
+  , Objective(..)
+  , Metric, minimize, maximize
   -- ** Soft assertions
   -- $softAssertions
   , assertWithPenalty , Penalty(..)
   -- ** Field extensions
-  -- | If an optimization results in an infinity/epsilon value, the returned `CW` value will be in the corresponding extension field.
-  , ExtCW(..), GeneralizedCW(..)
+  -- | If an optimization results in an infinity/epsilon value, the returned `CV` value will be in the corresponding extension field.
+  , ExtCV(..), GeneralizedCV(..)
 
   -- * Model extraction
   -- $modelExtraction
@@ -256,7 +259,7 @@ module Data.SBV (
 
   -- ** Observing expressions
   -- $observeInternal
-  , observe
+  , observe, observeIf
 
   -- ** Programmable model extraction
   -- $programmableExtraction
@@ -277,8 +280,11 @@ module Data.SBV (
   , SBVException(..)
 
   -- * Abstract SBV type
-  , SBV, HasKind(..), Kind(..), SymWord(..)
-  , Symbolic, label, output, runSMT, runSMTWith
+  , SBV, HasKind(..), Kind(..)
+  , SymVal, forall, forall_, mkForallVars, exists, exists_, mkExistVars, free
+  , free_, mkFreeVars, symbolic, symbolics, literal, unliteral, fromCV
+  , isConcrete, isSymbolic, isConcretely, mkSymVal
+  , MonadSymbolic(..), Symbolic, SymbolicT, label, output, runSMT, runSMTWith
 
   -- * Module exports
   -- $moduleExportIntro
@@ -289,135 +295,46 @@ module Data.SBV (
   , module Data.Ratio
   ) where
 
-import Control.Monad (filterM)
-
-import qualified Control.Exception as C
-
 import Data.SBV.Core.AlgReals
-import Data.SBV.Core.Data
-import Data.SBV.Core.Model
+import Data.SBV.Core.Data       hiding (addAxiom, forall, forall_,
+                                        mkForallVars, exists, exists_,
+                                        mkExistVars, free, free_, mkFreeVars,
+                                        output, symbolic, symbolics, mkSymVal,
+                                        newArray, newArray_)
+import Data.SBV.Core.Model      hiding (assertWithPenalty, minimize, maximize,
+                                        forall, forall_, exists, exists_,
+                                        solve, sBool, sBools, sChar, sChars,
+                                        sDouble, sDoubles, sFloat, sFloats,
+                                        sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s,
+                                        sInt64, sInt64s, sInteger, sIntegers,
+                                        sList, sLists, sTuple, sTuples,
+                                        sReal, sReals, sString, sStrings,
+                                        sWord8, sWord8s, sWord16, sWord16s,
+                                        sWord32, sWord32s, sWord64, sWord64s)
 import Data.SBV.Core.Floating
 import Data.SBV.Core.Splittable
+import Data.SBV.Core.Symbolic   (MonadSymbolic(..), SymbolicT)
 
-import Data.SBV.Provers.Prover
+import Data.SBV.Provers.Prover hiding (forAll_, forAll, forSome_, forSome,
+                                       prove, proveWith, sat, satWith, allSat,
+                                       allSatWith, optimize, optimizeWith,
+                                       isVacuous, isVacuousWith, isTheorem,
+                                       isTheoremWith, isSatisfiable,
+                                       isSatisfiableWith, runSMT, runSMTWith,
+                                       sName_, sName, safe, safeWith)
 
-import Data.SBV.Utils.Boolean
-import Data.SBV.Utils.TDiff   (Timing(..))
+import Data.SBV.Client
+import Data.SBV.Client.BaseIO
+
+import Data.SBV.Utils.TDiff (Timing(..))
 
 import Data.Bits
 import Data.Int
 import Data.Ratio
 import Data.Word
 
-import qualified Language.Haskell.TH as TH
-import Data.Generics
-
 import Data.SBV.SMT.Utils (SBVException(..))
-import Data.SBV.Control.Utils (SMTValue (..))
 import Data.SBV.Control.Types (SMTReasonUnknown(..), Logic(..))
-
--- | Form the symbolic conjunction of a given list of boolean conditions. Useful in expressing
--- problems with constraints, like the following:
---
--- @
---   sat $ do [x, y, z] <- sIntegers [\"x\", \"y\", \"z\"]
---            solve [x .> 5, y + z .< x]
--- @
-solve :: [SBool] -> Symbolic SBool
-solve = return . bAnd
-
--- | Check whether the given solver is installed and is ready to go. This call does a
--- simple call to the solver to ensure all is well.
-sbvCheckSolverInstallation :: SMTConfig -> IO Bool
-sbvCheckSolverInstallation cfg = check `C.catch` (\(_ :: C.SomeException) -> return False)
-  where check = do ThmResult r <- proveWith cfg $ \x -> (x+x) .== ((x*2) :: SWord8)
-                   case r of
-                     Unsatisfiable{} -> return True
-                     _               -> return False
-
--- | The default configs corresponding to supported SMT solvers
-defaultSolverConfig :: Solver -> SMTConfig
-defaultSolverConfig Z3        = z3
-defaultSolverConfig Yices     = yices
-defaultSolverConfig Boolector = boolector
-defaultSolverConfig CVC4      = cvc4
-defaultSolverConfig MathSAT   = mathSAT
-defaultSolverConfig ABC       = abc
-
--- | Return the known available solver configs, installed on your machine.
-sbvAvailableSolvers :: IO [SMTConfig]
-sbvAvailableSolvers = filterM sbvCheckSolverInstallation (map defaultSolverConfig [minBound .. maxBound])
-
--- If we get a program producing nothing (i.e., Symbolic ()), pretend it simply returns True.
--- This is useful since min/max calls and constraints will provide the context
-instance Provable Goal where
-  forAll_    a = forAll_    ((a >> return true) :: Predicate)
-  forAll ns  a = forAll ns  ((a >> return true) :: Predicate)
-  forSome_   a = forSome_   ((a >> return true) :: Predicate)
-  forSome ns a = forSome ns ((a >> return true) :: Predicate)
-
--- | Equality as a proof method. Allows for
--- very concise construction of equivalence proofs, which is very typical in
--- bit-precise proofs.
-infix 4 ===
-class Equality a where
-  (===) :: a -> a -> IO ThmResult
-
-instance {-# OVERLAPPABLE #-} (SymWord a, EqSymbolic z) => Equality (SBV a -> z) where
-  k === l = prove $ \a -> k a .== l a
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, EqSymbolic z) => Equality (SBV a -> SBV b -> z) where
-  k === l = prove $ \a b -> k a b .== l a b
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, EqSymbolic z) => Equality ((SBV a, SBV b) -> z) where
-  k === l = prove $ \a b -> k (a, b) .== l (a, b)
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> z) where
-  k === l = prove $ \a b c -> k a b c .== l a b c
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c) -> z) where
-  k === l = prove $ \a b c -> k (a, b, c) .== l (a, b, c)
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> z) where
-  k === l = prove $ \a b c d -> k a b c d .== l a b c d
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d) -> z) where
-  k === l = prove $ \a b c d -> k (a, b, c, d) .== l (a, b, c, d)
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> z) where
-  k === l = prove $ \a b c d e -> k a b c d e .== l a b c d e
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e) -> z) where
-  k === l = prove $ \a b c d e -> k (a, b, c, d, e) .== l (a, b, c, d, e)
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> z) where
-  k === l = prove $ \a b c d e f -> k a b c d e f .== l a b c d e f
-
-instance {-# OVERLAPPABLE #-}
- (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f) -> z) where
-  k === l = prove $ \a b c d e f -> k (a, b, c, d, e, f) .== l (a, b, c, d, e, f)
-
-instance {-# OVERLAPPABLE #-}
- (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality (SBV a -> SBV b -> SBV c -> SBV d -> SBV e -> SBV f -> SBV g -> z) where
-  k === l = prove $ \a b c d e f g -> k a b c d e f g .== l a b c d e f g
-
-instance {-# OVERLAPPABLE #-} (SymWord a, SymWord b, SymWord c, SymWord d, SymWord e, SymWord f, SymWord g, EqSymbolic z) => Equality ((SBV a, SBV b, SBV c, SBV d, SBV e, SBV f, SBV g) -> z) where
-  k === l = prove $ \a b c d e f g -> k (a, b, c, d, e, f, g) .== l (a, b, c, d, e, f, g)
-
--- | Make an enumeration a symbolic type.
-mkSymbolicEnumeration :: TH.Name -> TH.Q [TH.Dec]
-mkSymbolicEnumeration typeName = do
-    let typeCon = TH.conT typeName
-    [d| deriving instance Eq       $(typeCon)
-        deriving instance Show     $(typeCon)
-        deriving instance Ord      $(typeCon)
-        deriving instance Read     $(typeCon)
-        deriving instance Data     $(typeCon)
-        deriving instance SymWord  $(typeCon)
-        deriving instance HasKind  $(typeCon)
-        deriving instance SMTValue $(typeCon)
-        deriving instance SatModel $(typeCon)
-      |]
 
 -- Haddock section documentation
 {- $progIntro
@@ -501,8 +418,8 @@ We can use 'safe' to statically see if such a violation is possible before we us
 
 >>> safe (sub :: SInt8 -> SInt8 -> SInt8)
 [sub: x >= y must hold!: Violated. Model:
-  s0 = 6 :: Int8
-  s1 = 8 :: Int8]
+  s0 = 0 :: Int8
+  s1 = 1 :: Int8]
 
 What happens if we make sure to arrange for this invariant? Consider this version:
 
@@ -730,6 +647,10 @@ experimental.
 See "Data.SBV.List" for related functions.
 -}
 
+{- $tuples
+Tuples can be used as symbolic values. This is useful in combination with lists, for example @SBV [(Integer, String)]@ is a valid type. These types can be arbitrarily nested, eg @SBV [(Integer, [(Char, (Integer, String))])]@. Instances of upto 8-tuples are provided.
+-}
+
 {- $shiftRotate
 Symbolic words (both signed and unsigned) are an instance of Haskell's 'Bits' class, so regular
 bitwise operations are automatically available for them. Shifts and rotates, however, require
@@ -800,7 +721,7 @@ constraints are not vacuous, the functions 'isVacuous' (and 'isVacuousWith') can
 
 Also note that this semantics imply that test case generation ('Data.SBV.Tools.GenTest.genTest') and
 quick-check can take arbitrarily long in the presence of constraints, if the random input values generated
-rarely satisfy the constraints. (As an extreme case, consider @'constrain' 'false'@.)
+rarely satisfy the constraints. (As an extreme case, consider @'constrain' 'sFalse'@.)
 -}
 
 {- $constraintVacuity
@@ -864,7 +785,7 @@ Users can introduce new uninterpreted sorts simply by defining a data-type in Ha
 following example demonstrates:
 
   @
-     data B = B () deriving (Eq, Ord, Show, Read, Data, SymWord, HasKind, SatModel)
+     data B = B () deriving (Eq, Ord, Show, Read, Data, SymVal, HasKind, SatModel)
   @
 
 (Note that you'll also need to use the language pragmas @DeriveDataTypeable@, @DeriveAnyClass@, and import @Data.Generics@ for the above to work.)
@@ -960,7 +881,7 @@ is precisely equivalent to:
 
    > sum (map (\b -> ite b 1 0) [b0, b1, b2, b3]) .<= 2
 
-and they both express that at most /two/ of @b0@, @b1@, @b2@, and @b3@ can be 'true'.
+and they both express that at most /two/ of @b0@, @b1@, @b2@, and @b3@ can be 'sTrue'.
 However, the equivalent forms give rise to long formulas and the cardinality constraint
 can get lost in the translation. The idea here is that if you use these functions instead, SBV will
 produce better translations to SMTLib for more efficient solving of cardinality constraints, assuming
@@ -992,16 +913,19 @@ prove $ do a1 <- free "i1"
            a2 <- free "i2"
            let spec, res :: SWord8
                spec = a1 + a2
-               res  = ite (a1 .== 12 &&& a2 .== 22)   -- insert a malicious bug!
+               res  = ite (a1 .== 12 .&& a2 .== 22)   -- insert a malicious bug!
                           1
                           (a1 + a2)
            return $ observe "Expected" spec .== observe "Result" res
 :}
 Falsifiable. Counter-example:
-  i1       = 12 :: Word8
-  i2       = 22 :: Word8
   Expected = 34 :: Word8
   Result   =  1 :: Word8
+  i1       = 12 :: Word8
+  i2       = 22 :: Word8
+
+The 'observeIf' variant allows the user to specify a boolean condition when the value is interesting to observe. Useful when
+you have lots of "debugging" points, but not all are of interest.
 -}
 
 {-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}

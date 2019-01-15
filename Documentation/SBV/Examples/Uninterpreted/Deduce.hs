@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Uninterpreted.Deduce
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Uninterpreted.Deduce
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Demonstrates uninterpreted sorts and how they can be used for deduction.
 -- This example is inspired by the discussion at <http://stackoverflow.com/questions/10635783/using-axioms-for-deductions-in-z3>,
@@ -29,7 +29,7 @@ import Prelude hiding (not, or, and)
 
 -- | The uninterpreted sort 'B', corresponding to the carrier.
 -- To prevent SBV from translating it to an enumerated type, we simply attach an unused field
-newtype B = B () deriving (Eq, Ord, Show, Read, Data, SymWord, HasKind)
+newtype B = B () deriving (Eq, Ord, Show, Read, Data, SymVal, HasKind)
 
 -- | Handy shortcut for the type of symbolic values over 'B'
 type SB = SBV B

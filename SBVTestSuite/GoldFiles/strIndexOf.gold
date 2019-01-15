@@ -5,11 +5,10 @@
 [GOOD] (set-option :smtlib2_compliant true)
 [GOOD] (set-option :diagnostic-output-channel "stdout")
 [GOOD] (set-option :produce-models true)
-[GOOD] (set-logic QF_BV)
+[GOOD] (set-logic ALL) ; external query, using all logics.
 [GOOD] ; --- uninterpreted sorts ---
+[GOOD] ; --- tuples ---
 [GOOD] ; --- literal constants ---
-[GOOD] (define-fun s_2 () Bool false)
-[GOOD] (define-fun s_1 () Bool true)
 [GOOD] ; --- skolem constants ---
 [GOOD] ; --- constant tables ---
 [GOOD] ; --- skolemized tables ---
@@ -17,7 +16,6 @@
 [GOOD] ; --- uninterpreted constants ---
 [GOOD] ; --- user given axioms ---
 [GOOD] ; --- formula ---
-[GOOD] (assert s_1)
 [SEND] (check-sat)
 [RECV] sat
 *** Solver   : Z3

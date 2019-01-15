@@ -1,32 +1,37 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Core.Symbolic
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Core.Symbolic
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Symbolic values
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE    CPP                        #-}
-{-# LANGUAGE    DeriveDataTypeable         #-}
-{-# LANGUAGE    DeriveFunctor              #-}
-{-# LANGUAGE    FlexibleInstances          #-}
-{-# LANGUAGE    GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE    MultiParamTypeClasses      #-}
-{-# LANGUAGE    NamedFieldPuns             #-}
-{-# LANGUAGE    PatternGuards              #-}
-{-# LANGUAGE    Rank2Types                 #-}
-{-# LANGUAGE    ScopedTypeVariables        #-}
-{-# LANGUAGE    TupleSections              #-}
-{-# LANGUAGE    TypeOperators              #-}
-{-# LANGUAGE    TypeSynonymInstances       #-}
-{-# OPTIONS_GHC -fno-warn-orphans          #-}
+{-# LANGUAGE CPP                        #-}
+{-# LANGUAGE DefaultSignatures          #-}
+{-# LANGUAGE DeriveDataTypeable         #-}
+{-# LANGUAGE DeriveFunctor              #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE FunctionalDependencies     #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE NamedFieldPuns             #-}
+{-# LANGUAGE PatternGuards              #-}
+{-# LANGUAGE Rank2Types                 #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TupleSections              #-}
+{-# LANGUAGE TypeOperators              #-}
+{-# LANGUAGE TypeSynonymInstances       #-}
+{-# LANGUAGE UndecidableInstances       #-} -- for undetermined s in MonadState
+
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.SBV.Core.Symbolic
   ( NodeId(..)
-  , SW(..), swKind, trueSW, falseSW
+  , SV(..), swKind, trueSV, falseSV
   , Op(..), PBOp(..), OvOp(..), FPOp(..), StrOp(..), SeqOp(..), RegExp(..)
   , Quantifier(..), needsExistentials
   , RoundingMode(..)
@@ -34,14 +39,14 @@ module Data.SBV.Core.Symbolic
   , SVal(..)
   , svMkSymVar, sWordN, sWordN_, sIntN, sIntN_
   , ArrayContext(..), ArrayInfo
-  , svToSW, svToSymSW, forceSWArg
+  , svToSV, svToSymSV, forceSVArg
   , SBVExpr(..), newExpr, isCodeGenMode, isSafetyCheckingIStage, isRunIStage, isSetupIStage
   , Cached, cache, uncache, modifyState, modifyIncState
   , ArrayIndex(..), FArrayIndex(..), uncacheAI, uncacheFAI
   , NamedSymVar
   , getSValPathCondition, extendSValPathCondition
   , getTableIndex
-  , SBVPgm(..), Symbolic, runSymbolic, State(..), withNewIncState, IncState(..), incrementInternalCounter
+  , SBVPgm(..), MonadSymbolic(..), SymbolicT, Symbolic, runSymbolic, State(..), withNewIncState, IncState(..), incrementInternalCounter
   , inSMTMode, SBVRunMode(..), IStage(..), Result(..)
   , registerKind, registerLabel, recordObservable
   , addAssertion, addNewSMTOption, imposeConstraint, internalConstraint, internalVariable
@@ -49,34 +54,42 @@ module Data.SBV.Core.Symbolic
   , SolverCapabilities(..)
   , extractSymbolicSimulationState
   , OptimizeStyle(..), Objective(..), Penalty(..), objectiveName, addSValOptGoal
-  , Query(..), QueryState(..), QueryContext(..)
+  , MonadQuery(..), QueryT(..), Query, Queriable(..), QueryState(..), QueryContext(..)
   , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..), SMTEngine
   , outputSVal
   ) where
 
-import Control.Arrow            (first, second, (***))
-import Control.DeepSeq          (NFData(..))
-import Control.Monad            (when, unless)
-import Control.Monad.Reader     (MonadReader, ReaderT, ask, runReaderT)
-import Control.Monad.State.Lazy (MonadState, StateT(..))
-import Control.Monad.Trans      (MonadIO, liftIO)
-import Data.Char                (isAlpha, isAlphaNum, toLower)
-import Data.IORef               (IORef, newIORef, readIORef)
-import Data.List                (intercalate, sortBy)
-import Data.Maybe               (isJust, fromJust, fromMaybe, listToMaybe)
-import Data.String              (IsString(fromString))
+import Control.Arrow               (first, second, (***))
+import Control.DeepSeq             (NFData(..))
+import Control.Monad               (when, unless)
+import Control.Monad.Except        (MonadError, ExceptT)
+import Control.Monad.Reader        (MonadReader(..), ReaderT, runReaderT,
+                                    mapReaderT)
+import Control.Monad.State.Lazy    (MonadState)
+import Control.Monad.Trans         (MonadIO(liftIO), MonadTrans(lift))
+import Control.Monad.Trans.Maybe   (MaybeT)
+import Control.Monad.Writer.Strict (MonadWriter)
+import Data.Char                   (isAlpha, isAlphaNum, toLower)
+import Data.IORef                  (IORef, newIORef, readIORef)
+import Data.List                   (intercalate, sortBy)
+import Data.Maybe                  (isJust, fromJust, fromMaybe, listToMaybe)
+import Data.String                 (IsString(fromString))
 
 import Data.Time (getCurrentTime, UTCTime)
 
 import GHC.Stack
 
-import qualified Data.IORef         as R    (modifyIORef')
-import qualified Data.Generics      as G    (Data(..))
-import qualified Data.IntMap.Strict as IMap (IntMap, empty, toAscList, lookup, insertWith)
-import qualified Data.Map.Strict    as Map  (Map, empty, toList, lookup, insert, size)
-import qualified Data.Set           as Set  (Set, empty, toList, insert, member)
-import qualified Data.Foldable      as F    (toList)
-import qualified Data.Sequence      as S    (Seq, empty, (|>))
+import qualified Control.Monad.State.Lazy    as LS
+import qualified Control.Monad.State.Strict  as SS
+import qualified Control.Monad.Writer.Lazy   as LW
+import qualified Control.Monad.Writer.Strict as SW
+import qualified Data.IORef                  as R    (modifyIORef')
+import qualified Data.Generics               as G    (Data(..))
+import qualified Data.IntMap.Strict          as IMap (IntMap, empty, toAscList, lookup, insertWith)
+import qualified Data.Map.Strict             as Map  (Map, empty, toList, lookup, insert, size)
+import qualified Data.Set                    as Set  (Set, empty, toList, insert, member)
+import qualified Data.Foldable               as F    (toList)
+import qualified Data.Sequence               as S    (Seq, empty, (|>))
 
 import System.Mem.StableName
 
@@ -96,33 +109,34 @@ import Control.Monad.Fail as Fail
 newtype NodeId = NodeId Int deriving (Eq, Ord)
 
 -- | A symbolic word, tracking it's signedness and size.
-data SW = SW !Kind !NodeId deriving (Eq, Ord)
+data SV = SV !Kind !NodeId deriving (Eq, Ord)
 
-instance HasKind SW where
-  kindOf (SW k _) = k
+instance HasKind SV where
+  kindOf (SV k _) = k
 
-instance Show SW where
-  show (SW _ (NodeId n))
-    | n < 0 = "s_" ++ show (abs n)
-    | True  = 's' : show n
+instance Show SV where
+  show (SV _ (NodeId n)) = case n of
+                             -2 -> "false"
+                             -1 -> "true"
+                             _  -> 's' : show n
 
 -- | Kind of a symbolic word.
-swKind :: SW -> Kind
-swKind (SW k _) = k
+swKind :: SV -> Kind
+swKind (SV k _) = k
 
 -- | Forcing an argument; this is a necessary evil to make sure all the arguments
 -- to an uninterpreted function are evaluated before called; the semantics of uinterpreted
 -- functions is necessarily strict; deviating from Haskell's
-forceSWArg :: SW -> IO ()
-forceSWArg (SW k n) = k `seq` n `seq` return ()
+forceSVArg :: SV -> IO ()
+forceSVArg (SV k n) = k `seq` n `seq` return ()
 
--- | Constant False as an SW. Note that this value always occupies slot -2.
-falseSW :: SW
-falseSW = SW KBool $ NodeId (-2)
+-- | Constant False as an 'SV'. Note that this value always occupies slot -2.
+falseSV :: SV
+falseSV = SV KBool $ NodeId (-2)
 
--- | Constant True as an SW. Note that this value always occupies slot -1.
-trueSW :: SW
-trueSW  = SW KBool $ NodeId (-1)
+-- | Constant True as an 'SV'. Note that this value always occupies slot -1.
+trueSV :: SV
+trueSV  = SV KBool $ NodeId (-1)
 
 -- | Symbolic operations
 data Op = Plus
@@ -149,7 +163,7 @@ data Op = Plus
         | Ror Int
         | Extract Int Int                       -- Extract i j: extract bits i to j. Least significant bit is 0 (big-endian)
         | Join                                  -- Concat two words to form a bigger one, in the order given
-        | LkUp (Int, Kind, Kind, Int) !SW !SW   -- (table-index, arg-type, res-type, length of the table) index out-of-bounds-value
+        | LkUp (Int, Kind, Kind, Int) !SV !SV   -- (table-index, arg-type, res-type, length of the table) index out-of-bounds-value
         | ArrEq   ArrayIndex ArrayIndex         -- Array equality
         | ArrRead ArrayIndex
         | KindCast Kind Kind
@@ -160,10 +174,12 @@ data Op = Plus
         | OverflowOp    OvOp                    -- Overflow-ops, categorized separately
         | StrOp StrOp                           -- String ops, categorized separately
         | SeqOp SeqOp                           -- Sequence ops, categorized separately
+        | TupleConstructor Int                  -- Construct an n-tuple
+        | TupleAccess Int Int                   -- Access element i of an n-tuple; second argument is n
         deriving (Eq, Ord)
 
 -- | Floating point operations
-data FPOp = FP_Cast        Kind Kind SW   -- From-Kind, To-Kind, RoundingMode. This is "value" conversion
+data FPOp = FP_Cast        Kind Kind SV   -- From-Kind, To-Kind, RoundingMode. This is "value" conversion
           | FP_Reinterpret Kind Kind      -- From-Kind, To-Kind. This is bit-reinterpretation using IEEE-754 interchange format
           | FP_Abs
           | FP_Neg
@@ -367,22 +383,37 @@ instance Show SeqOp where
 instance Show Op where
   show Shl    = "<<"
   show Shr    = ">>"
+
   show (Rol i) = "<<<" ++ show i
   show (Ror i) = ">>>" ++ show i
+
   show (Extract i j) = "choose [" ++ show i ++ ":" ++ show j ++ "]"
+
   show (LkUp (ti, at, rt, l) i e)
         = "lookup(" ++ tinfo ++ ", " ++ show i ++ ", " ++ show e ++ ")"
         where tinfo = "table" ++ show ti ++ "(" ++ show at ++ " -> " ++ show rt ++ ", " ++ show l ++ ")"
-  show (ArrEq i j)       = "array_" ++ show i ++ " == array_" ++ show j
-  show (ArrRead i)       = "select array_" ++ show i
-  show (KindCast fr to)  = "cast_" ++ show fr ++ "_" ++ show to
-  show (Uninterpreted i) = "[uninterpreted] " ++ i
-  show (Label s)         = "[label] " ++ s
-  show (IEEEFP w)        = show w
-  show (PseudoBoolean p) = show p
-  show (OverflowOp o)    = show o
-  show (StrOp s)         = show s
-  show (SeqOp s)         = show s
+
+  show (ArrEq i j)          = "array_" ++ show i ++ " == array_" ++ show j
+  show (ArrRead i)          = "select array_" ++ show i
+
+  show (KindCast fr to)     = "cast_" ++ show fr ++ "_" ++ show to
+  show (Uninterpreted i)    = "[uninterpreted] " ++ i
+
+  show (Label s)            = "[label] " ++ s
+
+  show (IEEEFP w)           = show w
+
+  show (PseudoBoolean p)    = show p
+
+  show (OverflowOp o)       = show o
+
+  show (StrOp s)            = show s
+  show (SeqOp s)            = show s
+
+  show (TupleConstructor   0) = "SBVTuple0"
+  show (TupleConstructor   n) = "mkSBVTuple" ++ show n
+  show (TupleAccess      i n) = "proj_" ++ show i ++ "_SBVTuple" ++ show n
+
   show op
     | Just s <- op `lookup` syms = s
     | True                       = error "impossible happened; can't find op!"
@@ -415,7 +446,7 @@ instance Show SBVType where
   show (SBVType xs) = intercalate " -> " $ map show xs
 
 -- | A symbolic expression
-data SBVExpr = SBVApp !Op ![SW]
+data SBVExpr = SBVApp !Op ![SV]
              deriving (Eq, Ord)
 
 -- | To improve hash-consing, take advantage of commutative operators by
@@ -440,10 +471,10 @@ instance Show SBVExpr where
   show (SBVApp op                 args)   = unwords (show op : map show args)
 
 -- | A program is a sequence of assignments
-newtype SBVPgm = SBVPgm {pgmAssignments :: S.Seq (SW, SBVExpr)}
+newtype SBVPgm = SBVPgm {pgmAssignments :: S.Seq (SV, SBVExpr)}
 
--- | 'NamedSymVar' pairs symbolic words and user given/automatically generated names
-type NamedSymVar = (SW, String)
+-- | 'NamedSymVar' pairs symbolic values and user given/automatically generated names
+type NamedSymVar = (SV, String)
 
 -- | Style of optimization. Note that in the pareto case the user is allowed
 -- to specify a max number of fronts to query the solver for, since there might
@@ -486,9 +517,49 @@ data QueryState = QueryState { queryAsk                 :: Maybe Int -> String -
                              , queryTblArrPreserveIndex :: Maybe (Int, Int)
                              }
 
--- | A query is a user-guided mechanism to directly communicate and extract results from the solver.
-newtype Query a = Query (StateT State IO a)
-             deriving (Applicative, Functor, Monad, MonadIO, MonadState State)
+-- | Computations which support query operations.
+class Monad m => MonadQuery m where
+  queryState :: m State
+
+  default queryState :: (MonadTrans t, MonadQuery m', m ~ t m') => m State
+  queryState = lift queryState
+
+instance MonadQuery m             => MonadQuery (ExceptT e m)
+instance MonadQuery m             => MonadQuery (MaybeT m)
+instance MonadQuery m             => MonadQuery (ReaderT r m)
+instance MonadQuery m             => MonadQuery (SS.StateT s m)
+instance MonadQuery m             => MonadQuery (LS.StateT s m)
+instance (MonadQuery m, Monoid w) => MonadQuery (SW.WriterT w m)
+instance (MonadQuery m, Monoid w) => MonadQuery (LW.WriterT w m)
+
+-- | A query is a user-guided mechanism to directly communicate and extract
+-- results from the solver. A generalization of 'Data.SBV.Query'.
+newtype QueryT m a = QueryT { runQueryT :: ReaderT State m a }
+    deriving (Applicative, Functor, Monad, MonadIO, MonadTrans,
+              MonadError e, MonadState s, MonadWriter w)
+
+instance Monad m => MonadQuery (QueryT m) where
+  queryState = QueryT ask
+
+mapQueryT :: (ReaderT State m a -> ReaderT State n b) -> QueryT m a -> QueryT n b
+mapQueryT f = QueryT . f . runQueryT
+{-# INLINE mapQueryT #-}
+
+-- | An queriable value.
+class Queriable m a b | a -> b where
+  -- | ^ Create a new symbolic value of type @a@
+  fresh   :: QueryT m a
+  -- | ^ Extract the current value in a SAT context
+  extract :: a -> QueryT m b
+
+-- Have to define this one by hand, because we use ReaderT in the implementation
+instance MonadReader r m => MonadReader r (QueryT m) where
+  ask = lift ask
+  local f = mapQueryT $ mapReaderT $ local f
+
+-- | A query is a user-guided mechanism to directly communicate and extract
+-- results from the solver.
+type Query = QueryT IO
 
 instance NFData OptimizeStyle where
    rnf x = x `seq` ()
@@ -503,20 +574,20 @@ instance NFData a => NFData (Objective a) where
    rnf (AssertWithPenalty s a p) = rnf s `seq` rnf a `seq` rnf p `seq` ()
 
 -- | Result of running a symbolic computation
-data Result = Result { reskinds       :: Set.Set Kind                                     -- ^ kinds used in the program
-                     , resTraces      :: [(String, CW)]                                   -- ^ quick-check counter-example information (if any)
-                     , resObservables :: [(String, SW)]                                   -- ^ observable expressions (part of the model)
-                     , resUISegs      :: [(String, [String])]                             -- ^ uninterpeted code segments
-                     , resInputs      :: ([(Quantifier, NamedSymVar)], [NamedSymVar])     -- ^ inputs (possibly existential) + tracker vars
-                     , resConsts      :: [(SW, CW)]                                       -- ^ constants
-                     , resTables      :: [((Int, Kind, Kind), [SW])]                      -- ^ tables (automatically constructed) (tableno, index-type, result-type) elts
-                     , resArrays      :: [(Int, ArrayInfo)]                               -- ^ arrays (user specified)
-                     , resUIConsts    :: [(String, SBVType)]                              -- ^ uninterpreted constants
-                     , resAxioms      :: [(String, [String])]                             -- ^ axioms
-                     , resAsgns       :: SBVPgm                                           -- ^ assignments
-                     , resConstraints :: [(Bool, [(String, String)], SW)]                       -- ^ additional constraints (boolean)
-                     , resAssertions  :: [(String, Maybe CallStack, SW)]                  -- ^ assertions
-                     , resOutputs     :: [SW]                                             -- ^ outputs
+data Result = Result { reskinds       :: Set.Set Kind                                 -- ^ kinds used in the program
+                     , resTraces      :: [(String, CV)]                               -- ^ quick-check counter-example information (if any)
+                     , resObservables :: [(String, CV -> Bool, SV)]                   -- ^ observable expressions (part of the model)
+                     , resUISegs      :: [(String, [String])]                         -- ^ uninterpeted code segments
+                     , resInputs      :: ([(Quantifier, NamedSymVar)], [NamedSymVar]) -- ^ inputs (possibly existential) + tracker vars
+                     , resConsts      :: [(SV, CV)]                                   -- ^ constants
+                     , resTables      :: [((Int, Kind, Kind), [SV])]                  -- ^ tables (automatically constructed) (tableno, index-type, result-type) elts
+                     , resArrays      :: [(Int, ArrayInfo)]                           -- ^ arrays (user specified)
+                     , resUIConsts    :: [(String, SBVType)]                          -- ^ uninterpreted constants
+                     , resAxioms      :: [(String, [String])]                         -- ^ axioms
+                     , resAsgns       :: SBVPgm                                       -- ^ assignments
+                     , resConstraints :: [(Bool, [(String, String)], SV)]                   -- ^ additional constraints (boolean)
+                     , resAssertions  :: [(String, Maybe CallStack, SV)]              -- ^ assertions
+                     , resOutputs     :: [SV]                                         -- ^ outputs
                      }
 
 -- Show instance for 'Result'. Only for debugging purposes.
@@ -533,7 +604,7 @@ instance Show Result where
                 ++ map shn (fst is)
                 ++ (if null (snd is) then [] else "TRACKER VARS" : map (shn . (EX,)) (snd is))
                 ++ ["CONSTANTS"]
-                ++ map shc cs
+                ++ concatMap shc cs
                 ++ ["TABLES"]
                 ++ map sht ts
                 ++ ["ARRAYS"]
@@ -555,20 +626,24 @@ instance Show Result where
     where sh2 :: Show a => [a] -> [String]
           sh2 = map (("  "++) . show)
 
-          usorts = [sh s t | KUserSort s t <- Set.toList kinds]
+          usorts = [sh s t | KUninterpreted s t <- Set.toList kinds]
                    where sh s (Left   _) = s
                          sh s (Right es) = s ++ " (" ++ intercalate ", " es ++ ")"
 
-          shs sw = show sw ++ " :: " ++ show (swKind sw)
+          shs sv = show sv ++ " :: " ++ show (swKind sv)
 
           sht ((i, at, rt), es)  = "  Table " ++ show i ++ " : " ++ show at ++ "->" ++ show rt ++ " = " ++ show es
 
-          shc (sw, cw) = "  " ++ show sw ++ " = " ++ show cw
+          shc (sv, cv)
+            | sv == falseSV || sv == trueSV
+            = []
+            | True
+            = ["  " ++ show sv ++ " = " ++ show cv]
 
           shcg (s, ss) = ("Variable: " ++ s) : map ("  " ++) ss
 
-          shn (q, (sw, nm)) = "  " ++ ni ++ " :: " ++ show (swKind sw) ++ ex ++ alias
-            where ni = show sw
+          shn (q, (sv, nm)) = "  " ++ ni ++ " :: " ++ show (swKind sv) ++ ex ++ alias
+            where ni = show sv
                   ex | q == ALL = ""
                      | True     = ", existential"
                   alias | ni == nm = ""
@@ -600,27 +675,27 @@ instance Show Result where
                 stk ++ ": " ++ show p
 
 -- | The context of a symbolic array as created
-data ArrayContext = ArrayFree (Maybe SW)                   -- ^ A new array, the contents are initialized with the given value, if any
-                  | ArrayMutate ArrayIndex SW SW           -- ^ An array created by mutating another array at a given cell
-                  | ArrayMerge  SW ArrayIndex ArrayIndex   -- ^ An array created by symbolically merging two other arrays
+data ArrayContext = ArrayFree (Maybe SV)                   -- ^ A new array, the contents are initialized with the given value, if any
+                  | ArrayMutate ArrayIndex SV SV           -- ^ An array created by mutating another array at a given cell
+                  | ArrayMerge  SV ArrayIndex ArrayIndex   -- ^ An array created by symbolically merging two other arrays
 
 instance Show ArrayContext where
   show (ArrayFree Nothing)   = " initialized with random elements"
-  show (ArrayFree (Just sw)) = " initialized with " ++ show sw
+  show (ArrayFree (Just sv)) = " initialized with " ++ show sv
   show (ArrayMutate i a b)   = " cloned from array_" ++ show i ++ " with " ++ show a ++ " :: " ++ show (swKind a) ++ " |-> " ++ show b ++ " :: " ++ show (swKind b)
   show (ArrayMerge  s i j)   = " merged arrays " ++ show i ++ " and " ++ show j ++ " on condition " ++ show s
 
 -- | Expression map, used for hash-consing
-type ExprMap = Map.Map SBVExpr SW
+type ExprMap = Map.Map SBVExpr SV
 
 -- | Constants are stored in a map, for hash-consing.
-type CnstMap = Map.Map CW SW
+type CnstMap = Map.Map CV SV
 
 -- | Kinds used in the program; used for determining the final SMT-Lib logic to pick
 type KindSet = Set.Set Kind
 
 -- | Tables generated during a symbolic run
-type TableMap = Map.Map (Kind, Kind, [SW]) Int
+type TableMap = Map.Map (Kind, Kind, [SV]) Int
 
 -- | Representation for symbolic arrays
 type ArrayInfo = (String, (Kind, Kind), ArrayContext)
@@ -629,7 +704,7 @@ type ArrayInfo = (String, (Kind, Kind), ArrayContext)
 type ArrayMap  = IMap.IntMap ArrayInfo
 
 -- | Functional Arrays generated during a symbolic run
-type FArrayMap  = IMap.IntMap (SVal -> SVal, IORef (IMap.IntMap SW))
+type FArrayMap  = IMap.IntMap (SVal -> SVal, IORef (IMap.IntMap SV))
 
 -- | Uninterpreted-constants generated during a symbolic run
 type UIMap     = Map.Map String SBVType
@@ -733,14 +808,14 @@ data State  = State { pathCond     :: SVal                             -- ^ kind
                     , startTime    :: UTCTime
                     , runMode      :: IORef SBVRunMode
                     , rIncState    :: IORef IncState
-                    , rCInfo       :: IORef [(String, CW)]
-                    , rObservables :: IORef [(String, SW)]
+                    , rCInfo       :: IORef [(String, CV)]
+                    , rObservables :: IORef [(String, CV -> Bool, SV)]
                     , rctr         :: IORef Int
                     , rUsedKinds   :: IORef KindSet
                     , rUsedLbls    :: IORef (Set.Set String)
                     , rinps        :: IORef ([(Quantifier, NamedSymVar)], [NamedSymVar]) -- User defined, and internal existential
-                    , rConstraints :: IORef [(Bool, [(String, String)], SW)]
-                    , routs        :: IORef [SW]
+                    , rConstraints :: IORef [(Bool, [(String, String)], SV)]
+                    , routs        :: IORef [SV]
                     , rtblMap      :: IORef TableMap
                     , spgm         :: IORef SBVPgm
                     , rconstMap    :: IORef CnstMap
@@ -751,12 +826,12 @@ data State  = State { pathCond     :: SVal                             -- ^ kind
                     , rCgMap       :: IORef CgMap
                     , raxioms      :: IORef [(String, [String])]
                     , rSMTOptions  :: IORef [SMTOption]
-                    , rOptGoals    :: IORef [Objective (SW, SW)]
-                    , rAsserts     :: IORef [(String, Maybe CallStack, SW)]
-                    , rSWCache     :: IORef (Cache SW)
+                    , rOptGoals    :: IORef [Objective (SV, SV)]
+                    , rAsserts     :: IORef [(String, Maybe CallStack, SV)]
+                    , rSVCache     :: IORef (Cache SV)
                     , rAICache     :: IORef (Cache ArrayIndex)
                     , rFAICache    :: IORef (Cache FArrayIndex)
-                    , queryState   :: IORef (Maybe QueryState)
+                    , rQueryState  :: IORef (Maybe QueryState)
                     }
 
 -- NFData is a bit of a lie, but it's sufficient, most of the content is iorefs that we don't want to touch
@@ -782,7 +857,7 @@ inSMTMode State{runMode} = do rm <- readIORef runMode
 -- | The "Symbolic" value. Either a constant (@Left@) or a symbolic
 -- value (@Right Cached@). Note that caching is essential for making
 -- sure sharing is preserved.
-data SVal = SVal !Kind !(Either CW (Cached SW))
+data SVal = SVal !Kind !(Either CV (Cached SV))
 
 instance HasKind SVal where
   kindOf (SVal k _) = k
@@ -792,8 +867,8 @@ instance HasKind SVal where
 -- implicit "fromBoolean" applied to Booleans in Haskell; and thus a statement
 -- of the form "True :: SBool" is just meaningless. (There should be a fromBoolean!)
 instance Show SVal where
-  show (SVal KBool (Left c))  = showCW False c
-  show (SVal k     (Left c))  = showCW False c ++ " :: " ++ show k
+  show (SVal KBool (Left c))  = showCV False c
+  show (SVal k     (Left c))  = showCV False c ++ " :: " ++ show k
   show (SVal k     (Right _)) =         "<symbolic> :: " ++ show k
 
 -- We really don't want an 'Eq' instance for 'SBV' or 'SVal'. As it really makes no sense.
@@ -831,8 +906,8 @@ modifyIncState State{rIncState} field update = do
         R.modifyIORef' (field incState) update
 
 -- | Add an observable
-recordObservable :: State -> String -> SW -> IO ()
-recordObservable st nm sw = modifyState st rObservables ((nm, sw):) (return ())
+recordObservable :: State -> String -> (CV -> Bool) -> SV -> IO ()
+recordObservable st nm chk sv = modifyState st rObservables ((nm, chk, sv):) (return ())
 
 -- | Increment the variable counter
 incrementInternalCounter :: State -> IO Int
@@ -851,8 +926,8 @@ svUninterpreted :: Kind -> String -> Maybe [String] -> [SVal] -> SVal
 svUninterpreted k nm code args = SVal k $ Right $ cache result
   where result st = do let ty = SBVType (map kindOf args ++ [k])
                        newUninterpreted st nm ty code
-                       sws <- mapM (svToSW st) args
-                       mapM_ forceSWArg sws
+                       sws <- mapM (svToSV st) args
+                       mapM_ forceSVArg sws
                        newExpr st k $ SBVApp (Uninterpreted nm) sws
 
 -- | Create a new uninterpreted symbol, possibly with user given code
@@ -870,18 +945,18 @@ newUninterpreted st nm t mbCode
 
                               -- No need to record the code in interactive mode: CodeGen doesn't use interactive
                               when (isJust mbCode) $ modifyState st rCgMap (Map.insert nm (fromJust mbCode)) (return ())
-  where checkType t' cont
+  where checkType :: SBVType -> r -> r
+        checkType t' cont
           | t /= t' = error $  "Uninterpreted constant " ++ show nm ++ " used at incompatible types\n"
                             ++ "      Current type      : " ++ show t ++ "\n"
                             ++ "      Previously used at: " ++ show t'
           | True    = cont
 
-
         validChar x = isAlphaNum x || x `elem` "_"
         enclosed    = head nm == '|' && last nm == '|' && length nm > 2 && not (any (`elem` "|\\") (tail (init nm)))
 
 -- | Add a new sAssert based constraint
-addAssertion :: State -> Maybe CallStack -> String -> SW -> IO ()
+addAssertion :: State -> Maybe CallStack -> String -> SV -> IO ()
 addAssertion st cs msg cond = modifyState st rAsserts ((msg, cs, cond):)
                                         $ noInteractive [ "Named assertions (sAssert):"
                                                         , "  Tag: " ++ msg
@@ -891,28 +966,28 @@ addAssertion st cs msg cond = modifyState st rAsserts ((msg, cs, cond):)
 -- | Create an internal variable, which acts as an input but isn't visible to the user.
 -- Such variables are existentially quantified in a SAT context, and universally quantified
 -- in a proof context.
-internalVariable :: State -> Kind -> IO SW
-internalVariable st k = do (sw, nm) <- newSW st k
+internalVariable :: State -> Kind -> IO SV
+internalVariable st k = do (sv, nm) <- newSV st k
                            rm <- readIORef (runMode st)
                            let q = case rm of
                                      SMTMode    _ True  _ -> EX
                                      SMTMode    _ False _ -> ALL
                                      CodeGen              -> ALL
                                      Concrete{}           -> ALL
-                           modifyState st rinps (first ((:) (q, (sw, "__internal_sbv_" ++ nm))))
+                           modifyState st rinps (first ((:) (q, (sv, "__internal_sbv_" ++ nm))))
                                      $ noInteractive [ "Internal variable creation:"
                                                      , "  Named: " ++ nm
                                                      ]
-                           return sw
+                           return sv
 {-# INLINE internalVariable #-}
 
--- | Create a new SW
-newSW :: State -> Kind -> IO (SW, String)
-newSW st k = do ctr <- incrementInternalCounter st
-                let sw = SW k (NodeId ctr)
+-- | Create a new SV
+newSV :: State -> Kind -> IO (SV, String)
+newSV st k = do ctr <- incrementInternalCounter st
+                let sv = SV k (NodeId ctr)
                 registerKind st k
-                return (sw, 's' : show ctr)
-{-# INLINE newSW #-}
+                return (sv, 's' : show ctr)
+{-# INLINE newSV #-}
 
 -- | Register a new kind with the system, used for uninterpreted sorts.
 -- NB: Is it safe to have new kinds in query mode? It could be that
@@ -925,12 +1000,37 @@ newSW st k = do ctr <- incrementInternalCounter st
 -- allow for this.
 registerKind :: State -> Kind -> IO ()
 registerKind st k
-  | KUserSort sortName _ <- k, map toLower sortName `elem` smtLibReservedNames
+  | KUninterpreted sortName _ <- k, map toLower sortName `elem` smtLibReservedNames
   = error $ "SBV: " ++ show sortName ++ " is a reserved sort; please use a different name."
   | True
-  = do ks <- readIORef (rUsedKinds st)
-       unless (k `Set.member` ks) $ modifyState st rUsedKinds (Set.insert k)
-                                              $ modifyIncState st rNewKinds (Set.insert k)
+  = do -- Adding a kind to the incState is tricky; we only need to add it
+       --     *    If it's an uninterpreted sort that's not already in the general state
+       --     * OR If it's a tuple-sort whose cardinality isn't already in the general state
+
+       existingKinds <- readIORef (rUsedKinds st)
+
+       modifyState st rUsedKinds (Set.insert k) $ do
+
+                          let needsAdding = case k of
+                                              KUninterpreted{} -> k `notElem` existingKinds
+                                              KTuple nks       -> length nks `notElem` [length oks | KTuple oks <- Set.toList existingKinds]
+                                              _                -> False
+
+                          when needsAdding $ modifyIncState st rNewKinds (Set.insert k)
+
+       -- Don't forget to register subkinds!
+       case k of
+         KBool          {}  -> return ()
+         KBounded       {}  -> return ()
+         KUnbounded     {}  -> return ()
+         KReal          {}  -> return ()
+         KUninterpreted {}  -> return ()
+         KFloat         {}  -> return ()
+         KDouble        {}  -> return ()
+         KChar          {}  -> return ()
+         KString        {}  -> return ()
+         KList          ek  -> registerKind st ek
+         KTuple         eks -> mapM_ (registerKind st) eks
 
 -- | Register a new label with the system, making sure they are unique and have no '|'s in them
 registerLabel :: String -> State -> String -> IO ()
@@ -950,20 +1050,20 @@ registerLabel whence st nm
   where err w = error $ "SBV (" ++ whence ++ "): " ++ show nm ++ " " ++ w
 
 -- | Create a new constant; hash-cons as necessary
-newConst :: State -> CW -> IO SW
+newConst :: State -> CV -> IO SV
 newConst st c = do
   constMap <- readIORef (rconstMap st)
   case c `Map.lookup` constMap of
-    Just sw -> return sw
+    Just sv -> return sv
     Nothing -> do let k = kindOf c
-                  (sw, _) <- newSW st k
-                  let ins = Map.insert c sw
+                  (sv, _) <- newSV st k
+                  let ins = Map.insert c sv
                   modifyState st rconstMap ins $ modifyIncState st rNewConsts ins
-                  return sw
+                  return sv
 {-# INLINE newConst #-}
 
 -- | Create a new table; hash-cons as necessary
-getTableIndex :: State -> Kind -> Kind -> [SW] -> IO Int
+getTableIndex :: State -> Kind -> Kind -> [SV] -> IO Int
 getTableIndex st at rt elts = do
   let key = (at, rt, elts)
   tblMap <- readIORef (rtblMap st)
@@ -975,28 +1075,28 @@ getTableIndex st at rt elts = do
                  return i
 
 -- | Create a new expression; hash-cons as necessary
-newExpr :: State -> Kind -> SBVExpr -> IO SW
+newExpr :: State -> Kind -> SBVExpr -> IO SV
 newExpr st k app = do
    let e = reorder app
    exprMap <- readIORef (rexprMap st)
    case e `Map.lookup` exprMap of
-     Just sw -> return sw
-     Nothing -> do (sw, _) <- newSW st k
-                   let append (SBVPgm xs) = SBVPgm (xs S.|> (sw, e))
+     Just sv -> return sv
+     Nothing -> do (sv, _) <- newSV st k
+                   let append (SBVPgm xs) = SBVPgm (xs S.|> (sv, e))
                    modifyState st spgm append $ modifyIncState st rNewAsgns append
-                   modifyState st rexprMap (Map.insert e sw) (return ())
-                   return sw
+                   modifyState st rexprMap (Map.insert e sv) (return ())
+                   return sv
 {-# INLINE newExpr #-}
 
--- | Convert a symbolic value to a symbolic-word
-svToSW :: State -> SVal -> IO SW
-svToSW st (SVal _ (Left c))  = newConst st c
-svToSW st (SVal _ (Right f)) = uncache f st
+-- | Convert a symbolic value to an internal SV
+svToSV :: State -> SVal -> IO SV
+svToSV st (SVal _ (Left c))  = newConst st c
+svToSV st (SVal _ (Right f)) = uncache f st
 
--- | Convert a symbolic value to an SW, inside the Symbolic monad
-svToSymSW :: SVal -> Symbolic SW
-svToSymSW sbv = do st <- ask
-                   liftIO $ svToSW st sbv
+-- | Generalization of 'Data.SBV.svToSymSV'
+svToSymSV :: MonadSymbolic m => SVal -> m SV
+svToSymSV sbv = do st <- symbolicEnv
+                   liftIO $ svToSV st sbv
 
 -------------------------------------------------------------------------
 -- * Symbolic Computations
@@ -1004,17 +1104,53 @@ svToSymSW sbv = do st <- ask
 -- | A Symbolic computation. Represented by a reader monad carrying the
 -- state of the computation, layered on top of IO for creating unique
 -- references to hold onto intermediate results.
-newtype Symbolic a = Symbolic (ReaderT State IO a)
-                   deriving ( Applicative, Functor, Monad, MonadIO, MonadReader State
+
+-- | Computations which support symbolic operations
+class MonadIO m => MonadSymbolic m where
+  symbolicEnv :: m State
+
+  default symbolicEnv :: (MonadTrans t, MonadSymbolic m', m ~ t m') => m State
+  symbolicEnv = lift symbolicEnv
+
+instance MonadSymbolic m             => MonadSymbolic (ExceptT e m)
+instance MonadSymbolic m             => MonadSymbolic (MaybeT m)
+instance MonadSymbolic m             => MonadSymbolic (ReaderT r m)
+instance MonadSymbolic m             => MonadSymbolic (SS.StateT s m)
+instance MonadSymbolic m             => MonadSymbolic (LS.StateT s m)
+instance (MonadSymbolic m, Monoid w) => MonadSymbolic (SW.WriterT w m)
+instance (MonadSymbolic m, Monoid w) => MonadSymbolic (LW.WriterT w m)
+
+-- | A generalization of 'Data.SBV.Symbolic'.
+newtype SymbolicT m a = SymbolicT { runSymbolicT :: ReaderT State m a }
+                   deriving ( Applicative, Functor, Monad, MonadIO, MonadTrans
+                            , MonadError e, MonadState s, MonadWriter w
 #if MIN_VERSION_base(4,11,0)
                             , Fail.MonadFail
 #endif
                             )
 
+-- | `MonadSymbolic` instance for `SymbolicT m`
+instance MonadIO m => MonadSymbolic (SymbolicT m) where
+  symbolicEnv = SymbolicT ask
+
+-- | Map a computation over the symbolic transformer.
+mapSymbolicT :: (ReaderT State m a -> ReaderT State n b) -> SymbolicT m a -> SymbolicT n b
+mapSymbolicT f = SymbolicT . f . runSymbolicT
+{-# INLINE mapSymbolicT #-}
+
+-- Have to define this one by hand, because we use ReaderT in the implementation
+instance MonadReader r m => MonadReader r (SymbolicT m) where
+  ask = lift ask
+  local f = mapSymbolicT $ mapReaderT $ local f
+
+-- | `Symbolic` is specialization of `SymbolicT` to the `IO` monad. Unless you are using
+-- transformers explicitly, this is the type you should prefer.
+type Symbolic = SymbolicT IO
+
 -- | Create a symbolic value, based on the quantifier we have. If an
 -- explicit quantifier is given, we just use that. If not, then we
 -- pick the quantifier appropriately based on the run-mode.
--- @randomCW@ is used for generating random values for this variable
+-- @randomCV@ is used for generating random values for this variable
 -- when used for @quickCheck@ or 'Data.SBV.Tools.GenTest.genTest' purposes.
 svMkSymVar :: Maybe Quantifier -> Kind -> Maybe String -> State -> IO SVal
 svMkSymVar = svMkSymVarGen False
@@ -1023,26 +1159,26 @@ svMkSymVar = svMkSymVarGen False
 svMkTrackerVar :: Kind -> String -> State -> IO SVal
 svMkTrackerVar k nm = svMkSymVarGen True (Just EX) k (Just nm)
 
--- | Create an N-bit symbolic unsigned named variable
-sWordN :: Int -> String -> Symbolic SVal
-sWordN w nm = ask >>= liftIO . svMkSymVar Nothing (KBounded False w) (Just nm)
+-- | Generalization of 'Data.SBV.sWordN'
+sWordN :: MonadSymbolic m => Int -> String -> m SVal
+sWordN w nm = symbolicEnv >>= liftIO . svMkSymVar Nothing (KBounded False w) (Just nm)
 
--- | Create an N-bit symbolic unsigned unnamed variable
-sWordN_ :: Int -> Symbolic SVal
-sWordN_ w = ask >>= liftIO . svMkSymVar Nothing (KBounded False w) Nothing
+-- | Generalization of 'Data.SBV.sWordN_'
+sWordN_ :: MonadSymbolic m => Int -> m SVal
+sWordN_ w = symbolicEnv >>= liftIO . svMkSymVar Nothing (KBounded False w) Nothing
 
--- | Create an N-bit symbolic signed named variable
-sIntN :: Int -> String -> Symbolic SVal
-sIntN w nm = ask >>= liftIO . svMkSymVar Nothing (KBounded True w) (Just nm)
+-- | Generalization of 'Data.SBV.sIntN'
+sIntN :: MonadSymbolic m => Int -> String -> m SVal
+sIntN w nm = symbolicEnv >>= liftIO . svMkSymVar Nothing (KBounded True w) (Just nm)
 
--- | Create an N-bit symbolic signed unnamed variable
-sIntN_ :: Int -> Symbolic SVal
-sIntN_ w = ask >>= liftIO . svMkSymVar Nothing (KBounded True w) Nothing
+-- | Generalization of 'Data.SBV.sIntN_'
+sIntN_ :: MonadSymbolic m => Int -> m SVal
+sIntN_ w = symbolicEnv >>= liftIO . svMkSymVar Nothing (KBounded True w) Nothing
 
 -- | Create a symbolic value, based on the quantifier we have. If an
 -- explicit quantifier is given, we just use that. If not, then we
 -- pick the quantifier appropriately based on the run-mode.
--- @randomCW@ is used for generating random values for this variable
+-- @randomCV@ is used for generating random values for this variable
 -- when used for @quickCheck@ or 'Data.SBV.Tools.GenTest.genTest' purposes.
 svMkSymVarGen :: Bool -> Maybe Quantifier -> Kind -> Maybe String -> State -> IO SVal
 svMkSymVarGen isTracker mbQ k mbNm st = do
@@ -1058,14 +1194,14 @@ svMkSymVarGen isTracker mbQ k mbNm st = do
               | isUninterpreted k  = disallow "Uninterpreted sorts"
               | True               = cont
 
-            mkS q = do (sw, internalName) <- newSW st k
+            mkS q = do (sv, internalName) <- newSV st k
                        let nm = fromMaybe internalName mbNm
-                       introduceUserName st isTracker nm k q sw
+                       introduceUserName st isTracker nm k q sv
 
-            mkC   = do cw <- randomCW k
+            mkC   = do cv <- randomCV k
                        do registerKind st k
-                          modifyState st rCInfo ((fromMaybe "_" mbNm, cw):) (return ())
-                       return $ SVal k (Left cw)
+                          modifyState st rCInfo ((fromMaybe "_" mbNm, cv):) (return ())
+                       return $ SVal k (Left cv)
 
         case (mbQ, rm) of
           (Just q,  SMTMode{}        ) -> mkS q
@@ -1078,76 +1214,73 @@ svMkSymVarGen isTracker mbQ k mbNm st = do
           (_      ,  Concrete{})       -> noUI mkC
 
 -- | Introduce a new user name. We die if repeated.
-introduceUserName :: State -> Bool -> String -> Kind -> Quantifier -> SW -> IO SVal
-introduceUserName st isTracker nm k q sw = do
+introduceUserName :: State -> Bool -> String -> Kind -> Quantifier -> SV -> IO SVal
+introduceUserName st isTracker nm k q sv = do
         (is, ints) <- readIORef (rinps st)
         if nm `elem` [n | (_, (_, n)) <- is] ++ [n | (_, n) <- ints]
            then error $ "SBV: Repeated user given name: " ++ show nm ++ ". Please use unique names."
            else if isTracker && q == ALL
                 then error $ "SBV: Impossible happened! A universally quantified tracker variable is being introduced: " ++ show nm
                 else do let newInp olds = case q of
-                                           EX  -> (sw, nm) : olds
+                                           EX  -> (sv, nm) : olds
                                            ALL -> noInteractive [ "Adding a new universally quantified variable: "
                                                                 , "  Name      : " ++ show nm
                                                                 , "  Kind      : " ++ show k
                                                                 , "  Quantifier: Universal"
-                                                                , "  Node      : " ++ show sw
+                                                                , "  Node      : " ++ show sv
                                                                 , "Only existential variables are supported in query mode."
                                                                 ]
                         if isTracker
-                           then modifyState st rinps (second ((:) (sw, nm)))
+                           then modifyState st rinps (second ((:) (sv, nm)))
                                           $ noInteractive ["Adding a new tracker variable in interactive mode: " ++ show nm]
-                           else modifyState st rinps (first ((:) (q, (sw, nm))))
+                           else modifyState st rinps (first ((:) (q, (sv, nm))))
                                           $ modifyIncState st rNewInps newInp
-                        return $ SVal k $ Right $ cache (const (return sw))
+                        return $ SVal k $ Right $ cache (const (return sv))
 
--- | Add a user specified axiom to the generated SMT-Lib file. The first argument is a mere
--- string, use for commenting purposes. The second argument is intended to hold the multiple-lines
--- of the axiom text as expressed in SMT-Lib notation. Note that we perform no checks on the axiom
--- itself, to see whether it's actually well-formed or is sensical by any means.
--- A separate formalization of SMT-Lib would be very useful here.
-addAxiom :: String -> [String] -> Symbolic ()
+-- | Generalization of 'Data.SBV.addAxiom'
+addAxiom :: MonadSymbolic m => String -> [String] -> m ()
 addAxiom nm ax = do
-        st <- ask
+        st <- symbolicEnv
         liftIO $ modifyState st raxioms ((nm, ax) :)
                            $ noInteractive [ "Adding a new axiom:"
                                            , "  Named: " ++ show nm
                                            , "  Axiom: " ++ unlines ax
                                            ]
 
--- | Run a symbolic computation, and return a extra value paired up with the 'Result'
-runSymbolic :: SBVRunMode -> Symbolic a -> IO (a, Result)
-runSymbolic currentRunMode (Symbolic c) = do
-   currTime  <- getCurrentTime
-   rm        <- newIORef currentRunMode
-   ctr       <- newIORef (-2) -- start from -2; False and True will always occupy the first two elements
-   cInfo     <- newIORef []
-   observes  <- newIORef []
-   pgm       <- newIORef (SBVPgm S.empty)
-   emap      <- newIORef Map.empty
-   cmap      <- newIORef Map.empty
-   inps      <- newIORef ([], [])
-   outs      <- newIORef []
-   tables    <- newIORef Map.empty
-   arrays    <- newIORef IMap.empty
-   fArrays   <- newIORef IMap.empty
-   uis       <- newIORef Map.empty
-   cgs       <- newIORef Map.empty
-   axioms    <- newIORef []
-   swCache   <- newIORef IMap.empty
-   aiCache   <- newIORef IMap.empty
-   faiCache  <- newIORef IMap.empty
-   usedKinds <- newIORef Set.empty
-   usedLbls  <- newIORef Set.empty
-   cstrs     <- newIORef []
-   smtOpts   <- newIORef []
-   optGoals  <- newIORef []
-   asserts   <- newIORef []
-   istate    <- newIORef =<< newIncState
-   qstate    <- newIORef Nothing
-   let st = State { runMode      = rm
+-- | Generalization of 'Data.SBV.runSymbolic'
+runSymbolic :: MonadIO m => SBVRunMode -> SymbolicT m a -> m (a, Result)
+runSymbolic currentRunMode (SymbolicT c) = do
+   st <- liftIO $ do
+     currTime  <- getCurrentTime
+     rm        <- newIORef currentRunMode
+     ctr       <- newIORef (-2) -- start from -2; False and True will always occupy the first two elements
+     cInfo     <- newIORef []
+     observes  <- newIORef []
+     pgm       <- newIORef (SBVPgm S.empty)
+     emap      <- newIORef Map.empty
+     cmap      <- newIORef Map.empty
+     inps      <- newIORef ([], [])
+     outs      <- newIORef []
+     tables    <- newIORef Map.empty
+     arrays    <- newIORef IMap.empty
+     fArrays   <- newIORef IMap.empty
+     uis       <- newIORef Map.empty
+     cgs       <- newIORef Map.empty
+     axioms    <- newIORef []
+     swCache   <- newIORef IMap.empty
+     aiCache   <- newIORef IMap.empty
+     faiCache  <- newIORef IMap.empty
+     usedKinds <- newIORef Set.empty
+     usedLbls  <- newIORef Set.empty
+     cstrs     <- newIORef []
+     smtOpts   <- newIORef []
+     optGoals  <- newIORef []
+     asserts   <- newIORef []
+     istate    <- newIORef =<< newIncState
+     qstate    <- newIORef Nothing
+     pure $ State { runMode      = rm
                   , startTime    = currTime
-                  , pathCond     = SVal KBool (Left trueCW)
+                  , pathCond     = SVal KBool (Left trueCV)
                   , rIncState    = istate
                   , rCInfo       = cInfo
                   , rObservables = observes
@@ -1165,25 +1298,25 @@ runSymbolic currentRunMode (Symbolic c) = do
                   , rUIMap       = uis
                   , rCgMap       = cgs
                   , raxioms      = axioms
-                  , rSWCache     = swCache
+                  , rSVCache     = swCache
                   , rAICache     = aiCache
                   , rFAICache    = faiCache
                   , rConstraints = cstrs
                   , rSMTOptions  = smtOpts
                   , rOptGoals    = optGoals
                   , rAsserts     = asserts
-                  , queryState   = qstate
+                  , rQueryState   = qstate
                   }
-   _ <- newConst st falseCW -- s(-2) == falseSW
-   _ <- newConst st trueCW  -- s(-1) == trueSW
+   _ <- liftIO $ newConst st falseCV -- s(-2) == falseSV
+   _ <- liftIO $ newConst st trueCV  -- s(-1) == trueSV
    r <- runReaderT c st
-   res <- extractSymbolicSimulationState st
+   res <- liftIO $ extractSymbolicSimulationState st
 
    -- Clean-up after ourselves
-   qs <- readIORef qstate
+   qs <- liftIO $ readIORef $ rQueryState st
    case qs of
      Nothing                         -> return ()
-     Just QueryState{queryTerminate} -> queryTerminate
+     Just QueryState{queryTerminate} -> liftIO queryTerminate
 
    return (r, res)
 
@@ -1216,14 +1349,14 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
 
    return $ Result knds traceVals observables cgMap inpsO cnsts tbls arrs unint axs (SBVPgm rpgm) extraCstrs assertions outsO
 
--- | Add a new option
-addNewSMTOption :: SMTOption -> Symbolic ()
-addNewSMTOption o =  do st <- ask
+-- | Generalization of 'Data.SBV.addNewSMTOption'
+addNewSMTOption :: MonadSymbolic m => SMTOption -> m ()
+addNewSMTOption o =  do st <- symbolicEnv
                         liftIO $ modifyState st rSMTOptions (o:) (return ())
 
--- | Handling constraints
-imposeConstraint :: Bool -> [(String, String)] -> SVal -> Symbolic ()
-imposeConstraint isSoft attrs c = do st <- ask
+-- | Generalization of 'Data.SBV.imposeConstraint'
+imposeConstraint :: MonadSymbolic m => Bool -> [(String, String)] -> SVal -> m ()
+imposeConstraint isSoft attrs c = do st <- symbolicEnv
                                      rm <- liftIO $ readIORef (runMode st)
                                      case rm of
                                        CodeGen -> error "SBV: constraints are not allowed in code-generation"
@@ -1232,23 +1365,24 @@ imposeConstraint isSoft attrs c = do st <- ask
 
 -- | Require a boolean condition to be true in the state. Only used for internal purposes.
 internalConstraint :: State -> Bool -> [(String, String)] -> SVal -> IO ()
-internalConstraint st isSoft attrs b = do v <- svToSW st b
-                                          modifyState st rConstraints ((isSoft, attrs, v):)
-                                                    $ noInteractive [ "Adding an internal " ++ soft ++ "constraint:"
-                                                                    , "  Named: " ++ fromMaybe "<unnamed>" (listToMaybe [nm | (":named", nm) <- attrs])
-                                                                    ]
+internalConstraint st isSoft attrs b = do v <- svToSV st b
+                                          unless (null attrs && v == trueSV) $
+                                                 modifyState st rConstraints ((isSoft, attrs, v):)
+                                                              $ noInteractive [ "Adding an internal " ++ soft ++ "constraint:"
+                                                                              , "  Named: " ++ fromMaybe "<unnamed>" (listToMaybe [nm | (":named", nm) <- attrs])
+                                                                              ]
     where soft | isSoft = "soft-"
                | True   = ""
 
--- | Add an optimization goal
-addSValOptGoal :: Objective SVal -> Symbolic ()
-addSValOptGoal obj = do st <- ask
+-- | Generalization of 'Data.SBV.addSValOptGoal'
+addSValOptGoal :: MonadSymbolic m => Objective SVal -> m ()
+addSValOptGoal obj = do st <- symbolicEnv
 
                         -- create the tracking variable here for the metric
-                        let mkGoal nm orig = liftIO $ do origSW  <- svToSW st orig
+                        let mkGoal nm orig = liftIO $ do origSV  <- svToSV st orig
                                                          track   <- svMkTrackerVar (kindOf orig) nm st
-                                                         trackSW <- svToSW st track
-                                                         return (origSW, trackSW)
+                                                         trackSV <- svToSV st track
+                                                         return (origSV, trackSV)
 
                         let walk (Minimize          nm v)     = Minimize nm                     <$> mkGoal nm v
                             walk (Maximize          nm v)     = Maximize nm                     <$> mkGoal nm v
@@ -1260,17 +1394,16 @@ addSValOptGoal obj = do st <- ask
                                                            , "  Objective: " ++ show obj
                                                            ]
 
--- | Mark an interim result as an output. Useful when constructing Symbolic programs
--- that return multiple values, or when the result is programmatically computed.
-outputSVal :: SVal -> Symbolic ()
+-- | Generalization of 'Data.SBV.outputSVal'
+outputSVal :: MonadSymbolic m => SVal -> m ()
 outputSVal (SVal _ (Left c)) = do
-  st <- ask
-  sw <- liftIO $ newConst st c
-  liftIO $ modifyState st routs (sw:) (return ())
+  st <- symbolicEnv
+  sv <- liftIO $ newConst st c
+  liftIO $ modifyState st routs (sv:) (return ())
 outputSVal (SVal _ (Right f)) = do
-  st <- ask
-  sw <- liftIO $ uncache f st
-  liftIO $ modifyState st routs (sw:) (return ())
+  st <- symbolicEnv
+  sv <- liftIO $ uncache f st
+  liftIO $ modifyState st routs (sv:) (return ())
 
 ---------------------------------------------------------------------------------
 -- * Cached values
@@ -1295,8 +1428,8 @@ cache :: (State -> IO a) -> Cached a
 cache = Cached
 
 -- | Uncache a previously cached computation
-uncache :: Cached SW -> State -> IO SW
-uncache = uncacheGen rSWCache
+uncache :: Cached SV -> State -> IO SV
+uncache = uncacheGen rSVCache
 
 -- | An SMT array index is simply an int value
 newtype ArrayIndex = ArrayIndex { unArrayIndex :: Int } deriving (Eq, Ord)
@@ -1353,12 +1486,12 @@ instance Show SMTLibPgm where
   show (SMTLibPgm _ pre) = intercalate "\n" pre
 
 -- Other Technicalities..
-instance NFData CW where
-  rnf (CW x y) = x `seq` y `seq` ()
+instance NFData CV where
+  rnf (CV x y) = x `seq` y `seq` ()
 
-instance NFData GeneralizedCW where
-  rnf (ExtendedCW e) = e `seq` ()
-  rnf (RegularCW  c) = c `seq` ()
+instance NFData GeneralizedCV where
+  rnf (ExtendedCV e) = e `seq` ()
+  rnf (RegularCV  c) = c `seq` ()
 
 #if MIN_VERSION_base(4,9,0)
 #else
@@ -1376,7 +1509,7 @@ instance NFData Result where
                        `seq` rnf outs
 instance NFData Kind         where rnf a          = seq a ()
 instance NFData ArrayContext where rnf a          = seq a ()
-instance NFData SW           where rnf a          = seq a ()
+instance NFData SV           where rnf a          = seq a ()
 instance NFData SBVExpr      where rnf a          = seq a ()
 instance NFData Quantifier   where rnf a          = seq a ()
 instance NFData SBVType      where rnf a          = seq a ()
@@ -1431,7 +1564,7 @@ data RoundingMode = RoundNearestTiesToEven  -- ^ Round to nearest representable 
 instance HasKind RoundingMode
 
 -- | Solver configuration. See also 'Data.SBV.z3', 'Data.SBV.yices', 'Data.SBV.cvc4', 'Data.SBV.boolector', 'Data.SBV.mathSAT', etc.
--- which are instantiations of this type for those solvers, with reasonable defaults. In particular, custom configuration can be 
+-- which are instantiations of this type for those solvers, with reasonable defaults. In particular, custom configuration can be
 -- created by varying those values. (Such as @z3{verbose=True}@.)
 --
 -- Most fields are self explanatory. The notion of precision for printing algebraic reals stems from the fact that such values does
@@ -1470,8 +1603,8 @@ instance NFData SMTConfig where
 
 -- | A model, as returned by a solver
 data SMTModel = SMTModel {
-        modelObjectives :: [(String, GeneralizedCW)]  -- ^ Mapping of symbolic values to objective values.
-     ,  modelAssocs     :: [(String, CW)]             -- ^ Mapping of symbolic values to constants.
+        modelObjectives :: [(String, GeneralizedCV)]  -- ^ Mapping of symbolic values to objective values.
+     ,  modelAssocs     :: [(String, CV)]             -- ^ Mapping of symbolic values to constants.
      }
      deriving Show
 
@@ -1513,6 +1646,7 @@ data Solver = Z3
 data SMTSolver = SMTSolver {
          name           :: Solver                -- ^ The solver in use
        , executable     :: String                -- ^ The path to its executable
+       , preprocess     :: String -> String      -- ^ Each line sent to the solver will be passed through this function (typically id)
        , options        :: SMTConfig -> [String] -- ^ Options to provide to the solver
        , engine         :: SMTEngine             -- ^ The solver engine, responsible for interpreting solver output
        , capabilities   :: SolverCapabilities    -- ^ Various capabilities of the solver

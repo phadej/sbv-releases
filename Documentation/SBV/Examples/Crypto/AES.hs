@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Crypto.AES
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Crypto.AES
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- An implementation of AES (Advanced Encryption Standard), using SBV.
 -- For details on AES, see <http://en.wikipedia.org/wiki/Advanced_Encryption_Standard>.
@@ -66,7 +66,7 @@ gf28Pow n = pow
 -- turns out that raising to the 254 power gives us the multiplicative inverse.
 -- Of course, we can prove this using SBV:
 --
--- >>> prove $ \x -> x ./= 0 ==> x `gf28Mult` gf28Inverse x .== 1
+-- >>> prove $ \x -> x ./= 0 .=> x `gf28Mult` gf28Inverse x .== 1
 -- Q.E.D.
 --
 -- Note that we exclude @0@ in our theorem, as it does not have a
@@ -207,7 +207,7 @@ unSBox = select unSBoxTable 0
 -- Q.E.D.
 --
 sboxInverseCorrect :: GF28 -> SBool
-sboxInverseCorrect x = unSBox (sbox x) .== x &&& sbox (unSBox x) .== x
+sboxInverseCorrect x = unSBox (sbox x) .== x .&& sbox (unSBox x) .== x
 
 -----------------------------------------------------------------------------
 -- ** AddRoundKey transformation
@@ -585,7 +585,7 @@ cgAES128Library = compileToCLib Nothing "aes128Lib" aes128LibComponents
 
 --------------------------------------------------------------------------------------------
 -- | For doctest purposes only
-hex8 :: (SymWord a, Show a, Integral a) => SBV a -> String
+hex8 :: (SymVal a, Show a, Integral a) => SBV a -> String
 hex8 v = replicate (8 - length s) '0' ++ s
   where s = flip showHex "" . fromJust . unliteral $ v
 

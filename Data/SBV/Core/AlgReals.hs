@@ -1,16 +1,17 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Core.AlgReals
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Core.AlgReals
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Algrebraic reals in Haskell.
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.SBV.Core.AlgReals (

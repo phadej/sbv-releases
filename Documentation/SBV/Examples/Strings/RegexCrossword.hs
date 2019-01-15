@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Puzzles.RegexCrossword
--- Copyright   :  (c) Joel Burget
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Strings.RegexCrossword
+-- Author    : Joel Burget
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- This example solves regex crosswords from <http://regexcrossword.com>
 -----------------------------------------------------------------------------
@@ -48,7 +48,7 @@ solveCrossword rowRegExps colRegExps = runSMT $ do
         let rowss =           [[r .!! literal i | i <- [0..numCols-1]] | r <- rows]
         let colss = transpose [[c .!! literal i | i <- [0..numRows-1]] | c <- cols]
 
-        constrain $ bAnd $ zipWith (.==) (concat rowss) (concat colss)
+        constrain $ sAnd $ zipWith (.==) (concat rowss) (concat colss)
 
         -- Now query to extract the solution
         query $ do cs <- checkSat

@@ -1,16 +1,17 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Core.Floating
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Core.Floating
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Implementation of floating-point operations mapping to SMT-Lib2 floats
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE Rank2Types          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
 
 module Data.SBV.Core.Floating (
          IEEEFloating(..), IEEEFloatConvertable(..)
@@ -23,17 +24,18 @@ import qualified Data.Numbers.CrackNum as CN (wordToFloat, wordToDouble, floatTo
 import Data.Int            (Int8,  Int16,  Int32,  Int64)
 import Data.Word           (Word8, Word16, Word32, Word64)
 
+import Data.Proxy
+
 import Data.SBV.Core.Data
 import Data.SBV.Core.Model
 import Data.SBV.Core.AlgReals (isExactRational)
-import Data.SBV.Utils.Boolean
 import Data.SBV.Utils.Numeric
 
 -- | A class of floating-point (IEEE754) operations, some of
 -- which behave differently based on rounding modes. Note that unless
 -- the rounding mode is concretely RoundNearestTiesToEven, we will
 -- not concretely evaluate these, but rather pass down to the SMT solver.
-class (SymWord a, RealFloat a) => IEEEFloating a where
+class (SymVal a, RealFloat a) => IEEEFloating a where
   -- | Compute the floating point absolute value.
   fpAbs             ::                  SBV a -> SBV a
 
@@ -129,9 +131,9 @@ class (SymWord a, RealFloat a) => IEEEFloating a where
   fpIsNaN            = lift1B FP_IsNaN           isNaN
   fpIsNegative       = lift1B FP_IsNegative      (\x -> x < 0 ||       isNegativeZero x)
   fpIsPositive       = lift1B FP_IsPositive      (\x -> x >= 0 && not (isNegativeZero x))
-  fpIsNegativeZero x = fpIsZero x &&& fpIsNegative x
-  fpIsPositiveZero x = fpIsZero x &&& fpIsPositive x
-  fpIsPoint        x = bnot (fpIsNaN x ||| fpIsInfinite x)
+  fpIsNegativeZero x = fpIsZero x .&& fpIsNegative x
+  fpIsPositiveZero x = fpIsZero x .&& fpIsPositive x
+  fpIsPoint        x = sNot (fpIsNaN x .|| fpIsInfinite x)
 
 -- | SFloat instance
 instance IEEEFloating Float
@@ -150,7 +152,7 @@ class IEEEFloatConvertable a where
   toSDouble   :: SRoundingMode -> SBV a   -> SDouble
 
 -- | A generic converter that will work for most of our instances. (But not all!)
-genericFPConverter :: forall a r. (SymWord a, HasKind r, SymWord r, Num r) => Maybe (a -> Bool) -> Maybe (SBV a -> SBool) -> (a -> r) -> SRoundingMode -> SBV a -> SBV r
+genericFPConverter :: forall a r. (SymVal a, HasKind r, SymVal r, Num r) => Maybe (a -> Bool) -> Maybe (SBV a -> SBool) -> (a -> r) -> SRoundingMode -> SBV a -> SBV r
 genericFPConverter mbConcreteOK mbSymbolicOK converter rm f
   | Just w <- unliteral f, Just RoundNearestTiesToEven <- unliteral rm, check w
   = literal $ converter w
@@ -161,10 +163,10 @@ genericFPConverter mbConcreteOK mbSymbolicOK converter rm f
   where result  = SBV (SVal kTo (Right (cache y)))
         check w = maybe True ($ w) mbConcreteOK
         kFrom   = kindOf f
-        kTo     = kindOf (undefined :: r)
-        y st    = do msw <- sbvToSW st rm
-                     xsw <- sbvToSW st f
-                     newExpr st kTo (SBVApp (IEEEFP (FP_Cast kFrom kTo msw)) [xsw])
+        kTo     = kindOf (Proxy @r)
+        y st    = do msv <- sbvToSV st rm
+                     xsv <- sbvToSV st f
+                     newExpr st kTo (SBVApp (IEEEFP (FP_Cast kFrom kTo msv)) [xsv])
 
 -- | Check that a given float is a point
 ptCheck :: IEEEFloating a => Maybe (SBV a -> SBool)
@@ -244,7 +246,7 @@ instance IEEEFloatConvertable AlgReal where
   toSDouble   = genericFPConverter (Just isExactRational) Nothing (fromRational . toRational)
 
 -- | Concretely evaluate one arg function, if rounding mode is RoundNearestTiesToEven and we have enough concrete data
-concEval1 :: SymWord a => Maybe (a -> a) -> Maybe SRoundingMode -> SBV a -> Maybe (SBV a)
+concEval1 :: SymVal a => Maybe (a -> a) -> Maybe SRoundingMode -> SBV a -> Maybe (SBV a)
 concEval1 mbOp mbRm a = do op <- mbOp
                            v  <- unliteral a
                            case unliteral =<< mbRm of
@@ -253,7 +255,7 @@ concEval1 mbOp mbRm a = do op <- mbOp
                              _                           -> Nothing
 
 -- | Concretely evaluate two arg function, if rounding mode is RoundNearestTiesToEven and we have enough concrete data
-concEval2 :: SymWord a => Maybe (a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> Maybe (SBV a)
+concEval2 :: SymVal a => Maybe (a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> Maybe (SBV a)
 concEval2 mbOp mbRm a b  = do op <- mbOp
                               v1 <- unliteral a
                               v2 <- unliteral b
@@ -263,7 +265,7 @@ concEval2 mbOp mbRm a b  = do op <- mbOp
                                 _                           -> Nothing
 
 -- | Concretely evaluate a bool producing two arg function, if rounding mode is RoundNearestTiesToEven and we have enough concrete data
-concEval2B :: SymWord a => Maybe (a -> a -> Bool) -> Maybe SRoundingMode -> SBV a -> SBV a -> Maybe SBool
+concEval2B :: SymVal a => Maybe (a -> a -> Bool) -> Maybe SRoundingMode -> SBV a -> SBV a -> Maybe SBool
 concEval2B mbOp mbRm a b  = do op <- mbOp
                                v1 <- unliteral a
                                v2 <- unliteral b
@@ -273,7 +275,7 @@ concEval2B mbOp mbRm a b  = do op <- mbOp
                                  _                           -> Nothing
 
 -- | Concretely evaluate two arg function, if rounding mode is RoundNearestTiesToEven and we have enough concrete data
-concEval3 :: SymWord a => Maybe (a -> a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBV a -> Maybe (SBV a)
+concEval3 :: SymVal a => Maybe (a -> a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBV a -> Maybe (SBV a)
 concEval3 mbOp mbRm a b c = do op <- mbOp
                                v1 <- unliteral a
                                v2 <- unliteral b
@@ -284,48 +286,48 @@ concEval3 mbOp mbRm a b c = do op <- mbOp
                                  _                           -> Nothing
 
 -- | Add the converted rounding mode if given as an argument
-addRM :: State -> Maybe SRoundingMode -> [SW] -> IO [SW]
+addRM :: State -> Maybe SRoundingMode -> [SV] -> IO [SV]
 addRM _  Nothing   as = return as
-addRM st (Just rm) as = do swm <- sbvToSW st rm
-                           return (swm : as)
+addRM st (Just rm) as = do svm <- sbvToSV st rm
+                           return (svm : as)
 
 -- | Lift a 1 arg FP-op
-lift1 :: SymWord a => FPOp -> Maybe (a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a
+lift1 :: SymVal a => FPOp -> Maybe (a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a
 lift1 w mbOp mbRm a
   | Just cv <- concEval1 mbOp mbRm a
   = cv
   | True
   = SBV $ SVal k $ Right $ cache r
   where k    = kindOf a
-        r st = do swa  <- sbvToSW st a
-                  args <- addRM st mbRm [swa]
+        r st = do sva  <- sbvToSV st a
+                  args <- addRM st mbRm [sva]
                   newExpr st k (SBVApp (IEEEFP w) args)
 
 -- | Lift an FP predicate
-lift1B :: SymWord a => FPOp -> (a -> Bool) -> SBV a -> SBool
+lift1B :: SymVal a => FPOp -> (a -> Bool) -> SBV a -> SBool
 lift1B w f a
    | Just v <- unliteral a = literal $ f v
    | True                  = SBV $ SVal KBool $ Right $ cache r
-   where r st = do swa <- sbvToSW st a
-                   newExpr st KBool (SBVApp (IEEEFP w) [swa])
+   where r st = do sva <- sbvToSV st a
+                   newExpr st KBool (SBVApp (IEEEFP w) [sva])
 
 
 -- | Lift a 2 arg FP-op
-lift2 :: SymWord a => FPOp -> Maybe (a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBV a
+lift2 :: SymVal a => FPOp -> Maybe (a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBV a
 lift2 w mbOp mbRm a b
   | Just cv <- concEval2 mbOp mbRm a b
   = cv
   | True
   = SBV $ SVal k $ Right $ cache r
   where k    = kindOf a
-        r st = do swa  <- sbvToSW st a
-                  swb  <- sbvToSW st b
-                  args <- addRM st mbRm [swa, swb]
+        r st = do sva  <- sbvToSV st a
+                  svb  <- sbvToSV st b
+                  args <- addRM st mbRm [sva, svb]
                   newExpr st k (SBVApp (IEEEFP w) args)
 
 -- | Lift min/max: Note that we protect against constant folding if args are alternating sign 0's, since
 -- SMTLib is deliberately nondeterministic in this case
-liftMM :: (SymWord a, RealFloat a) => FPOp -> Maybe (a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBV a
+liftMM :: (SymVal a, RealFloat a) => FPOp -> Maybe (a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBV a
 liftMM w mbOp mbRm a b
   | Just v1 <- unliteral a
   , Just v2 <- unliteral b
@@ -337,35 +339,35 @@ liftMM w mbOp mbRm a b
   where isN0   = isNegativeZero
         isP0 x = x == 0 && not (isN0 x)
         k    = kindOf a
-        r st = do swa  <- sbvToSW st a
-                  swb  <- sbvToSW st b
-                  args <- addRM st mbRm [swa, swb]
+        r st = do sva  <- sbvToSV st a
+                  svb  <- sbvToSV st b
+                  args <- addRM st mbRm [sva, svb]
                   newExpr st k (SBVApp (IEEEFP w) args)
 
 -- | Lift a 2 arg FP-op, producing bool
-lift2B :: SymWord a => FPOp -> Maybe (a -> a -> Bool) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBool
+lift2B :: SymVal a => FPOp -> Maybe (a -> a -> Bool) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBool
 lift2B w mbOp mbRm a b
   | Just cv <- concEval2B mbOp mbRm a b
   = cv
   | True
   = SBV $ SVal KBool $ Right $ cache r
-  where r st = do swa  <- sbvToSW st a
-                  swb  <- sbvToSW st b
-                  args <- addRM st mbRm [swa, swb]
+  where r st = do sva  <- sbvToSV st a
+                  svb  <- sbvToSV st b
+                  args <- addRM st mbRm [sva, svb]
                   newExpr st KBool (SBVApp (IEEEFP w) args)
 
 -- | Lift a 3 arg FP-op
-lift3 :: SymWord a => FPOp -> Maybe (a -> a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBV a -> SBV a
+lift3 :: SymVal a => FPOp -> Maybe (a -> a -> a -> a) -> Maybe SRoundingMode -> SBV a -> SBV a -> SBV a -> SBV a
 lift3 w mbOp mbRm a b c
   | Just cv <- concEval3 mbOp mbRm a b c
   = cv
   | True
   = SBV $ SVal k $ Right $ cache r
   where k    = kindOf a
-        r st = do swa  <- sbvToSW st a
-                  swb  <- sbvToSW st b
-                  swc  <- sbvToSW st c
-                  args <- addRM st mbRm [swa, swb, swc]
+        r st = do sva  <- sbvToSV st a
+                  svb  <- sbvToSV st b
+                  svc  <- sbvToSV st c
+                  args <- addRM st mbRm [sva, svb, svc]
                   newExpr st k (SBVApp (IEEEFP w) args)
 
 -- | Convert an 'SFloat' to an 'SWord32', preserving the bit-correspondence. Note that since the
@@ -385,7 +387,7 @@ sFloatAsSWord32 fVal
   where w32  = KBounded False 32
         y st = do cg <- isCodeGenMode st
                   if cg
-                     then do f <- sbvToSW st fVal
+                     then do f <- sbvToSV st fVal
                              newExpr st w32 (SBVApp (IEEEFP (FP_Reinterpret KFloat w32)) [f])
                      else do n   <- internalVariable st w32
                              ysw <- newExpr st KFloat (SBVApp (IEEEFP (FP_Reinterpret w32 KFloat)) [n])
@@ -406,7 +408,7 @@ sDoubleAsSWord64 fVal
   where w64  = KBounded False 64
         y st = do cg <- isCodeGenMode st
                   if cg
-                     then do f <- sbvToSW st fVal
+                     then do f <- sbvToSV st fVal
                              newExpr st w64 (SBVApp (IEEEFP (FP_Reinterpret KDouble w64)) [f])
                      else do n   <- internalVariable st w64
                              ysw <- newExpr st KDouble (SBVApp (IEEEFP (FP_Reinterpret w64 KDouble)) [n])
@@ -430,15 +432,15 @@ sWord32AsSFloat :: SWord32 -> SFloat
 sWord32AsSFloat fVal
   | Just f <- unliteral fVal = literal $ CN.wordToFloat f
   | True                     = SBV (SVal KFloat (Right (cache y)))
-  where y st = do xsw <- sbvToSW st fVal
-                  newExpr st KFloat (SBVApp (IEEEFP (FP_Reinterpret (kindOf fVal) KFloat)) [xsw])
+  where y st = do xsv <- sbvToSV st fVal
+                  newExpr st KFloat (SBVApp (IEEEFP (FP_Reinterpret (kindOf fVal) KFloat)) [xsv])
 
 -- | Reinterpret the bits in a 32-bit word as a single-precision floating point number
 sWord64AsSDouble :: SWord64 -> SDouble
 sWord64AsSDouble dVal
   | Just d <- unliteral dVal = literal $ CN.wordToDouble d
   | True                     = SBV (SVal KDouble (Right (cache y)))
-  where y st = do xsw <- sbvToSW st dVal
-                  newExpr st KDouble (SBVApp (IEEEFP (FP_Reinterpret (kindOf dVal) KDouble)) [xsw])
+  where y st = do xsv <- sbvToSV st dVal
+                  newExpr st KDouble (SBVApp (IEEEFP (FP_Reinterpret (kindOf dVal) KDouble)) [xsv])
 
 {-# ANN module ("HLint: ignore Reduce duplication" :: String) #-}

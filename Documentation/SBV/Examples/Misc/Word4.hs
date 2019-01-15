@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Misc.Enumerate
--- Copyright   :  (c) Brian Huffman
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Misc.Word4
+-- Author    : Brian Huffman
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Demonstrates how new sizes of word/int types can be defined and
 -- used with SBV.
@@ -109,11 +109,11 @@ instance Random Word4 where
 -- | SWord4 type synonym
 type SWord4 = SBV Word4
 
--- | SymWord instance, allowing this type to be used in proofs/sat etc.
-instance SymWord Word4 where
-  mkSymWord  = genMkSymVar (KBounded False 4)
-  literal    = genLiteral  (KBounded False 4)
-  fromCW     = genFromCW
+-- | SymVal instance, allowing this type to be used in proofs/sat etc.
+instance SymVal Word4 where
+  mkSymVal = genMkSymVar (KBounded False 4)
+  literal  = genLiteral  (KBounded False 4)
+  fromCV   = genFromCV
 
 -- | HasKind instance; simply returning the underlying kind for the type
 instance HasKind Word4 where
@@ -121,7 +121,7 @@ instance HasKind Word4 where
 
 -- | SatModel instance, merely uses the generic parsing method.
 instance SatModel Word4 where
-  parseCWs = genParse (KBounded False 4)
+  parseCVs = genParse (KBounded False 4)
 
 -- | SDvisible instance, using 0-extension
 instance SDivisible Word4 where

@@ -1,14 +1,10 @@
-{-# LANGUAGE Rank2Types          #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.String
--- Copyright   :  (c) Joel Burget, Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.String
+-- Author    : Joel Burget, Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- A collection of string/character utilities, useful when working
 -- with symbolic strings. To the extent possible, the functions
@@ -18,11 +14,16 @@
 -- used as symbolic-strings.
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE Rank2Types          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
+
 module Data.SBV.String (
         -- * Length, emptiness
           length, null
         -- * Deconstructing/Reconstructing
-        , head, tail, init, singleton, strToStrAt, strToCharAt, (.!!), implode, concat, (.:), (.++)
+        , head, tail, uncons, init, singleton, strToStrAt, strToCharAt, (.!!), implode, concat, (.:), nil, (.++)
         -- * Containment
         , isInfixOf, isSuffixOf, isPrefixOf
         -- * Substrings
@@ -36,17 +37,17 @@ import qualified Prelude as P
 
 import Data.SBV.Core.Data hiding (SeqOp(..))
 import Data.SBV.Core.Model
-import Data.SBV.Utils.Boolean ((==>))
 
 import qualified Data.Char as C
 import Data.List (genericLength, genericIndex, genericDrop, genericTake)
 import qualified Data.List as L (tails, isSuffixOf, isPrefixOf, isInfixOf)
 
+import Data.Proxy
+
 -- For doctest use only
 --
 -- $setup
 -- >>> import Data.SBV.Provers.Prover (prove, sat)
--- >>> import Data.SBV.Utils.Boolean  ((&&&), bnot, (<=>))
 -- >>> :set -XOverloadedStrings
 
 -- | Length of a string.
@@ -63,9 +64,9 @@ length = lift1 StrLen (Just (fromIntegral . P.length))
 
 -- | @`null` s@ is True iff the string is empty
 --
--- >>> prove $ \s -> null s <=> length s .== 0
+-- >>> prove $ \s -> null s .<=> length s .== 0
 -- Q.E.D.
--- >>> prove $ \s -> null s <=> s .== ""
+-- >>> prove $ \s -> null s .<=> s .== ""
 -- Q.E.D.
 null :: SString -> SBool
 null s
@@ -85,9 +86,9 @@ head = (`strToCharAt` 0)
 --
 -- >>> prove $ \h s -> tail (singleton h .++ s) .== s
 -- Q.E.D.
--- >>> prove $ \s -> length s .> 0 ==> length (tail s) .== length s - 1
+-- >>> prove $ \s -> length s .> 0 .=> length (tail s) .== length s - 1
 -- Q.E.D.
--- >>> prove $ \s -> bnot (null s) ==> singleton (head s) .++ tail s .== s
+-- >>> prove $ \s -> sNot (null s) .=> singleton (head s) .++ tail s .== s
 -- Q.E.D.
 tail :: SString -> SString
 tail s
@@ -95,6 +96,10 @@ tail s
  = literal cs
  | True
  = subStr s 1 (length s - 1)
+
+-- | @`uncons` returns the pair of the first character and tail. Unspecified if the string is empty.
+uncons :: SString -> (SChar, SString)
+uncons l = (head l, tail l)
 
 -- | @`init`@ returns all but the last element of the list. Unspecified if the string is empty.
 --
@@ -110,7 +115,7 @@ init s
 -- | @`singleton` c@ is the string of length 1 that contains the only character
 -- whose value is the 8-bit value @c@.
 --
--- >>> prove $ \c -> c .== literal 'A' ==> singleton c .== "A"
+-- >>> prove $ \c -> c .== literal 'A' .=> singleton c .== "A"
 -- Q.E.D.
 -- >>> prove $ \c -> length (singleton c) .== 1
 -- Q.E.D.
@@ -123,7 +128,7 @@ singleton = lift1 StrUnit (Just wrap)
 --
 -- >>> prove $ \s1 s2 -> strToStrAt (s1 .++ s2) (length s1) .== strToStrAt s2 0
 -- Q.E.D.
--- >>> sat $ \s -> length s .>= 2 &&& strToStrAt s 0 ./= strToStrAt s (length s - 1)
+-- >>> sat $ \s -> length s .>= 2 .&& strToStrAt s 0 ./= strToStrAt s (length s - 1)
 -- Satisfiable. Model:
 --   s0 = "\NUL\NUL\128" :: String
 strToStrAt :: SString -> SInteger -> SString
@@ -132,9 +137,9 @@ strToStrAt s offset = subStr s offset 1
 -- | @`strToCharAt` s i@ is the 8-bit value stored at location @i@. Unspecified if
 -- index is out of bounds.
 --
--- >>> prove $ \i -> i .>= 0 &&& i .<= 4 ==> "AAAAA" `strToCharAt` i .== literal 'A'
+-- >>> prove $ \i -> i .>= 0 .&& i .<= 4 .=> "AAAAA" `strToCharAt` i .== literal 'A'
 -- Q.E.D.
--- >>> prove $ \s i c -> s `strToCharAt` i .== c ==> indexOf s (singleton c) .<= i
+-- >>> prove $ \s i c -> s `strToCharAt` i .== c .=> indexOf s (singleton c) .<= i
 -- Q.E.D.
 strToCharAt :: SString -> SInteger -> SChar
 strToCharAt s i
@@ -150,7 +155,7 @@ strToCharAt s i
         y si st = do c <- internalVariable st w8
                      cs <- newExpr st KString (SBVApp (StrOp StrUnit) [c])
                      let csSBV = SBV (SVal KString (Right (cache (\_ -> return cs))))
-                     internalConstraint st False [] $ unSBV $ length s .> i ==> csSBV .== si
+                     internalConstraint st False [] $ unSBV $ length s .> i .=> csSBV .== si
                      return c
 
 -- | Short cut for 'strToCharAt'
@@ -173,6 +178,13 @@ infixr 5 .:
 (.:) :: SChar -> SString -> SString
 c .: cs = singleton c .++ cs
 
+-- | Empty string. This value has the property that it's the only string with length 0:
+--
+-- >>> prove $ \l -> length l .== 0 .<=> l .== nil
+-- Q.E.D.
+nil :: SString
+nil = ""
+
 -- | Concatenate two strings. See also `.++`.
 concat :: SString -> SString -> SString
 concat x y | isConcretelyEmpty x = y
@@ -181,7 +193,7 @@ concat x y | isConcretelyEmpty x = y
 
 -- | Short cut for `concat`.
 --
--- >>> sat $ \x y z -> length x .== 5 &&& length y .== 1 &&& x .++ y .++ z .== "Hello world!"
+-- >>> sat $ \x y z -> length x .== 5 .&& length y .== 1 .&& x .++ y .++ z .== "Hello world!"
 -- Satisfiable. Model:
 --   s0 =  "Hello" :: String
 --   s1 =      " " :: String
@@ -194,7 +206,7 @@ infixr 5 .++
 --
 -- >>> prove $ \s1 s2 s3 -> s2 `isInfixOf` (s1 .++ s2 .++ s3)
 -- Q.E.D.
--- >>> prove $ \s1 s2 -> s1 `isInfixOf` s2 &&& s2 `isInfixOf` s1 <=> s1 .== s2
+-- >>> prove $ \s1 s2 -> s1 `isInfixOf` s2 .&& s2 `isInfixOf` s1 .<=> s1 .== s2
 -- Q.E.D.
 isInfixOf :: SString -> SString -> SBool
 sub `isInfixOf` s
@@ -207,7 +219,7 @@ sub `isInfixOf` s
 --
 -- >>> prove $ \s1 s2 -> s1 `isPrefixOf` (s1 .++ s2)
 -- Q.E.D.
--- >>> prove $ \s1 s2 -> s1 `isPrefixOf` s2 ==> subStr s2 0 (length s1) .== s1
+-- >>> prove $ \s1 s2 -> s1 `isPrefixOf` s2 .=> subStr s2 0 (length s1) .== s1
 -- Q.E.D.
 isPrefixOf :: SString -> SString -> SBool
 pre `isPrefixOf` s
@@ -220,7 +232,7 @@ pre `isPrefixOf` s
 --
 -- >>> prove $ \s1 s2 -> s2 `isSuffixOf` (s1 .++ s2)
 -- Q.E.D.
--- >>> prove $ \s1 s2 -> s1 `isSuffixOf` s2 ==> subStr s2 (length s2 - length s1) (length s1) .== s1
+-- >>> prove $ \s1 s2 -> s1 `isSuffixOf` s2 .=> subStr s2 (length s2 - length s1) (length s1) .== s1
 -- Q.E.D.
 isSuffixOf :: SString -> SString -> SBool
 suf `isSuffixOf` s
@@ -231,7 +243,7 @@ suf `isSuffixOf` s
 
 -- | @`take` len s@. Corresponds to Haskell's `take` on symbolic-strings.
 --
--- >>> prove $ \s i -> i .>= 0 ==> length (take i s) .<= i
+-- >>> prove $ \s i -> i .>= 0 .=> length (take i s) .<= i
 -- Q.E.D.
 take :: SInteger -> SString -> SString
 take i s = ite (i .<= 0)        (literal "")
@@ -254,7 +266,7 @@ drop i s = ite (i .>= ls) (literal "")
 -- This function is under-specified when the offset is outside the range of positions in @s@ or @len@
 -- is negative or @offset+len@ exceeds the length of @s@.
 --
--- >>> prove $ \s i -> i .>= 0 &&& i .< length s ==> subStr s 0 i .++ subStr s i (length s - i) .== s
+-- >>> prove $ \s i -> i .>= 0 .&& i .< length s .=> subStr s 0 i .++ subStr s i (length s - i) .== s
 -- Q.E.D.
 -- >>> sat  $ \i j -> subStr "hello" i j .== "ell"
 -- Satisfiable. Model:
@@ -278,9 +290,9 @@ subStr s offset len
 
 -- | @`replace` s src dst@. Replace the first occurrence of @src@ by @dst@ in @s@
 --
--- >>> prove $ \s -> replace "hello" s "world" .== "world" ==> s .== "hello"
+-- >>> prove $ \s -> replace "hello" s "world" .== "world" .=> s .== "hello"
 -- Q.E.D.
--- >>> prove $ \s1 s2 s3 -> length s2 .> length s1 ==> replace s1 s2 s3 .== s1
+-- >>> prove $ \s1 s2 s3 -> length s2 .> length s1 .=> replace s1 s2 s3 .== s1
 -- Q.E.D.
 replace :: SString -> SString -> SString -> SString
 replace s src dst
@@ -301,13 +313,13 @@ replace s src dst
 -- | @`indexOf` s sub@. Retrieves first position of @sub@ in @s@, @-1@ if there are no occurrences.
 -- Equivalent to @`offsetIndexOf` s sub 0@.
 --
--- >>> prove $ \s i -> i .> 0 &&& i .< length s ==> indexOf s (subStr s i 1) .<= i
+-- >>> prove $ \s i -> i .> 0 .&& i .< length s .=> indexOf s (subStr s i 1) .<= i
 -- Q.E.D.
--- >>> prove $ \s i -> i .> 0 &&& i .< length s ==> indexOf s (subStr s i 1) .== i
+-- >>> prove $ \s i -> i .> 0 .&& i .< length s .=> indexOf s (subStr s i 1) .== i
 -- Falsifiable. Counter-example:
 --   s0 = " \NUL\NUL\NUL\NUL\NUL" :: String
 --   s1 =                       3 :: Integer
--- >>> prove $ \s1 s2 -> length s2 .> length s1 ==> indexOf s1 s2 .== -1
+-- >>> prove $ \s1 s2 -> length s2 .> length s1 .=> indexOf s1 s2 .== -1
 -- Q.E.D.
 indexOf :: SString -> SString -> SInteger
 indexOf s sub = offsetIndexOf s sub 0
@@ -317,9 +329,9 @@ indexOf s sub = offsetIndexOf s sub 0
 --
 -- >>> prove $ \s sub -> offsetIndexOf s sub 0 .== indexOf s sub
 -- Q.E.D.
--- >>> prove $ \s sub i -> i .>= length s &&& length sub .> 0 ==> offsetIndexOf s sub i .== -1
+-- >>> prove $ \s sub i -> i .>= length s .&& length sub .> 0 .=> offsetIndexOf s sub i .== -1
 -- Q.E.D.
--- >>> prove $ \s sub i -> i .> length s ==> offsetIndexOf s sub i .== -1
+-- >>> prove $ \s sub i -> i .> length s .=> offsetIndexOf s sub i .== -1
 -- Q.E.D.
 offsetIndexOf :: SString -> SString -> SInteger -> SInteger
 offsetIndexOf s sub offset
@@ -338,7 +350,7 @@ offsetIndexOf s sub offset
 -- that is, if it encodes a natural number. Otherwise, it returns '-1'.
 -- See <http://cvc4.cs.stanford.edu/wiki/Strings> for details.
 --
--- >>> prove $ \s -> let n = strToNat s in n .>= 0 &&& n .< 10 ==> length s .== 1
+-- >>> prove $ \s -> let n = strToNat s in n .>= 0 .&& n .< 10 .=> length s .== 1
 -- Q.E.D.
 strToNat :: SString -> SInteger
 strToNat s
@@ -354,7 +366,7 @@ strToNat s
 -- produces empty string, even though we take an integer as an argument.
 -- See <http://cvc4.cs.stanford.edu/wiki/Strings> for details.
 --
--- >>> prove $ \i -> length (natToStr i) .== 3 ==> i .<= 999
+-- >>> prove $ \i -> length (natToStr i) .== 3 .=> i .<= 999
 -- Q.E.D.
 natToStr :: SInteger -> SString
 natToStr i
@@ -364,51 +376,51 @@ natToStr i
  = lift1 StrNatToStr Nothing i
 
 -- | Lift a unary operator over strings.
-lift1 :: forall a b. (SymWord a, SymWord b) => StrOp -> Maybe (a -> b) -> SBV a -> SBV b
+lift1 :: forall a b. (SymVal a, SymVal b) => StrOp -> Maybe (a -> b) -> SBV a -> SBV b
 lift1 w mbOp a
   | Just cv <- concEval1 mbOp a
   = cv
   | True
   = SBV $ SVal k $ Right $ cache r
-  where k = kindOf (undefined :: b)
-        r st = do swa <- sbvToSW st a
-                  newExpr st k (SBVApp (StrOp w) [swa])
+  where k = kindOf (Proxy @b)
+        r st = do sva <- sbvToSV st a
+                  newExpr st k (SBVApp (StrOp w) [sva])
 
 -- | Lift a binary operator over strings.
-lift2 :: forall a b c. (SymWord a, SymWord b, SymWord c) => StrOp -> Maybe (a -> b -> c) -> SBV a -> SBV b -> SBV c
+lift2 :: forall a b c. (SymVal a, SymVal b, SymVal c) => StrOp -> Maybe (a -> b -> c) -> SBV a -> SBV b -> SBV c
 lift2 w mbOp a b
   | Just cv <- concEval2 mbOp a b
   = cv
   | True
   = SBV $ SVal k $ Right $ cache r
-  where k = kindOf (undefined :: c)
-        r st = do swa <- sbvToSW st a
-                  swb <- sbvToSW st b
-                  newExpr st k (SBVApp (StrOp w) [swa, swb])
+  where k = kindOf (Proxy @c)
+        r st = do sva <- sbvToSV st a
+                  svb <- sbvToSV st b
+                  newExpr st k (SBVApp (StrOp w) [sva, svb])
 
 -- | Lift a ternary operator over strings.
-lift3 :: forall a b c d. (SymWord a, SymWord b, SymWord c, SymWord d) => StrOp -> Maybe (a -> b -> c -> d) -> SBV a -> SBV b -> SBV c -> SBV d
+lift3 :: forall a b c d. (SymVal a, SymVal b, SymVal c, SymVal d) => StrOp -> Maybe (a -> b -> c -> d) -> SBV a -> SBV b -> SBV c -> SBV d
 lift3 w mbOp a b c
   | Just cv <- concEval3 mbOp a b c
   = cv
   | True
   = SBV $ SVal k $ Right $ cache r
-  where k = kindOf (undefined :: d)
-        r st = do swa <- sbvToSW st a
-                  swb <- sbvToSW st b
-                  swc <- sbvToSW st c
-                  newExpr st k (SBVApp (StrOp w) [swa, swb, swc])
+  where k = kindOf (Proxy @d)
+        r st = do sva <- sbvToSV st a
+                  svb <- sbvToSV st b
+                  svc <- sbvToSV st c
+                  newExpr st k (SBVApp (StrOp w) [sva, svb, svc])
 
 -- | Concrete evaluation for unary ops
-concEval1 :: (SymWord a, SymWord b) => Maybe (a -> b) -> SBV a -> Maybe (SBV b)
+concEval1 :: (SymVal a, SymVal b) => Maybe (a -> b) -> SBV a -> Maybe (SBV b)
 concEval1 mbOp a = literal <$> (mbOp <*> unliteral a)
 
 -- | Concrete evaluation for binary ops
-concEval2 :: (SymWord a, SymWord b, SymWord c) => Maybe (a -> b -> c) -> SBV a -> SBV b -> Maybe (SBV c)
+concEval2 :: (SymVal a, SymVal b, SymVal c) => Maybe (a -> b -> c) -> SBV a -> SBV b -> Maybe (SBV c)
 concEval2 mbOp a b = literal <$> (mbOp <*> unliteral a <*> unliteral b)
 
 -- | Concrete evaluation for ternary ops
-concEval3 :: (SymWord a, SymWord b, SymWord c, SymWord d) => Maybe (a -> b -> c -> d) -> SBV a -> SBV b -> SBV c -> Maybe (SBV d)
+concEval3 :: (SymVal a, SymVal b, SymVal c, SymVal d) => Maybe (a -> b -> c -> d) -> SBV a -> SBV b -> SBV c -> Maybe (SBV d)
 concEval3 mbOp a b c = literal <$> (mbOp <*> unliteral a <*> unliteral b <*> unliteral c)
 
 -- | Is the string concretely known empty?

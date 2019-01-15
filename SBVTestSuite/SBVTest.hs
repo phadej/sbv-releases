@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  SBVTestSuite.SBVTest.Main
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : SBVTest
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Main entry point to the test suite
 -----------------------------------------------------------------------------
@@ -43,6 +43,7 @@ import qualified TestSuite.Basics.SmallShifts
 import qualified TestSuite.Basics.SquashReals
 import qualified TestSuite.Basics.String
 import qualified TestSuite.Basics.TOut
+import qualified TestSuite.Basics.Tuple
 import qualified TestSuite.BitPrecise.BitTricks
 import qualified TestSuite.BitPrecise.Legato
 import qualified TestSuite.BitPrecise.MergeSort
@@ -97,8 +98,10 @@ import qualified TestSuite.Queries.Int_Z3
 import qualified TestSuite.Queries.Interpolants
 import qualified TestSuite.Queries.Lists
 import qualified TestSuite.Queries.Strings
+import qualified TestSuite.Queries.Tuples
 import qualified TestSuite.Queries.Uninterpreted
 import qualified TestSuite.QuickCheck.QC
+import qualified TestSuite.Transformers.SymbolicEval
 import qualified TestSuite.Uninterpreted.AUF
 import qualified TestSuite.Uninterpreted.Axioms
 import qualified TestSuite.Uninterpreted.Function
@@ -177,6 +180,7 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Basics.SquashReals.tests
                , TestSuite.Basics.String.tests
                , TestSuite.Basics.TOut.tests
+               , TestSuite.Basics.Tuple.tests
                , TestSuite.BitPrecise.BitTricks.tests
                , TestSuite.BitPrecise.Legato.tests
                , TestSuite.BitPrecise.MergeSort.tests
@@ -223,7 +227,9 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Queries.Int_Z3.tests
                , TestSuite.Queries.Lists.tests
                , TestSuite.Queries.Strings.tests
+               , TestSuite.Queries.Tuples.tests
                , TestSuite.Queries.Uninterpreted.tests
+               , TestSuite.Transformers.SymbolicEval.tests
                , TestSuite.Uninterpreted.AUF.tests
                , TestSuite.Uninterpreted.Axioms.tests
                , TestSuite.Uninterpreted.Function.tests

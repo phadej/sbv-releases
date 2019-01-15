@@ -1,14 +1,15 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Optimization.Quantified
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Optimization.Quantified
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for optimization iwth quantifiers
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module TestSuite.Optimization.Quantified(tests) where

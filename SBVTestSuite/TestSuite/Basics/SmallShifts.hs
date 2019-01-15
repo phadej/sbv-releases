@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Basics.SmallShift
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Basics.SmallShifts
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Testing small-shift amounts using the dynamic interface. See
 -- http://github.com/LeventErkok/sbv/issues/323 for the genesis.
@@ -14,9 +14,8 @@ module TestSuite.Basics.SmallShifts(tests) where
 
 import Utils.SBVTestFramework hiding (proveWith)
 
-import Control.Monad.Reader (ask)
-import Control.Monad.Trans  (liftIO)
 import Data.SBV.Dynamic
+import Data.SBV.Internals  (genMkSymVar, unSBV)
 
 k1, k32, k33 :: Kind
 k1   = KBounded False  1
@@ -42,8 +41,8 @@ average4 x y =   ((x `svShiftRight` b1) `svPlus` (y `svShiftRight` b1))
                 `svPlus` (x `svAnd` (y `svAnd` svInteger k32 1))
 
 prop :: Symbolic SVal
-prop = do x <- ask >>= liftIO . svMkSymVar Nothing k32 (Just "x")
-          y <- ask >>= liftIO . svMkSymVar Nothing k32 (Just "y")
+prop = do x <- unSBV <$> genMkSymVar k32 Nothing (Just "x")
+          y <- unSBV <$> genMkSymVar k32 Nothing (Just "y")
           return $ average33 x y `svEqual` average4 x y
 
 checkThm :: ThmResult -> Assertion

@@ -1,15 +1,15 @@
----------------------------------------------------------------------------------
+-----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Internals
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Internals
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Low level functions to access the SBV infrastructure, for developers who
 -- want to build further tools on top of SBV. End-users of the library
 -- should not need to use this module.
----------------------------------------------------------------------------------
+-----------------------------------------------------------------------------
 
 module Data.SBV.Internals (
   -- * Running symbolic programs /manually/
@@ -22,7 +22,7 @@ module Data.SBV.Internals (
   , module Data.SBV.Core.Data
 
   -- * Operations useful for instantiating SBV type classes
-  , genLiteral, genFromCW, CW(..), genMkSymVar, genParse, showModel, SMTModel(..), liftQRem, liftDMod, registerKind
+  , genLiteral, genFromCV, CV(..), genMkSymVar, genParse, showModel, SMTModel(..), liftQRem, liftDMod, registerKind
 
   -- * Compilation to C, extras
   , compileToC', compileToCLib'
@@ -48,9 +48,11 @@ module Data.SBV.Internals (
 
   ) where
 
+import Control.Monad.IO.Class (MonadIO)
+
 import Data.SBV.Core.Data
-import Data.SBV.Core.Model      (genLiteral, genFromCW, genMkSymVar, liftQRem, liftDMod)
-import Data.SBV.Core.Symbolic   (IStage(..), addSValOptGoal, registerKind)
+import Data.SBV.Core.Model      (genLiteral, genFromCV, genMkSymVar, liftQRem, liftDMod)
+import Data.SBV.Core.Symbolic   (IStage(..), MonadQuery, addSValOptGoal, registerKind)
 
 import Data.SBV.Compilers.C       (compileToC', compileToCLib')
 import Data.SBV.Compilers.CodeGen
@@ -67,7 +69,7 @@ import qualified Data.SBV.Control.Utils as Query
 -- | Send an arbitrary string to the solver in a query.
 -- Note that this is inherently dangerous as it can put the solver in an arbitrary
 -- state and confuse SBV. If you use this feature, you are on your own!
-sendStringToSolver :: String -> Query ()
+sendStringToSolver :: (MonadIO m, MonadQuery m) => String -> m ()
 sendStringToSolver = Query.send False
 
 -- | Retrieve multiple responses from the solver, until it responds with a user given
@@ -75,13 +77,13 @@ sendStringToSolver = Query.send False
 -- If the time-out is exceeded, then we will raise an error. Note that this is inherently
 -- dangerous as it can put the solver in an arbitrary state and confuse SBV. If you use this
 -- feature, you are on your own!
-retrieveResponseFromSolver :: String -> Maybe Int -> Query [String]
+retrieveResponseFromSolver :: (MonadIO m, MonadQuery m) => String -> Maybe Int -> m [String]
 retrieveResponseFromSolver = Query.retrieveResponse
 
 -- | Send an arbitrary string to the solver in a query, and return a response.
 -- Note that this is inherently dangerous as it can put the solver in an arbitrary
 -- state and confuse SBV.
-sendRequestToSolver :: String -> Query String
+sendRequestToSolver :: (MonadIO m, MonadQuery m) => String -> m String
 sendRequestToSolver = Query.ask
 
 {- $coordinateSolverInfo

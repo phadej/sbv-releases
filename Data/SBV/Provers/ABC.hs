@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Provers.ABC
--- Copyright   :  (c) Adam Foltzer
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Provers.ABC
+-- Author    : Adam Foltzer
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- The connection to the ABC verification and synthesis tool
 -----------------------------------------------------------------------------
@@ -23,6 +23,7 @@ abc :: SMTSolver
 abc = SMTSolver {
            name         = ABC
          , executable   = "abc"
+         , preprocess   = id
          , options      = const ["-S", "%blast; &sweep -C 5000; &syn4; &cec -s -m -C 2000"]
          , engine       = standardEngine "SBV_ABC" "SBV_ABC_OPTIONS"
          , capabilities = SolverCapabilities {

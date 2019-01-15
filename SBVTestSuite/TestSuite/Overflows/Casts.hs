@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Overflows.Casts
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Overflows.Casts
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for overflow checking
 -----------------------------------------------------------------------------
@@ -119,7 +119,7 @@ tests = testGroup "Overflows" [testGroup "Casts" ts]
                                ]
              ]
 
-chk :: forall a b. (SymWord a, SymWord b, Integral a, Integral b) => Maybe (Integer, Integer) -> (SBV a -> (SBV b, (SBool, SBool))) -> Predicate
+chk :: forall a b. (SymVal a, SymVal b, Integral a, Integral b) => Maybe (Integer, Integer) -> (SBV a -> (SBV b, (SBool, SBool))) -> Predicate
 chk mb cvt = do (x :: SBV a) <- free "x"
 
                 let (_ :: SBV b, (uf, ov)) = cvt x
@@ -128,7 +128,7 @@ chk mb cvt = do (x :: SBV a) <- free "x"
                     ix = sFromIntegral x
 
                     (ufCorrect, ovCorrect) = case mb of
-                                               Nothing       -> (uf .== false,            ov .== false)
-                                               Just (lb, ub) -> (uf <=> ix .< literal lb, ov <=> ix .> literal ub)
+                                               Nothing       -> (uf .== sFalse,            ov .== sFalse)
+                                               Just (lb, ub) -> (uf .<=> ix .< literal lb, ov .<=> ix .> literal ub)
 
-                return $ ufCorrect &&& ovCorrect
+                return $ ufCorrect .&& ovCorrect

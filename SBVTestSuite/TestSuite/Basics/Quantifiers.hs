@@ -1,13 +1,15 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Basics.Quantifiers
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Basics.Quantifiers
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Various combinations of quantifiers
 -----------------------------------------------------------------------------
+
+{-# LANGUAGE FlexibleContexts #-}
 
 module TestSuite.Basics.Quantifiers(tests) where
 
@@ -27,7 +29,7 @@ tests = testGroup "Basics.Quantifiers" $ concatMap mkGoal goals ++ concatMap mkP
          qs   = [(exists, "exists"), (forall, "forall")]
 
          acts = [ (\x y -> x + (y - x) .== y  , "thm")
-                , (\x y -> x .== y &&& x ./= y, "contradiction")
+                , (\x y -> x .== y .&& x ./= y, "contradiction")
                 , (\x y -> x .== y + 1        , "satisfiable")
                 ]
 

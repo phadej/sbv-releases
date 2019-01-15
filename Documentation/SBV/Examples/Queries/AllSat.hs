@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Queries.AllSat
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Queries.AllSat
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- When we would like to find all solutions to a problem, we can query the
 -- solver repeatedly, telling it to give us a new model each time. SBV already
@@ -52,7 +52,7 @@ goodSum = do x <- sInteger "x"
                                   -- Note that we do *not* put these separately, as we do want
                                   -- to allow repetition on one value if the other is different!
                                   constrain $   x ./= literal xv
-                                            ||| y ./= literal yv
+                                            .|| y ./= literal yv
 
                                   -- Also request @x@ to be twice as large, for demo purposes:
                                   constrain $ x .>= 2 * literal xv

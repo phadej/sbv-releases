@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Arrays.Query
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Arrays.Query
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for query mode arrays
 -----------------------------------------------------------------------------
@@ -113,7 +113,7 @@ q6 = do (a :: SArray Integer Integer) <- newArray "a" Nothing
                             Unk   -> error "Unknown"
                             Unsat -> do pop 1
                                         d <- freshVar $ "d" ++ show (length sofar)
-                                        constrain $ d .>= 1 &&& d .< 3
+                                        constrain $ d .>= 1 .&& d .< 3
                                         loop (writeArray a 1 (readArray a 1 + d)) (sofar ++ [d])
                             Sat   -> mapM getValue sofar
 

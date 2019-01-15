@@ -1,17 +1,17 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.BitPrecise.Legato
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.BitPrecise.Legato
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for Documentation.SBV.Examples.BitPrecise.Legato
 -----------------------------------------------------------------------------
 
 module TestSuite.BitPrecise.Legato(tests) where
 
-import Data.SBV.Internals
+import Data.SBV.Internals hiding (free, output)
 import Documentation.SBV.Examples.BitPrecise.Legato
 
 import Utils.SBVTestFramework
@@ -35,6 +35,6 @@ tests = testGroup "BitPrecise.Legato" [
                     cgSetDriverValues [87, 92]
                     x <- cgInput "x"
                     y <- cgInput "y"
-                    let (hi, lo) = runLegato (initMachine (x, y, 0, 0, 0, false, false))
+                    let (hi, lo) = runLegato (initMachine (x, y, 0, 0, 0, sFalse, sFalse))
                     cgOutput "hi" hi
                     cgOutput "lo" lo)

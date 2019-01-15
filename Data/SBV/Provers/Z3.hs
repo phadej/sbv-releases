@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Provers.MathSAT
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Provers.Z3
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- The connection to the MathSAT SMT solver
 -----------------------------------------------------------------------------
@@ -23,6 +23,7 @@ z3 :: SMTSolver
 z3 = SMTSolver {
            name         = Z3
          , executable   = "z3"
+         , preprocess   = id
          , options      = modConfig ["-nw", "-in", "-smt2"]
          , engine       = standardEngine "SBV_Z3" "SBV_Z3_OPTIONS"
          , capabilities = SolverCapabilities {

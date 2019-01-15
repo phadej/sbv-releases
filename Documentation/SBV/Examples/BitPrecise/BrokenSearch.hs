@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.BitPrecise.BrokenSearch
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.BitPrecise.BrokenSearch
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- The classic "binary-searches are broken" example:
 --     <http://ai.googleblog.com/2006/06/extra-extra-read-all-about-it-nearly.html>
@@ -20,13 +20,13 @@ import Data.SBV.Tools.Overflow
 --
 -- >>> checkArithOverflow midPointBroken
 -- Documentation/SBV/Examples/BitPrecise/BrokenSearch.hs:33:28:+!: SInt32 addition overflows: Violated. Model:
---   low  = 2147483647 :: Int32
---   high = 2147483647 :: Int32
+--   low  = 1073741824 :: Int32
+--   high = 1073742336 :: Int32
 --
 -- Indeed:
 --
--- >>> (2147483647 + 2147483647) `div` (2::Int32)
--- -1
+-- >>> (1073741824 + 1073742336) `div` (2::Int32)
+-- -1073741568
 --
 -- giving us a negative mid-point value!
 midPointBroken :: SInt32 -> SInt32 -> SInt32

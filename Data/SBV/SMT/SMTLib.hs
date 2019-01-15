@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.SMT.SMTLib
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.SMT.SMTLib
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Conversion of symbolic programs to SMTLib format
 -----------------------------------------------------------------------------
@@ -37,7 +37,7 @@ toIncSMTLib afterAPush SMTConfig{smtLibVersion} = case smtLibVersion of
 -- | Convert to SMTLib-2 format
 toSMTLib2 :: SMTLibConverter SMTLibPgm
 toSMTLib2 = cvt SMTLib2
-  where cvt v kindInfo isSat comments qinps skolemMap consts tbls arrs uis axs asgnsSeq cstrs out config
+  where cvt v ctx kindInfo isSat comments qinps skolemMap consts tbls arrs uis axs asgnsSeq cstrs out config
          | KUnbounded `Set.member` kindInfo && not (supportsUnboundedInts solverCaps)
          = unsupported "unbounded integers"
          | KReal `Set.member` kindInfo  && not (supportsReals solverCaps)
@@ -50,14 +50,14 @@ toSMTLib2 = cvt SMTLib2
          = unsupported "uninterpreted sorts"
          | True
          = SMTLibPgm v pgm
-         where sorts = [s | KUserSort s _ <- Set.toList kindInfo]
+         where sorts = [s | KUninterpreted s _ <- Set.toList kindInfo]
                solverCaps = capabilities (solver config)
                unsupported w = error $ unlines [ "SBV: Given problem needs " ++ w
                                                , "*** Which is not supported by SBV for the chosen solver: " ++ show (name (solver config))
                                                ]
                converter = case v of
                              SMTLib2 -> SMT2.cvt
-               pgm = converter kindInfo isSat comments qinps skolemMap consts tbls arrs uis axs asgnsSeq cstrs out config
+               pgm = converter ctx kindInfo isSat comments qinps skolemMap consts tbls arrs uis axs asgnsSeq cstrs out config
 
                needsFloats  = KFloat  `Set.member` kindInfo
                needsDoubles = KDouble `Set.member` kindInfo

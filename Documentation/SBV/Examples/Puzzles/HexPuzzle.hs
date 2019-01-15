@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Puzzles.HexPuzzle
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Puzzles.HexPuzzle
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- A solution to the hexagon solver puzzle: <http://www5.cadence.com/2018ClubVQuiz_LP.html>
 -- In case the above URL goes dead, here's an ASCII rendering of the problem.
@@ -39,11 +39,11 @@
 -- to the final one.
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE StandaloneDeriving  #-}
-{-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE DeriveAnyClass      #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving  #-}
+{-# LANGUAGE TemplateHaskell     #-}
 
 module Documentation.SBV.Examples.Puzzles.HexPuzzle where
 
@@ -112,7 +112,7 @@ search initial final = runSMT $ do emptyGrid :: Grid <- newArray "emptyGrid" (Ju
                                           findOthers sofar vs
 
         findOthers vs = go
-                where go curVals = do constrain $ bOr $ zipWith (\v c -> v ./= literal c) vs curVals
+                where go curVals = do constrain $ sOr $ zipWith (\v c -> v ./= literal c) vs curVals
                                       cs <- checkSat
                                       case cs of
                                        Unk   -> error "Unknown!"

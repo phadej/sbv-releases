@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.CRC.CCITT_Unidir
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.CRC.CCITT_Unidir
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for Examples.CRC.CCITT_Unidir
 -----------------------------------------------------------------------------
@@ -47,13 +47,13 @@ diffCount xs ys = count $ zipWith (.==) xs ys
 
 -- returns true if there's a 0->1 error (1->0 is ok)
 nonUnidir :: [SBool] -> [SBool] -> SBool
-nonUnidir []     _      = false
-nonUnidir _      []     = false
-nonUnidir (a:as) (b:bs) = (bnot a &&& b) ||| nonUnidir as bs
+nonUnidir []     _      = sFalse
+nonUnidir _      []     = sTrue
+nonUnidir (a:as) (b:bs) = (sNot a .&& b) .|| nonUnidir as bs
 
 crcUniGood :: SWord8 -> SWord48 -> SWord48 -> SBool
 crcUniGood hd sent received =
-     sent ./= received ==> nonUnidir frameSent frameReceived ||| diffCount frameSent frameReceived .> hd
+     sent ./= received .=> nonUnidir frameSent frameReceived .|| diffCount frameSent frameReceived .> hd
    where frameSent     = blastLE $ mkFrame sent
          frameReceived = blastLE $ mkFrame received
 

@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Uninterpreted.Axioms
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Uninterpreted.Axioms
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for basic axioms and uninterpreted functions
 -----------------------------------------------------------------------------
@@ -23,7 +23,7 @@ tests =
     [ testCase "unint-axioms" (assertIsThm p0) ]
 
 -- Example provided by Thomas DuBuisson:
-newtype Bitstring = Bitstring () deriving (Eq, Ord, Show, Read, Data, SymWord, HasKind)
+newtype Bitstring = Bitstring () deriving (Eq, Ord, Show, Read, Data, SymVal, HasKind)
 type SBitstring = SBV Bitstring
 
 a :: SBitstring -> SBool

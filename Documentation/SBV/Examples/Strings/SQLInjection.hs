@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Puzzles.SQLInjection
--- Copyright   :  (c) Joel Burget
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Strings.SQLInjection
+-- Author    : Joel Burget
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Implement the symbolic evaluation of a language which operates on
 -- strings in a way similar to bash. It's possible to do different analyses,
@@ -106,16 +106,23 @@ exploitRe = R.KPlus (statementRe * "; ")
 --   query ("SELECT msg FROM msgs WHERE topicid='" ++ my_topicid ++ "'")
 -- @
 --
--- We have:
+-- Depending on your z3 version, you might see an output of the form:
 --
--- >>> findInjection exampleProgram
--- "  f'; DROP TABLE 'users"
+-- @
+--   ghci> findInjection exampleProgram
+--   "kg'; DROP TABLE 'users"
+-- @
 --
--- Indeed, if we substitute the suggested string, we get the program:
+-- though the topic might change obviously. Indeed, if we substitute the suggested string, we get the program:
 --
--- > query ("SELECT msg FROM msgs WHERE topicid='  f'; DROP TABLE 'users'")
+-- > query ("SELECT msg FROM msgs WHERE topicid='kg'; DROP TABLE 'users'")
 --
--- which would query for topic @'  f'@ and then delete the users table!
+-- which would query for topic @kg@ and then delete the users table!
+--
+-- Here, we make sure that the injection ends with the malicious string:
+--
+-- >>> ("'; DROP TABLE 'users" `Data.List.isSuffixOf`) <$> findInjection exampleProgram
+-- True
 findInjection :: SQLExpr -> IO String
 findInjection expr = runSMT $ do
 
@@ -135,7 +142,7 @@ findInjection expr = runSMT $ do
     (_, queries) <- runWriterT (evalStateT (eval expr) env)
 
     -- For all the queries thus generated, ask that one of them be "explotiable"
-    constrain $ bAny (`R.match` exploitRe) queries
+    constrain $ sAny (`R.match` exploitRe) queries
 
     query $ do cs <- checkSat
                case cs of

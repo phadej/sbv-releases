@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Crypto.RC4
--- Copyright   :  (c) Austin Seipp
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Crypto.RC4
+-- Author    : Austin Seipp
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- An implementation of RC4 (AKA Rivest Cipher 4 or Alleged RC4/ARC4),
 -- using SBV. For information on RC4, see: <http://en.wikipedia.org/wiki/RC4>.
@@ -148,6 +148,6 @@ rc4IsCorrect = prove $ do
 
 --------------------------------------------------------------------------------------------
 -- | For doctest purposes only
-hex2 :: (SymWord a, Show a, Integral a) => SBV a -> String
+hex2 :: (SymVal a, Show a, Integral a) => SBV a -> String
 hex2 v = replicate (2 - length s) '0' ++ s
   where s = flip showHex "" . fromJust . unliteral $ v

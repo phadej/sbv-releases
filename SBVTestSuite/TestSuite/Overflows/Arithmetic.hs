@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Overflows.Arithmetic
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Overflows.Arithmetic
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for overflow checking
 -----------------------------------------------------------------------------
@@ -131,7 +131,7 @@ exactlyWhen :: SBool -> SVal -> SBool
 exactlyWhen (SBV a) b = SBV $ (a `svAnd` b) `svOr` (svNot a `svAnd` svNot b)
 
 -- Properly extend to a dynamic large vector
-toLarge :: SBV a -> SLarge
+toLarge :: HasKind a => SBV a -> SLarge
 toLarge v
   | extra < 0 = error $ "toLarge: Unexpected size: " ++ show (n, large)
   | hasSign v = p `svJoin` dv
@@ -147,7 +147,7 @@ toLarge v
         p     = svIte pos z o
 
 -- Multiplication checks are expensive. For these, we simply check that the SBV encodings and the z3 versions are equivalent
-mulChkO :: forall a. (SymWord a) => (SBV a -> SBV a -> (SBool, SBool)) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
+mulChkO :: forall a. SymVal a => (SBV a -> SBV a -> (SBool, SBool)) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
 mulChkO fast slow = do setLogic Logic_NONE
                        x <- free "x"
                        y <- free "y"
@@ -158,7 +158,7 @@ mulChkO fast slow = do setLogic Logic_NONE
                        return $ ov1 .== ov2
 
 -- Underflow mults
-mulChkU :: forall a. (SymWord a) => (SBV a -> SBV a -> (SBool, SBool)) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
+mulChkU :: forall a. SymVal a => (SBV a -> SBV a -> (SBool, SBool)) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
 mulChkU fast slow = do setLogic Logic_NONE
                        x <- free "x"
                        y <- free "y"
@@ -169,7 +169,7 @@ mulChkU fast slow = do setLogic Logic_NONE
                        return $ uf1 .== uf2
 
 -- Signed division can only underflow under one condition, check that simply instead of trying to do an expensive embedding proof
-divChk :: forall a. (Integral a, Bounded a, SymWord a) => (SLarge -> SLarge -> SLarge) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
+divChk :: forall a. (Integral a, Bounded a, SymVal a) => (SLarge -> SLarge -> SLarge) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
 divChk _op cond = do x  <- free "x"
                      y  <- free "y"
 
@@ -185,7 +185,7 @@ divChk _op cond = do x  <- free "x"
 
 -- For a few cases, we expect them to "never" overflow. The "embedding proofs" are either too expensive (in case of division), or
 -- not possible (in case of negation). We capture these here.
-never :: forall a. (Integral a, Bounded a, SymWord a) => (SLarge -> SLarge -> SLarge) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
+never :: forall a. (Integral a, Bounded a, SymVal a) => (SLarge -> SLarge -> SLarge) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
 never _op cond = do x  <- free "x"
                     y  <- free "y"
 
@@ -193,14 +193,14 @@ never _op cond = do x  <- free "x"
 
                     return $ underflowHappens `exactlyWhen` svFalse
 
-never1 :: forall a. (Integral a, Bounded a, SymWord a) => (SLarge -> SLarge) -> (SBV a -> (SBool, SBool)) -> Predicate
+never1 :: forall a. (Integral a, Bounded a, SymVal a) => (SLarge -> SLarge) -> (SBV a -> (SBool, SBool)) -> Predicate
 never1 _op cond = do x  <- free "x"
 
                      let (underflowHappens, _) = cond x
 
                      return $ underflowHappens `exactlyWhen` svFalse
 
-underflow :: forall a. (Integral a, Bounded a, SymWord a) => (SLarge -> SLarge -> SLarge) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
+underflow :: forall a. (Integral a, Bounded a, SymVal a) => (SLarge -> SLarge -> SLarge) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
 underflow op cond = do x  <- free "x"
                        y  <- free "y"
 
@@ -212,7 +212,7 @@ underflow op cond = do x  <- free "x"
 
                        return $ underflowHappens `exactlyWhen` (extResult `svLessThan` toLarge (minBound :: SBV a))
 
-overflow :: forall a. (Integral a, Bounded a, SymWord a) => (SLarge -> SLarge -> SLarge) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
+overflow :: forall a. (Integral a, Bounded a, SymVal a) => (SLarge -> SLarge -> SLarge) -> (SBV a -> SBV a -> (SBool, SBool)) -> Predicate
 overflow op cond = do x  <- free "x"
                       y  <- free "y"
 
@@ -223,7 +223,7 @@ overflow op cond = do x  <- free "x"
 
                       return $ overflowHappens `exactlyWhen` (extResult `svGreaterThan` toLarge (maxBound :: SBV a))
 
-underflow1 :: forall a. (Integral a, Bounded a, SymWord a) => (SLarge -> SLarge) -> (SBV a -> (SBool, SBool)) -> Predicate
+underflow1 :: forall a. (Integral a, Bounded a, SymVal a) => (SLarge -> SLarge) -> (SBV a -> (SBool, SBool)) -> Predicate
 underflow1 op cond = do x  <- free "x"
 
                         let (underflowHappens, _) = cond x
@@ -233,7 +233,7 @@ underflow1 op cond = do x  <- free "x"
 
                         return $ underflowHappens `exactlyWhen` (extResult `svLessThan` toLarge (minBound :: SBV a))
 
-overflow1 :: forall a. (Integral a, Bounded a, SymWord a) => (SLarge -> SLarge) -> (SBV a -> (SBool, SBool)) -> Predicate
+overflow1 :: forall a. (Integral a, Bounded a, SymVal a) => (SLarge -> SLarge) -> (SBV a -> (SBool, SBool)) -> Predicate
 overflow1 op cond = do x  <- free "x"
 
                        let (_, overflowHappens) = cond x

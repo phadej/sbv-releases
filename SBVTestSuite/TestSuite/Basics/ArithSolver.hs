@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Basics.ArithSolver
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Basics.ArithSolver
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for basic non-concrete arithmetic, i.e., testing all
 -- basic arithmetic reasoning using an SMT solver without any
@@ -19,7 +19,7 @@ module TestSuite.Basics.ArithSolver(tests) where
 
 import qualified Data.Numbers.CrackNum as RC (wordToFloat, wordToDouble, floatToWord, doubleToWord)
 
-import Data.SBV.Internals
+import Data.SBV.Internals hiding (free, free_)
 import Utils.SBVTestFramework
 
 import Data.List (genericIndex, isInfixOf, isPrefixOf, isSuffixOf, genericTake, genericDrop, genericLength)
@@ -203,7 +203,7 @@ genShiftMixSize = map mkTest $  [(show x, show y, "shl_w8_w16", mk sShiftLeft  x
          yw16s = [0, 255, 256, 257, maxBound]
 
          mkTest (x, y, l, t) = testCase ("genShiftMixSize." ++ l ++ "." ++ x ++ "_" ++ y) (assert t)
-         mk :: (SymWord a, SymWord b) => (SBV a -> SBV b -> SBV a) -> a -> b -> a -> IO Bool
+         mk :: (SymVal a, SymVal b) => (SBV a -> SBV b -> SBV a) -> a -> b -> a -> IO Bool
          mk o x y r
           = isTheorem $ do a <- free "x"
                            b <- free "y"
@@ -260,7 +260,7 @@ genIntCasts = map mkTest $  cast w8s ++ cast w16s ++ cast w32s ++ cast w64s
                          ++ cast i8s ++ cast i16s ++ cast i32s ++ cast i64s
                          ++ cast iUBs
    where mkTest (x, t) = testCase ("sIntCast-" ++ x) (assert t)
-         cast :: forall a. (Show a, Integral a, SymWord a) => [a] -> [(String, IO Bool)]
+         cast :: forall a. (Show a, Integral a, SymVal a) => [a] -> [(String, IO Bool)]
          cast xs = toWords xs ++ toInts xs
          toWords xs =  [(show x, mkThm x (fromIntegral x :: Word8 ))  | x <- xs]
                     ++ [(show x, mkThm x (fromIntegral x :: Word16))  | x <- xs]
@@ -348,8 +348,8 @@ genIEEE754 origin vs =  map tst1 [("pred_"   ++ nm, x, y)    | (nm, x, y)    <- 
           | isNaN          val        = constrain $ fpIsNaN v
           | isNegativeZero val        = constrain $ fpIsNegativeZero v
           | val == 0                  = constrain $ fpIsPositiveZero v
-          | isInfinite val && val > 0 = constrain $ fpIsInfinite v &&& fpIsPositive v
-          | isInfinite val && val < 0 = constrain $ fpIsInfinite v &&& fpIsNegative v
+          | isInfinite val && val > 0 = constrain $ fpIsInfinite v .&& fpIsPositive v
+          | isInfinite val && val < 0 = constrain $ fpIsInfinite v .&& fpIsNegative v
           | True                      = constrain $ v .== literal val
 
         -- Quickly pick which solver to use. Currently z3 or mathSAT supports FP
@@ -381,7 +381,7 @@ genIEEE754 origin vs =  map tst1 [("pred_"   ++ nm, x, y)    | (nm, x, y)    <- 
                                           eqF a x
                                           eqF b y
                                           return $ if isNaN x || isNaN y
-                                                   then (if neq then a `op` b else bnot (a `op` b))
+                                                   then (if neq then a `op` b else sNot (a `op` b))
                                                    else literal r .== a `op` b
 
         predicates :: (IEEEFloating a) => [(String, SBV a -> SBool, a -> Bool)]
@@ -469,8 +469,8 @@ genFPConverts = map tst1 [("fpCast_" ++ nm, x, y) | (nm, x, y) <- converts]
           | isNaN          val        = constrain $ fpIsNaN v
           | isNegativeZero val        = constrain $ fpIsNegativeZero v
           | val == 0                  = constrain $ fpIsPositiveZero v
-          | isInfinite val && val > 0 = constrain $ fpIsInfinite v &&& fpIsPositive v
-          | isInfinite val && val < 0 = constrain $ fpIsInfinite v &&& fpIsNegative v
+          | isInfinite val && val > 0 = constrain $ fpIsInfinite v .&& fpIsPositive v
+          | isInfinite val && val < 0 = constrain $ fpIsInfinite v .&& fpIsNegative v
           | True                      = constrain $ v .== literal val
 
         -- Quickly pick which solver to use. Currently z3 or mathSAT supports FP

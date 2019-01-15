@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Basics.Exceptions
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Basics.Exceptions
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test the exception mechanism
 -----------------------------------------------------------------------------
@@ -32,7 +32,7 @@ yicesExc rf = runSMTWith yices{verbose=True, redirectVerbose=Just rf} exc
                              `C.catch` \(e :: SBVException) -> do appendFile rf "CAUGHT SMT EXCEPTION"
                                                                   appendFile rf (show e)
  where exc = do x <- sWord32 "x"
-                constrain $ lsb x ==> (x * (x .^ (-1::SWord32))) .== 1
+                constrain $ lsb x .=> (x * (x .^ (-1::SWord32))) .== 1
                 query $ do cs <- checkSat
                            cs `seq` return ()
 

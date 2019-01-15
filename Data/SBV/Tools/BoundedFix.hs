@@ -1,15 +1,15 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Tools.BoundedFix
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Tools.BoundedFix
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Bounded fixed-point unrolling.
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Data.SBV.Tools.BoundedFix (
          bfix
@@ -41,12 +41,12 @@ import Data.SBV
 -- This definition unrolls the recursion in factorial at most 10 times before uninterpreting the result.
 -- We can now prove:
 --
--- >>> prove $ \n -> n .>= 1 &&& n .<= 9 ==> bfac n .== n * bfac (n-1)
+-- >>> prove $ \n -> n .>= 1 .&& n .<= 9 .=> bfac n .== n * bfac (n-1)
 -- Q.E.D.
 --
 -- And we would get a bogus counter-example if the proof of our property needs a larger bound:
 --
--- >>> prove $ \n -> n .== 10 ==> bfac n .== 3628800
+-- >>> prove $ \n -> n .== 10 .=> bfac n .== 3628800
 -- Falsifiable. Counter-example:
 --   s0 = 10 :: Integer
 --
@@ -55,17 +55,17 @@ import Data.SBV
 -- only applies if the given argument is symbolic. This fact can be used to observe concrete
 -- values to see where the bounded-model-checking approach fails:
 --
--- >>> prove $ \n -> n .== 10 ==> observe "bfac_n" (bfac n) .== observe "bfac_10" (bfac 10)
+-- >>> prove $ \n -> n .== 10 .=> observe "bfac_n" (bfac n) .== observe "bfac_10" (bfac 10)
 -- Falsifiable. Counter-example:
---   s0      =      10 :: Integer
---   bfac_n  = 7257600 :: Integer
 --   bfac_10 = 3628800 :: Integer
+--   bfac_n  = 7257600 :: Integer
+--   s0      =      10 :: Integer
 --
 -- Here, we see that the SMT solver must have decided to assign the value @2@ in the final call just
 -- as it was reaching the base case, and thus got the final result incorrect. (Note
 -- that @7257600 = 2 * 3628800@.) A wrapper algorithm can then assert the actual value of
 -- @bfac 10@ here as an extra constraint and can search for "deeper bugs."
-bfix :: (SymWord a, Uninterpreted (SBV a -> r)) => Int -> String -> ((SBV a -> r) -> (SBV a -> r)) -> SBV a -> r
+bfix :: (SymVal a, Uninterpreted (SBV a -> r)) => Int -> String -> ((SBV a -> r) -> (SBV a -> r)) -> SBV a -> r
 bfix bound nm f x
   | isConcrete x = g x
   | True         = unroll bound x

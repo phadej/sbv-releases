@@ -1,16 +1,16 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Queries.Uninterpreted
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Queries.Uninterpreted
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Testing uninterpreted value extraction
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module TestSuite.Queries.Uninterpreted where
 
@@ -34,7 +34,7 @@ testQuery rf = do r <- runSMTWith defaultSMTCfg{verbose=True, redirectVerbose=Ju
 data L = A | B ()
        deriving (Eq, Ord, Show, Read, Data)
 
-instance SymWord L
+instance SymVal L
 instance HasKind L
 instance SMTValue L
 

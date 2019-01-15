@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Existentials.CRCPolynomial
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Existentials.CRCPolynomial
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for Documentation.SBV.Examples.Existentials.CRCPolynomial
 -----------------------------------------------------------------------------
@@ -28,4 +28,4 @@ tests = testGroup "Existentials.CRCPolynomial" [
                 r <- do rh <- forall "rh"
                         rl <- forall "rl"
                         return (rh, rl)
-                output $ sTestBit p 0 &&& crcGood 4 p s r
+                output $ sTestBit p 0 .&& crcGood 4 p s r

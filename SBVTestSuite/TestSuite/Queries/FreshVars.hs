@@ -1,21 +1,21 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Queries.FreshVars
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Queries.FreshVars
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Testing fresh-vars in query mode
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE StandaloneDeriving  #-}
-{-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE DeriveAnyClass      #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE OverloadedLists     #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving  #-}
+{-# LANGUAGE TemplateHaskell     #-}
 
 module TestSuite.Queries.FreshVars (tests)  where
 
@@ -89,10 +89,10 @@ fv = do a <- sInteger "a"
                    mustBe42                               <- freshVar "mustBe42"
                    mustBeX                                <- freshVar "mustBeX"
 
-                   constrain $ readArray viSArray 96    .== mustBe42
-                   constrain $ readArray viFArray false .== mustBeX
+                   constrain $ readArray viSArray 96     .== mustBe42
+                   constrain $ readArray viFArray sFalse .== mustBeX
                    constrain $ vi1 .== 1
-                   constrain $ bnot vi2
+                   constrain $ sNot vi2
 
                    vString  :: SString         <- freshVar  "vString"
                    vList1   :: SList Integer   <- freshVar  "vList1"

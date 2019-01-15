@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  TestSuite.Basics.QRem
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : TestSuite.Basics.QRem
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Test suite for Examples.Basics.QRem
 -----------------------------------------------------------------------------
@@ -27,7 +27,7 @@ tests =
 -- defined to be 0 and the remainder is the numerator
 qrem :: (Num a, EqSymbolic a, SDivisible a) => a -> a -> SBool
 qrem x y = ite (y .== 0)
-               ((0, x) .== (q, r) &&& (0, x) .== (d, m))
-               (x .== y * q + r &&& x .== y * d + m)
+               ((0, x) .== (q, r) .&& (0, x) .== (d, m))
+               (x .== y * q + r .&& x .== y * d + m)
   where (q, r) = x `sQuotRem` y
         (d, m) = x `sDivMod` y

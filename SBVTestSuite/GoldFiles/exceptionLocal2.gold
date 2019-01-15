@@ -7,9 +7,8 @@
 [GOOD] (set-option :produce-models true)
 [GOOD] (set-logic QF_LIA) ; NB. User specified.
 [GOOD] ; --- uninterpreted sorts ---
+[GOOD] ; --- tuples ---
 [GOOD] ; --- literal constants ---
-[GOOD] (define-fun s_2 () Bool false)
-[GOOD] (define-fun s_1 () Bool true)
 [GOOD] (define-fun s1 () Real (/ 2.0 1.0))
 [GOOD] ; --- skolem constants ---
 [FAIL] (declare-fun s0 () Real) ; tracks user variable "x"
@@ -18,7 +17,7 @@ CAUGHT SMT EXCEPTION
 ***
 ***    Sent      : (declare-fun s0 () Real) ; tracks user variable "x"
 ***    Expected  : success
-***    Received  : (error "line 10 column 23: logic does not support reals")
+***    Received  : (error "line 8 column 23: logic does not support reals")
 ***
 ***    Exit code : ExitFailure (-15)
 ***    Executable: /usr/local/bin/z3

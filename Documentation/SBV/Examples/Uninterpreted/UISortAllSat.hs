@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Uninterpreted.UISortAllSat
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Uninterpreted.UISortAllSat
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Demonstrates uninterpreted sorts and how all-sat behaves for them.
 -- Thanks to Eric Seidel for the idea.
@@ -27,8 +27,8 @@ data L = Nil
        deriving (Eq, Ord, Show, Read, Data)
 
 -- | Declare instances to make 'L' a usable uninterpreted sort. First we need the
--- 'SymWord' instance, with the default definition sufficing.
-instance SymWord L
+-- 'SymVal' instance, with the default definition sufficing.
+instance SymVal L
 
 -- | Similarly, 'HasKind's default implementation is sufficient.
 instance HasKind L
@@ -72,4 +72,4 @@ genLs = allSatWith z3
                     constrain $ classify l0 .== 0
                     constrain $ classify l1 .== 1
                     constrain $ classify l2 .== 2
-                    return $ l .== l0 ||| l .== l1 ||| l .== l2
+                    return $ l .== l0 .|| l .== l1 .|| l .== l2

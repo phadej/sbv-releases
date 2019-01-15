@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Tools.Range
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Tools.Range
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Single variable valid range detection.
 -----------------------------------------------------------------------------
@@ -25,7 +25,7 @@ module Data.SBV.Tools.Range (
 import Data.SBV
 import Data.SBV.Control
 
-import Data.SBV.Internals hiding (Range)
+import Data.SBV.Internals hiding (Range, free_)
 
 -- Doctest only
 -- $setup
@@ -61,35 +61,35 @@ instance Show a => Show (Range a) where
 -- disjoint ranges that the predicate is satisfied over. (Linear in the number of ranges.) Note that the
 -- number of ranges is large, this can take a long time! Some examples:
 --
--- >>> ranges (\(_ :: SInteger) -> false)
+-- >>> ranges (\(_ :: SInteger) -> sFalse)
 -- []
--- >>> ranges (\(_ :: SInteger) -> true)
+-- >>> ranges (\(_ :: SInteger) -> sTrue)
 -- [(-oo,oo)]
--- >>> ranges (\(x :: SInteger) -> bAnd [x .<= 120, x .>= -12, x ./= 3])
+-- >>> ranges (\(x :: SInteger) -> sAnd [x .<= 120, x .>= -12, x ./= 3])
 -- [[-12,3),(3,120]]
--- >>> ranges (\(x :: SInteger) -> bAnd [x .<= 75, x .>= 5, x ./= 6, x ./= 67])
+-- >>> ranges (\(x :: SInteger) -> sAnd [x .<= 75, x .>= 5, x ./= 6, x ./= 67])
 -- [[5,6),(6,67),(67,75]]
--- >>> ranges (\(x :: SInteger) -> bAnd [x .<= 75, x ./= 3, x ./= 67])
+-- >>> ranges (\(x :: SInteger) -> sAnd [x .<= 75, x ./= 3, x ./= 67])
 -- [(-oo,3),(3,67),(67,75]]
--- >>> ranges (\(x :: SReal) -> bAnd [x .> 3.2, x .<  12.7])
+-- >>> ranges (\(x :: SReal) -> sAnd [x .> 3.2, x .<  12.7])
 -- [(3.2,12.7)]
--- >>> ranges (\(x :: SReal) -> bAnd [x .> 3.2, x .<= 12.7])
+-- >>> ranges (\(x :: SReal) -> sAnd [x .> 3.2, x .<= 12.7])
 -- [(3.2,12.7]]
--- >>> ranges (\(x :: SReal) -> bAnd [x .<= 12.7, x ./= 8])
+-- >>> ranges (\(x :: SReal) -> sAnd [x .<= 12.7, x ./= 8])
 -- [(-oo,8.0),(8.0,12.7]]
--- >>> ranges (\(x :: SReal) -> bAnd [x .>= 12.7, x ./= 15])
+-- >>> ranges (\(x :: SReal) -> sAnd [x .>= 12.7, x ./= 15])
 -- [[12.7,15.0),(15.0,oo)]
--- >>> ranges (\(x :: SInt8) -> bAnd [x .<= 7, x ./= 6])
+-- >>> ranges (\(x :: SInt8) -> sAnd [x .<= 7, x ./= 6])
 -- [[-128,6),(6,7]]
 -- >>> ranges $ \x -> x .> (0::SReal)
 -- [(0.0,oo)]
 -- >>> ranges $ \x -> x .< (0::SReal)
 -- [(-oo,0.0)]
-ranges :: forall a. (Num a, SymWord a,  SMTValue a, SatModel a, Metric (SBV a)) => (SBV a -> SBool) -> IO [Range a]
+ranges :: forall a. (Num a, SymVal a,  SMTValue a, SatModel a, Metric (SBV a)) => (SBV a -> SBool) -> IO [Range a]
 ranges = rangesWith defaultSMTCfg
 
 -- | Compute ranges, using the given solver configuration.
-rangesWith :: forall a. (Num a, SymWord a,  SMTValue a, SatModel a, Metric (SBV a)) => SMTConfig -> (SBV a -> SBool) -> IO [Range a]
+rangesWith :: forall a. (Num a, SymVal a,  SMTValue a, SatModel a, Metric (SBV a)) => SMTConfig -> (SBV a -> SBool) -> IO [Range a]
 rangesWith cfg prop = do mbBounds <- getInitialBounds
                          case mbBounds of
                            Nothing -> return []
@@ -97,21 +97,21 @@ rangesWith cfg prop = do mbBounds <- getInitialBounds
 
   where getInitialBounds :: IO (Maybe (Range a))
         getInitialBounds = do
-            let getGenVal :: GeneralizedCW -> Boundary a
-                getGenVal (RegularCW  cw)  = Closed $ getRegVal cw
-                getGenVal (ExtendedCW ecw) = getExtVal ecw
+            let getGenVal :: GeneralizedCV -> Boundary a
+                getGenVal (RegularCV  cv)  = Closed $ getRegVal cv
+                getGenVal (ExtendedCV ecv) = getExtVal ecv
 
-                getExtVal :: ExtCW -> Boundary a
+                getExtVal :: ExtCV -> Boundary a
                 getExtVal (Infinite _) = Unbounded
-                getExtVal (Epsilon  k) = Open $ getRegVal (mkConstCW k (0::Integer))
+                getExtVal (Epsilon  k) = Open $ getRegVal (mkConstCV k (0::Integer))
                 getExtVal i@Interval{} = error $ unlines [ "*** Data.SBV.ranges.getExtVal: Unexpected interval bounds!"
                                                          , "***"
                                                          , "*** Found bound: " ++ show i
                                                          , "*** Please report this as a bug!"
                                                          ]
-                getExtVal (BoundedCW cw) = Closed $ getRegVal cw
-                getExtVal (AddExtCW a b) = getExtVal a `addBound` getExtVal b
-                getExtVal (MulExtCW a b) = getExtVal a `mulBound` getExtVal b
+                getExtVal (BoundedCV cv) = Closed $ getRegVal cv
+                getExtVal (AddExtCV a b) = getExtVal a `addBound` getExtVal b
+                getExtVal (MulExtCV a b) = getExtVal a `mulBound` getExtVal b
 
                 opBound :: (a -> a -> a) -> Boundary a -> Boundary a -> Boundary a
                 opBound f x y = case (fromBound x, fromBound y, isClosed x && isClosed y) of
@@ -126,10 +126,10 @@ rangesWith cfg prop = do mbBounds <- getInitialBounds
                 addBound = opBound (+)
                 mulBound = opBound (*)
 
-                getRegVal :: CW -> a
-                getRegVal cw = case parseCWs [cw] of
+                getRegVal :: CV -> a
+                getRegVal cv = case parseCVs [cv] of
                                  Just (v, []) -> v
-                                 _            -> error $ "Data.SBV.interval.getRegVal: Cannot parse " ++ show cw
+                                 _            -> error $ "Data.SBV.interval.getRegVal: Cannot parse " ++ show cv
 
             IndependentResult m <- optimizeWith cfg Independent $ do x <- free_
                                                                      constrain $ prop x
@@ -149,14 +149,14 @@ rangesWith cfg prop = do mbBounds <- getInitialBounds
                                      x <- free_
 
                                      let restrict v open closed = case v of
-                                                                    Unbounded -> true
+                                                                    Unbounded -> sTrue
                                                                     Open   a  -> x `open`   literal a
                                                                     Closed a  -> x `closed` literal a
 
                                          lower = restrict lo (.>) (.>=)
                                          upper = restrict hi (.<) (.<=)
 
-                                     constrain $ lower &&& upper &&& bnot (prop x)
+                                     constrain $ lower .&& upper .&& sNot (prop x)
 
                                      query $ do cs <- checkSat
                                                 case cs of

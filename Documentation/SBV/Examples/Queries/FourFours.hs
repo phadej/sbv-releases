@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Queries.FourFours
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Queries.FourFours
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- A query based solution to the four-fours puzzle.
 -- Inspired by <http://www.gigamonkeys.com/trees/>
@@ -19,12 +19,12 @@
 -- and ask the SMT solver to find the appropriate fillings.
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE FlexibleInstances  #-}
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE StandaloneDeriving  #-}
-{-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE DeriveAnyClass      #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE FlexibleInstances  #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving  #-}
+{-# LANGUAGE TemplateHaskell     #-}
 
 module Documentation.SBV.Examples.Queries.FourFours where
 
@@ -100,7 +100,7 @@ fill F         = return F
 
 -- | Minor helper for writing "symbolic" case statements. Simply walks down a list
 -- of values to match against a symbolic version of the key.
-sCase :: (SymWord a, Mergeable v) => SBV a -> [(a, v)] -> v
+sCase :: (SymVal a, Mergeable v) => SBV a -> [(a, v)] -> v
 sCase k = walk
   where walk []              = error "sCase: Expected a non-empty list of cases!"
         walk [(_, v)]        = v
@@ -117,8 +117,8 @@ eval tree = case tree of
               F       -> return 4
 
   where binOp :: SBinOp -> SInteger -> SInteger -> Symbolic SInteger
-        binOp o l r = do constrain $ o .== literal Divide ==> r .== 4 ||| r .== 2
-                         constrain $ o .== literal Expt   ==> r .== 0
+        binOp o l r = do constrain $ o .== literal Divide .=> r .== 4 .|| r .== 2
+                         constrain $ o .== literal Expt   .=> r .== 0
                          return $ sCase o
                                     [ (Plus,    l+r)
                                     , (Minus,   l-r)
@@ -128,8 +128,8 @@ eval tree = case tree of
                                     ]
 
         uOp :: SUnOp -> SInteger -> Symbolic SInteger
-        uOp o v = do constrain $ o .== literal Sqrt      ==> v .== 4
-                     constrain $ o .== literal Factorial ==> v .== 4
+        uOp o v = do constrain $ o .== literal Sqrt      .=> v .== 4
+                     constrain $ o .== literal Factorial .=> v .== 4
                      return $ sCase o
                                 [ (Negate,    -v)
                                 , (Sqrt,       2)  -- argument is restricted to 4, so the value is 2

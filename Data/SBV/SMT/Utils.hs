@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.SMT.Utils
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.SMT.Utils
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- A few internally used types/routines
 -----------------------------------------------------------------------------
@@ -27,6 +27,7 @@ module Data.SBV.SMT.Utils (
 import qualified Control.Exception as C
 
 import Data.SBV.Core.Data
+import Data.SBV.Core.Symbolic (QueryContext)
 import Data.SBV.Utils.Lib (joinArgs)
 
 import Data.List (intercalate)
@@ -35,31 +36,32 @@ import qualified Data.Set as Set (Set)
 import System.Exit (ExitCode(..))
 
 -- | An instance of SMT-Lib converter; instantiated for SMT-Lib v1 and v2. (And potentially for newer versions in the future.)
-type SMTLibConverter a =  Set.Set Kind                                  -- ^ Kinds used in the problem
+type SMTLibConverter a =  QueryContext                                  -- ^ Internal or external query?
+                       -> Set.Set Kind                                  -- ^ Kinds used in the problem
                        -> Bool                                          -- ^ is this a sat problem?
                        -> [String]                                      -- ^ extra comments to place on top
                        -> ([(Quantifier, NamedSymVar)], [NamedSymVar])  -- ^ inputs and aliasing names and trackers
-                       -> [Either SW (SW, [SW])]                        -- ^ skolemized inputs
-                       -> [(SW, CW)]                                    -- ^ constants
-                       -> [((Int, Kind, Kind), [SW])]                   -- ^ auto-generated tables
+                       -> [Either SV (SV, [SV])]                        -- ^ skolemized inputs
+                       -> [(SV, CV)]                                    -- ^ constants
+                       -> [((Int, Kind, Kind), [SV])]                   -- ^ auto-generated tables
                        -> [(Int, ArrayInfo)]                            -- ^ user specified arrays
                        -> [(String, SBVType)]                           -- ^ uninterpreted functions/constants
                        -> [(String, [String])]                          -- ^ user given axioms
                        -> SBVPgm                                        -- ^ assignments
-                       -> [(Bool, [(String, String)], SW)]              -- ^ extra constraints
-                       -> SW                                            -- ^ output variable
+                       -> [(Bool, [(String, String)], SV)]              -- ^ extra constraints
+                       -> SV                                            -- ^ output variable
                        -> SMTConfig                                     -- ^ configuration
                        -> a
 
 -- | An instance of SMT-Lib converter; instantiated for SMT-Lib v1 and v2. (And potentially for newer versions in the future.)
-type SMTLibIncConverter a =  [NamedSymVar]               -- ^ inputs
-                          -> Set.Set Kind                -- ^ Newly registered kinds
-                          -> [(SW, CW)]                  -- ^ constants
-                          -> [(Int, ArrayInfo)]          -- ^ newly created arrays
-                          -> [((Int, Kind, Kind), [SW])] -- ^ newly created tables
-                          -> [(String, SBVType)]         -- ^ newly created uninterpreted functions/constants
-                          -> SBVPgm                      -- ^ assignments
-                          -> SMTConfig                   -- ^ configuration
+type SMTLibIncConverter a =  [NamedSymVar]                -- ^ inputs
+                          -> Set.Set Kind                 -- ^ new kinds
+                          -> [(SV, CV)]                   -- ^ constants
+                          -> [(Int, ArrayInfo)]           -- ^ newly created arrays
+                          -> [((Int, Kind, Kind), [SV])]  -- ^ newly created tables
+                          -> [(String, SBVType)]          -- ^ newly created uninterpreted functions/constants
+                          -> SBVPgm                       -- ^ assignments
+                          -> SMTConfig                    -- ^ configuration
                           -> a
 
 -- | Create an annotated term

@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Puzzles.NQueens
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Puzzles.NQueens
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Solves the NQueens puzzle: <http://en.wikipedia.org/wiki/Eight_queens_puzzle>
 -----------------------------------------------------------------------------
@@ -19,8 +19,8 @@ type Solution = [SWord8]
 -- | Checks that a given solution of @n@-queens is valid, i.e., no queen
 -- captures any other.
 isValid :: Int -> Solution -> SBool
-isValid n s = bAll rangeFine s &&& distinct s &&& bAll checkDiag ijs
-  where rangeFine x = x .>= 1 &&& x .<= fromIntegral n
+isValid n s = sAll rangeFine s .&& distinct s .&& sAll checkDiag ijs
+  where rangeFine x = x .>= 1 .&& x .<= fromIntegral n
         ijs = [(i, j) | i <- [1..n], j <- [i+1..n]]
         checkDiag (i, j) = diffR ./= diffC
            where qi = s !! (i-1)

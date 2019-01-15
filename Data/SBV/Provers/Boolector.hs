@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Data.SBV.Provers.Boolector
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Data.SBV.Provers.Boolector
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- The connection to the Boolector SMT solver
 -----------------------------------------------------------------------------
@@ -21,6 +21,7 @@ boolector :: SMTSolver
 boolector = SMTSolver {
            name         = Boolector
          , executable   = "boolector"
+         , preprocess   = id
          , options      = const ["--smt2", "--smt2-model", "--no-exit-codes", "--incremental"]
          , engine       = standardEngine "SBV_BOOLECTOR" "SBV_BOOLECTOR_OPTIONS"
          , capabilities = SolverCapabilities {

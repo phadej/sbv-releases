@@ -1,10 +1,10 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Documentation.SBV.Examples.Optimization.ExtField
--- Copyright   :  (c) Levent Erkok
--- License     :  BSD3
--- Maintainer  :  erkokl@gmail.com
--- Stability   :  experimental
+-- Module    : Documentation.SBV.Examples.Optimization.ExtField
+-- Author    : Levent Erkok
+-- License   : BSD3
+-- Maintainer: erkokl@gmail.com
+-- Stability : experimental
 --
 -- Demonstrates the extension field (@oo@/@epsilon@) optimization results.
 -----------------------------------------------------------------------------
@@ -39,7 +39,7 @@ problem = do x <- sInteger "x"
 
              maximize "one-x" $ 1 - x
 
-             constrain $ y .> 0 &&& z .> 5
+             constrain $ y .> 0 .&& z .> 5
              minimize "min_y" $ 2+y+z
 
              minimize "min_z" z

@@ -4,11 +4,10 @@
 ** Backend solver Yices does not support global decls.
 ** Some incremental calls, such as pop, will be limited.
 [GOOD] (set-option :produce-models true)
-[GOOD] (set-logic QF_BV)
+[GOOD] (set-logic ALL) ; external query, using all logics.
 [GOOD] ; --- uninterpreted sorts ---
+[GOOD] ; --- tuples ---
 [GOOD] ; --- literal constants ---
-[GOOD] (define-fun s_2 () Bool false)
-[GOOD] (define-fun s_1 () Bool true)
 [GOOD] (define-fun s2 () (_ BitVec 1) #b0)
 [GOOD] (define-fun s68 () (_ BitVec 32) #x00000001)
 [GOOD] ; --- skolem constants ---
@@ -58,7 +57,7 @@ CAUGHT SMT EXCEPTION
 ***
 ***    Sent      : (define-fun s35 () (_ BitVec 32) (bvmul s34 s34))
 ***    Expected  : success
-***    Received  : (error "at line 42, column 35: in bvmul: maximal polynomial degree exceeded")
+***    Received  : (error "at line 40, column 35: in bvmul: maximal polynomial degree exceeded")
 ***
 ***    Exit code : ExitSuccess
 ***    Executable: /usr/local/bin/yices-smt2
