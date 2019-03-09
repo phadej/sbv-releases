@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Documentation.SBV.Examples.Lists.BoundedMutex
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -72,7 +72,7 @@ validSequence b me pturns proc = sAnd [ L.length proc .== fromIntegral b
                                   ok   = ite (prev .== idle)                          (cur `sElem` [idle, ready])
                                        $ ite (prev .== ready .&& turn .== literal me) (cur `sElem` [critical])
                                        $ ite (prev .== critical)                      (cur `sElem` [critical, idle])
-                                       $                                              (cur `sElem` [prev])
+                                                                                      (cur `sElem` [prev])
                               in ok .&& check (i-1) turns rest cur
 
 -- | The mutex algorithm, coded implicity as an assignment to turns. Turns start at @1@, and at each stage is either

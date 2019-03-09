@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : SBVTest
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -27,23 +27,29 @@ import qualified TestSuite.Basics.ArithNoSolver
 import qualified TestSuite.Basics.ArithSolver
 import qualified TestSuite.Basics.Assert
 import qualified TestSuite.Basics.BasicTests
+import qualified TestSuite.Basics.BarrelRotate
 import qualified TestSuite.Basics.BoundedList
+import qualified TestSuite.Basics.DynSign
 import qualified TestSuite.Basics.Exceptions
 import qualified TestSuite.Basics.GenBenchmark
 import qualified TestSuite.Basics.Higher
 import qualified TestSuite.Basics.Index
 import qualified TestSuite.Basics.IteTest
 import qualified TestSuite.Basics.List
+import qualified TestSuite.Basics.ModelValidate
 import qualified TestSuite.Basics.ProofTests
 import qualified TestSuite.Basics.PseudoBoolean
 import qualified TestSuite.Basics.QRem
 import qualified TestSuite.Basics.Quantifiers
 import qualified TestSuite.Basics.Recursive
+import qualified TestSuite.Basics.Set
 import qualified TestSuite.Basics.SmallShifts
 import qualified TestSuite.Basics.SquashReals
 import qualified TestSuite.Basics.String
+import qualified TestSuite.Basics.Sum
 import qualified TestSuite.Basics.TOut
 import qualified TestSuite.Basics.Tuple
+import qualified TestSuite.Basics.UISat
 import qualified TestSuite.BitPrecise.BitTricks
 import qualified TestSuite.BitPrecise.Legato
 import qualified TestSuite.BitPrecise.MergeSort
@@ -69,9 +75,11 @@ import qualified TestSuite.Optimization.AssertWithPenalty
 import qualified TestSuite.Optimization.Basics
 import qualified TestSuite.Optimization.Combined
 import qualified TestSuite.Optimization.ExtensionField
+import qualified TestSuite.Optimization.Floats
+import qualified TestSuite.Optimization.NoOpt
 import qualified TestSuite.Optimization.Quantified
 import qualified TestSuite.Optimization.Reals
-import qualified TestSuite.Optimization.NoOpt
+import qualified TestSuite.Optimization.Tuples
 import qualified TestSuite.Overflows.Arithmetic
 import qualified TestSuite.Overflows.Casts
 import qualified TestSuite.Polynomials.Polynomials
@@ -98,7 +106,10 @@ import qualified TestSuite.Queries.Int_Z3
 import qualified TestSuite.Queries.Interpolants
 import qualified TestSuite.Queries.Lists
 import qualified TestSuite.Queries.Strings
+import qualified TestSuite.Queries.Sums
 import qualified TestSuite.Queries.Tuples
+import qualified TestSuite.Queries.UISat
+import qualified TestSuite.Queries.UISatEx
 import qualified TestSuite.Queries.Uninterpreted
 import qualified TestSuite.QuickCheck.QC
 import qualified TestSuite.Transformers.SymbolicEval
@@ -141,6 +152,8 @@ heavyTests = testGroup "SBVHeavyTests" [TestSuite.Basics.ArithSolver.tests]
 localOnlyTests :: TestTree
 localOnlyTests = testGroup "SBVLocalOnlyTests" [
                      TestSuite.Basics.Exceptions.testsLocal
+                   , TestSuite.Basics.BarrelRotate.tests      -- Requires CVC4
+                   , TestSuite.Basics.ModelValidate.testsABC  -- Requires ABC
                    , TestSuite.Queries.BasicQuery.tests
                    , TestSuite.Queries.BadOption.tests
                    , TestSuite.Queries.Int_ABC.tests
@@ -148,10 +161,8 @@ localOnlyTests = testGroup "SBVLocalOnlyTests" [
                    , TestSuite.Queries.Int_CVC4.tests
                    , TestSuite.Queries.Int_Mathsat.tests
                    , TestSuite.Queries.Int_Yices.tests
-                   -- quick-check tests take a long time, so just run them locally:
-                   , TestSuite.QuickCheck.QC.tests
-                   -- interpolant tests require MathSAT, run locally:
-                   , TestSuite.Queries.Interpolants.tests
+                   , TestSuite.Queries.Interpolants.tests     -- requires MathSat
+                   , TestSuite.QuickCheck.QC.tests            -- runs too slow, so only local
                    ]
 
 -- | Remaining tests
@@ -165,22 +176,27 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Basics.Assert.tests
                , TestSuite.Basics.BasicTests.tests
                , TestSuite.Basics.BoundedList.tests
+               , TestSuite.Basics.DynSign.tests
                , TestSuite.Basics.Exceptions.testsRemote
                , TestSuite.Basics.GenBenchmark.tests
                , TestSuite.Basics.Higher.tests
                , TestSuite.Basics.Index.tests
                , TestSuite.Basics.IteTest.tests
                , TestSuite.Basics.List.tests
+               , TestSuite.Basics.ModelValidate.tests
                , TestSuite.Basics.ProofTests.tests
                , TestSuite.Basics.PseudoBoolean.tests
                , TestSuite.Basics.QRem.tests
                , TestSuite.Basics.Quantifiers.tests
                , TestSuite.Basics.Recursive.tests
+               , TestSuite.Basics.Set.tests
                , TestSuite.Basics.SmallShifts.tests
                , TestSuite.Basics.SquashReals.tests
                , TestSuite.Basics.String.tests
+               , TestSuite.Basics.Sum.tests
                , TestSuite.Basics.TOut.tests
                , TestSuite.Basics.Tuple.tests
+               , TestSuite.Basics.UISat.tests
                , TestSuite.BitPrecise.BitTricks.tests
                , TestSuite.BitPrecise.Legato.tests
                , TestSuite.BitPrecise.MergeSort.tests
@@ -206,9 +222,11 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Optimization.Basics.tests
                , TestSuite.Optimization.Combined.tests
                , TestSuite.Optimization.ExtensionField.tests
+               , TestSuite.Optimization.Floats.tests
+               , TestSuite.Optimization.NoOpt.tests
+               , TestSuite.Optimization.Tuples.tests
                , TestSuite.Optimization.Quantified.tests
                , TestSuite.Optimization.Reals.tests
-               , TestSuite.Optimization.NoOpt.tests
                , TestSuite.Overflows.Arithmetic.tests
                , TestSuite.Overflows.Casts.tests
                , TestSuite.Polynomials.Polynomials.tests
@@ -227,7 +245,10 @@ otherTests = testGroup "SBVTests" [
                , TestSuite.Queries.Int_Z3.tests
                , TestSuite.Queries.Lists.tests
                , TestSuite.Queries.Strings.tests
+               , TestSuite.Queries.Sums.tests
                , TestSuite.Queries.Tuples.tests
+               , TestSuite.Queries.UISat.tests
+               , TestSuite.Queries.UISatEx.tests
                , TestSuite.Queries.Uninterpreted.tests
                , TestSuite.Transformers.SymbolicEval.tests
                , TestSuite.Uninterpreted.AUF.tests

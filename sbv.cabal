@@ -1,5 +1,5 @@
 Name:          sbv
-Version:       8.0
+Version:       8.1
 Category:      Formal Methods, Theorem Provers, Bit vectors, Symbolic Computation, Math, SMT
 Synopsis:      SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.
 Description:   Express properties about Haskell programs and automatically prove them using SMT
@@ -72,8 +72,11 @@ Library
   Exposed-modules : Data.SBV
                   , Data.SBV.Control
                   , Data.SBV.Dynamic
+                  , Data.SBV.Either
                   , Data.SBV.Internals
                   , Data.SBV.List
+                  , Data.SBV.Maybe
+                  , Data.SBV.Set
                   , Data.SBV.String
                   , Data.SBV.Tuple
                   , Data.SBV.Char
@@ -88,6 +91,7 @@ Library
                   , Data.SBV.Tools.Polynomial
                   , Data.SBV.Tools.Range
                   , Data.SBV.Tools.STree
+                  , Data.SBV.Tools.WeakestPreconditions
                   , Data.SBV.Trans
                   , Data.SBV.Trans.Control
                   , Documentation.SBV.Examples.BitPrecise.BitTricks
@@ -115,17 +119,26 @@ Library
                   , Documentation.SBV.Examples.Misc.Auxiliary
                   , Documentation.SBV.Examples.Misc.NoDiv0
                   , Documentation.SBV.Examples.Misc.Polynomials
+                  , Documentation.SBV.Examples.Misc.SetAlgebra
                   , Documentation.SBV.Examples.Misc.SoftConstrain
                   , Documentation.SBV.Examples.Misc.Tuple
                   , Documentation.SBV.Examples.Misc.Word4
+                  , Documentation.SBV.Examples.Optimization.Enumerate
+                  , Documentation.SBV.Examples.Optimization.ExtField
                   , Documentation.SBV.Examples.Optimization.LinearOpt
                   , Documentation.SBV.Examples.Optimization.Production
                   , Documentation.SBV.Examples.Optimization.VM
-                  , Documentation.SBV.Examples.Optimization.ExtField
                   , Documentation.SBV.Examples.ProofTools.BMC
                   , Documentation.SBV.Examples.ProofTools.Fibonacci
                   , Documentation.SBV.Examples.ProofTools.Strengthen
                   , Documentation.SBV.Examples.ProofTools.Sum
+                  , Documentation.SBV.Examples.WeakestPreconditions.Append
+                  , Documentation.SBV.Examples.WeakestPreconditions.Fib
+                  , Documentation.SBV.Examples.WeakestPreconditions.GCD
+                  , Documentation.SBV.Examples.WeakestPreconditions.IntDiv
+                  , Documentation.SBV.Examples.WeakestPreconditions.IntSqrt
+                  , Documentation.SBV.Examples.WeakestPreconditions.Length
+                  , Documentation.SBV.Examples.WeakestPreconditions.Sum
                   , Documentation.SBV.Examples.Puzzles.Birthday
                   , Documentation.SBV.Examples.Puzzles.Coins
                   , Documentation.SBV.Examples.Puzzles.Counts
@@ -153,6 +166,7 @@ Library
                   , Documentation.SBV.Examples.Uninterpreted.AUF
                   , Documentation.SBV.Examples.Uninterpreted.Deduce
                   , Documentation.SBV.Examples.Uninterpreted.Function
+                  , Documentation.SBV.Examples.Uninterpreted.Multiply
                   , Documentation.SBV.Examples.Uninterpreted.Shannon
                   , Documentation.SBV.Examples.Uninterpreted.Sort
                   , Documentation.SBV.Examples.Uninterpreted.UISortAllSat
@@ -223,24 +237,30 @@ Test-Suite SBVTest
                   , TestSuite.Basics.ArithNoSolver
                   , TestSuite.Basics.ArithSolver
                   , TestSuite.Basics.Assert
+                  , TestSuite.Basics.BarrelRotate
                   , TestSuite.Basics.BasicTests
                   , TestSuite.Basics.BoundedList
+                  , TestSuite.Basics.DynSign
                   , TestSuite.Basics.Exceptions
                   , TestSuite.Basics.GenBenchmark
                   , TestSuite.Basics.Higher
                   , TestSuite.Basics.Index
                   , TestSuite.Basics.IteTest
+                  , TestSuite.Basics.List
+                  , TestSuite.Basics.ModelValidate
                   , TestSuite.Basics.ProofTests
                   , TestSuite.Basics.PseudoBoolean
                   , TestSuite.Basics.QRem
                   , TestSuite.Basics.Quantifiers
                   , TestSuite.Basics.Recursive
+                  , TestSuite.Basics.Set
                   , TestSuite.Basics.SmallShifts
                   , TestSuite.Basics.SquashReals
                   , TestSuite.Basics.String
-                  , TestSuite.Basics.List
+                  , TestSuite.Basics.Sum
                   , TestSuite.Basics.TOut
                   , TestSuite.Basics.Tuple
+                  , TestSuite.Basics.UISat
                   , TestSuite.BitPrecise.BitTricks
                   , TestSuite.BitPrecise.Legato
                   , TestSuite.BitPrecise.MergeSort
@@ -266,9 +286,11 @@ Test-Suite SBVTest
                   , TestSuite.Optimization.Basics
                   , TestSuite.Optimization.Combined
                   , TestSuite.Optimization.ExtensionField
+                  , TestSuite.Optimization.Floats
+                  , TestSuite.Optimization.NoOpt
                   , TestSuite.Optimization.Quantified
                   , TestSuite.Optimization.Reals
-                  , TestSuite.Optimization.NoOpt
+                  , TestSuite.Optimization.Tuples
                   , TestSuite.Overflows.Arithmetic
                   , TestSuite.Overflows.Casts
                   , TestSuite.Polynomials.Polynomials
@@ -295,8 +317,11 @@ Test-Suite SBVTest
                   , TestSuite.Queries.Interpolants
                   , TestSuite.Queries.Lists
                   , TestSuite.Queries.Strings
+                  , TestSuite.Queries.Sums
                   , TestSuite.Queries.Tuples
                   , TestSuite.Queries.Uninterpreted
+                  , TestSuite.Queries.UISat
+                  , TestSuite.Queries.UISatEx
                   , TestSuite.QuickCheck.QC
                   , TestSuite.Transformers.SymbolicEval
                   , TestSuite.Uninterpreted.AUF

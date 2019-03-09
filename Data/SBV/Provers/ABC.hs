@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Provers.ABC
--- Author    : Adam Foltzer
+-- Copyright : (c) Adam Foltzer
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -33,10 +33,14 @@ abc = SMTSolver {
                               , supportsReals              = False
                               , supportsApproxReals        = False
                               , supportsIEEE754            = False
+                              , supportsSets               = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
                               , supportsCustomQueries      = False
                               , supportsGlobalDecls        = False
-                              , supportsFlattenedSequences = Nothing
+                              , supportsDataTypes          = False
+                              , supportsDTConstructorSigs  = False
+                              , supportsDTAccessorSigs     = False
+                              , supportsFlattenedModels    = Nothing
                               }
          }

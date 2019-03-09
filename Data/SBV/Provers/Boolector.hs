@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Provers.Boolector
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -31,10 +31,14 @@ boolector = SMTSolver {
                               , supportsReals              = False
                               , supportsApproxReals        = False
                               , supportsIEEE754            = False
+                              , supportsSets               = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
                               , supportsCustomQueries      = True
                               , supportsGlobalDecls        = False
-                              , supportsFlattenedSequences = Nothing
+                              , supportsDataTypes          = False
+                              , supportsDTConstructorSigs  = False
+                              , supportsDTAccessorSigs     = False
+                              , supportsFlattenedModels    = Nothing
                               }
          }

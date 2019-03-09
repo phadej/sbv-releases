@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Provers.CVC4
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -35,11 +35,15 @@ cvc4 = SMTSolver {
                               , supportsReals              = True  -- Not quite the same capability as Z3; but works more or less..
                               , supportsApproxReals        = False
                               , supportsIEEE754            = False
+                              , supportsSets               = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
                               , supportsCustomQueries      = True
                               , supportsGlobalDecls        = True
-                              , supportsFlattenedSequences = Nothing
+                              , supportsDataTypes          = True
+                              , supportsDTConstructorSigs  = True
+                              , supportsDTAccessorSigs     = False
+                              , supportsFlattenedModels    = Nothing
                               }
          }
   where -- CVC4 wants all input on one line

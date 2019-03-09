@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Provers.Yices
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -33,10 +33,14 @@ yices = SMTSolver {
                               , supportsReals              = True
                               , supportsApproxReals        = False
                               , supportsIEEE754            = False
+                              , supportsSets               = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
                               , supportsCustomQueries      = True
                               , supportsGlobalDecls        = False
-                              , supportsFlattenedSequences = Nothing
+                              , supportsDataTypes          = False
+                              , supportsDTConstructorSigs  = False
+                              , supportsDTAccessorSigs     = False
+                              , supportsFlattenedModels    = Nothing
                               }
          }

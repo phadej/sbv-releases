@@ -1,7 +1,8 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Trans
--- Author    : Brian Schroeder, Levent Erkok
+-- Copyright : (c) Brian Schroeder
+--                 Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -56,7 +57,7 @@ module Data.SBV.Trans (
   -- ** Conversions
   , sFromIntegral
   -- ** Shifts and rotates
-  , sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight
+  , sShiftLeft, sShiftRight, sRotateLeft, sBarrelRotateLeft, sRotateRight, sBarrelRotateRight, sSignedShiftArithRight
   -- ** Finite bit-vector operations
   , SFiniteBits(..)
   -- ** Splitting, joining, and extending
@@ -68,7 +69,7 @@ module Data.SBV.Trans (
   -- ** Rounding modes
   , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero, sRNE, sRNA, sRTP, sRTN, sRTZ
   -- ** Conversion to/from floats
-  , IEEEFloatConvertable(..)
+  , IEEEFloatConvertible(..)
   -- ** Bit-pattern conversions
   , sFloatAsSWord32, sWord32AsSFloat, sDoubleAsSWord64, sWord64AsSDouble, blastSFloat, blastSDouble
 

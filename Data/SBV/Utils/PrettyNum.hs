@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Utils.PrettyNum
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -9,9 +9,8 @@
 -- Number representations in hex/bin
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE ScopedTypeVariables  #-}
-{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Data.SBV.Utils.PrettyNum (
         PrettyNum(..), readBin, shex, chex, shexI, sbin, sbinI
@@ -25,7 +24,11 @@ import Data.List  (isPrefixOf)
 import Data.Maybe (fromJust, fromMaybe, listToMaybe)
 import Data.Ratio (numerator, denominator)
 import Data.Word  (Word8, Word16, Word32, Word64)
-import Numeric    (showIntAtBase, showHex, readInt)
+
+import qualified Data.Set as Set
+
+import Numeric (showIntAtBase, showHex, readInt)
+import qualified Numeric (showHFloat)
 
 import Data.Numbers.CrackNum (floatToFP, doubleToFP)
 
@@ -37,10 +40,14 @@ import Data.SBV.Utils.Lib (stringToQFS)
 
 -- | PrettyNum class captures printing of numbers in hex and binary formats; also supporting negative numbers.
 class PrettyNum a where
-  -- | Show a number in hexadecimal (starting with @0x@ and type.)
+  -- | Show a number in hexadecimal, starting with @0x@ and type.
   hexS :: a -> String
-  -- | Show a number in binary (starting with @0b@ and type.)
+  -- | Show a number in binary, starting with @0b@ and type.
   binS :: a -> String
+  -- | Show a number in hexadecimal, starting with @0x@ but no type.
+  hexP :: a -> String
+  -- | Show a number in binary, starting with @0b@ but no type.
+  binP :: a -> String
   -- | Show a number in hex, without prefix, or types.
   hex :: a -> String
   -- | Show a number in bin, without prefix, or types.
@@ -48,27 +55,110 @@ class PrettyNum a where
 
 -- Why not default methods? Because defaults need "Integral a" but Bool is not..
 instance PrettyNum Bool where
-  {hexS = show; binS = show; hex = show; bin = show}
+  hexS = show
+  binS = show
+  hexP = show
+  binP = show
+  hex  = show
+  bin  = show
+
 instance PrettyNum String where
-  {hexS = show; binS = show; hex = show; bin = show}
+  hexS = show
+  binS = show
+  hexP = show
+  binP = show
+  hex  = show
+  bin  = show
+
 instance PrettyNum Word8 where
-  {hexS = shex True True (False,8) ; binS = sbin True True (False,8) ; hex = shex False False (False,8) ; bin = sbin False False (False,8) ;}
+  hexS = shex True  True  (False, 8)
+  binS = sbin True  True  (False, 8)
+
+  hexP = shex False True  (False, 8)
+  binP = sbin False True  (False, 8)
+
+  hex  = shex False False (False, 8)
+  bin  = sbin False False (False, 8)
+
 instance PrettyNum Int8 where
-  {hexS = shex True True (True,8)  ; binS = sbin True True (True,8)  ; hex = shex False False (True,8)  ; bin = sbin False False (True,8)  ;}
+  hexS = shex True  True  (True, 8)
+  binS = sbin True  True  (True, 8)
+
+  hexP = shex False True  (True, 8)
+  binP = sbin False True  (True, 8)
+
+  hex  = shex False False (True, 8)
+  bin  = sbin False False (True, 8)
+
 instance PrettyNum Word16 where
-  {hexS = shex True True (False,16); binS = sbin True True (False,16); hex = shex False False (False,16); bin = sbin False False (False,16);}
-instance PrettyNum Int16  where
-  {hexS = shex True True (True,16);  binS = sbin True True (True,16) ; hex = shex False False (True,16);  bin = sbin False False (True,16) ;}
+  hexS = shex True  True  (False, 16)
+  binS = sbin True  True  (False, 16)
+
+  hexP = shex False True  (False, 16)
+  binP = sbin False True  (False, 16)
+
+  hex  = shex False False (False, 16)
+  bin  = sbin False False (False, 16)
+
+instance PrettyNum Int16 where
+  hexS = shex True  True  (True, 16)
+  binS = sbin True  True  (True, 16)
+
+  hexP = shex False True  (True, 16)
+  binP = sbin False True  (True, 16)
+
+  hex  = shex False False (True, 16)
+  bin  = sbin False False (True, 16)
+
 instance PrettyNum Word32 where
-  {hexS = shex True True (False,32); binS = sbin True True (False,32); hex = shex False False (False,32); bin = sbin False False (False,32);}
-instance PrettyNum Int32  where
-  {hexS = shex True True (True,32);  binS = sbin True True (True,32) ; hex = shex False False (True,32);  bin = sbin False False (True,32) ;}
+  hexS = shex True  True  (False, 32)
+  binS = sbin True  True  (False, 32)
+
+  hexP = shex False True  (False, 32)
+  binP = sbin False True  (False, 32)
+
+  hex  = shex False False (False, 32)
+  bin  = sbin False False (False, 32)
+
+instance PrettyNum Int32 where
+  hexS = shex True  True  (True, 32)
+  binS = sbin True  True  (True, 32)
+
+  hexP = shex False True  (True, 32)
+  binP = sbin False True  (True, 32)
+
+  hex  = shex False False (True, 32)
+  bin  = sbin False False (True, 32)
+
 instance PrettyNum Word64 where
-  {hexS = shex True True (False,64); binS = sbin True True (False,64); hex = shex False False (False,64); bin = sbin False False (False,64);}
-instance PrettyNum Int64  where
-  {hexS = shex True True (True,64);  binS = sbin True True (True,64) ; hex = shex False False (True,64);  bin = sbin False False (True,64) ;}
+  hexS = shex True  True  (False, 64)
+  binS = sbin True  True  (False, 64)
+
+  hexP = shex False True  (False, 64)
+  binP = sbin False True  (False, 64)
+
+  hex  = shex False False (False, 64)
+  bin  = sbin False False (False, 64)
+
+instance PrettyNum Int64 where
+  hexS = shex True  True  (True, 64)
+  binS = sbin True  True  (True, 64)
+
+  hexP = shex False True  (True, 64)
+  binP = sbin False True  (True, 64)
+
+  hex  = shex False False (True, 64)
+  bin  = sbin False False (True, 64)
+
 instance PrettyNum Integer where
-  {hexS = shexI True True; binS = sbinI True True; hex = shexI False False; bin = sbinI False False;}
+  hexS = shexI True  True
+  binS = sbinI True  True
+
+  hexP = shexI False True
+  binP = sbinI False True
+
+  hex  = shexI False False
+  bin  = sbinI False False
 
 instance PrettyNum CV where
   hexS cv | isUninterpreted cv = show cv ++ " :: " ++ show (kindOf cv)
@@ -89,8 +179,26 @@ instance PrettyNum CV where
           | not (isBounded cv) = let CInteger i = cvVal cv in sbinI True True i
           | True               = let CInteger i = cvVal cv in sbin  True True (hasSign cv, intSizeOf cv) i
 
+  hexP cv | isUninterpreted cv = show cv
+          | isBoolean       cv = hexS (cvToBool cv)
+          | isFloat         cv = let CFloat   f = cvVal cv in show f
+          | isDouble        cv = let CDouble  d = cvVal cv in show d
+          | isReal          cv = let CAlgReal r = cvVal cv in show r
+          | isString        cv = let CString  s = cvVal cv in show s
+          | not (isBounded cv) = let CInteger i = cvVal cv in shexI False True i
+          | True               = let CInteger i = cvVal cv in shex  False True (hasSign cv, intSizeOf cv) i
+
+  binP cv | isUninterpreted cv = show cv
+          | isBoolean       cv = binS (cvToBool cv)
+          | isFloat         cv = let CFloat   f = cvVal cv in show f
+          | isDouble        cv = let CDouble  d = cvVal cv in show d
+          | isReal          cv = let CAlgReal r = cvVal cv in show r
+          | isString        cv = let CString  s = cvVal cv in show s
+          | not (isBounded cv) = let CInteger i = cvVal cv in sbinI False True i
+          | True               = let CInteger i = cvVal cv in sbin  False True (hasSign cv, intSizeOf cv) i
+
   hex cv | isUninterpreted cv = show cv
-         | isBoolean       cv = hexS (cvToBool cv) ++ " :: Bool"
+         | isBoolean       cv = hexS (cvToBool cv)
          | isFloat         cv = let CFloat   f = cvVal cv in show f
          | isDouble        cv = let CDouble  d = cvVal cv in show d
          | isReal          cv = let CAlgReal r = cvVal cv in show r
@@ -99,7 +207,7 @@ instance PrettyNum CV where
          | True               = let CInteger i = cvVal cv in shex  False False (hasSign cv, intSizeOf cv) i
 
   bin cv | isUninterpreted cv = show cv
-         | isBoolean       cv = binS (cvToBool cv) ++ " :: Bool"
+         | isBoolean       cv = binS (cvToBool cv)
          | isFloat         cv = let CFloat   f = cvVal cv in show f
          | isDouble        cv = let CDouble  d = cvVal cv in show d
          | isReal          cv = let CAlgReal r = cvVal cv in show r
@@ -110,6 +218,10 @@ instance PrettyNum CV where
 instance (SymVal a, PrettyNum a) => PrettyNum (SBV a) where
   hexS s = maybe (show s) (hexS :: a -> String) $ unliteral s
   binS s = maybe (show s) (binS :: a -> String) $ unliteral s
+
+  hexP s = maybe (show s) (hexP :: a -> String) $ unliteral s
+  binP s = maybe (show s) (binP :: a -> String) $ unliteral s
+
   hex  s = maybe (show s) (hex  :: a -> String) $ unliteral s
   bin  s = maybe (show s) (bin  :: a -> String) $ unliteral s
 
@@ -223,15 +335,15 @@ showCFloat f
    | isNaN f             = "((float) NAN)"
    | isInfinite f, f < 0 = "((float) (-INFINITY))"
    | isInfinite f        = "((float) INFINITY)"
-   | True                = show f ++ "F"
+   | True                = Numeric.showHFloat f $ "F /* " ++ show f ++ "F */"
 
 -- | A version of show for doubles that generates correct C literals for nan/infinite. NB. Requires "math.h" to be included.
 showCDouble :: Double -> String
-showCDouble f
-   | isNaN f             = "((double) NAN)"
-   | isInfinite f, f < 0 = "((double) (-INFINITY))"
-   | isInfinite f        = "((double) INFINITY)"
-   | True                = show f
+showCDouble d
+   | isNaN d             = "((double) NAN)"
+   | isInfinite d, d < 0 = "((double) (-INFINITY))"
+   | isInfinite d        = "((double) INFINITY)"
+   | True                = Numeric.showHFloat d " /* " ++ show d ++ " */"
 
 -- | A version of show for floats that generates correct Haskell literals for nan/infinite
 showHFloat :: Float -> String
@@ -308,7 +420,10 @@ cvToSMTLib rm x
   | isChar x         , CChar c          <- cvVal x = smtLibHex 8 (fromIntegral (ord c))
   | isString x       , CString s        <- cvVal x = '\"' : stringToQFS s ++ "\""
   | isList x         , CList xs         <- cvVal x = smtLibSeq (kindOf x) xs
+  | isSet x          , CSet s           <- cvVal x = smtLibSet (kindOf x) s
   | isTuple x        , CTuple xs        <- cvVal x = smtLibTup (kindOf x) xs
+  | isMaybe x        , CMaybe mc        <- cvVal x = smtLibMaybe  (kindOf x) mc
+  | isEither x       , CEither ec       <- cvVal x = smtLibEither (kindOf x) ec
 
   | True = error $ "SBV.cvtCV: Impossible happened: Kind/Value disagreement on: " ++ show (kindOf x, x)
   where roundModeConvert s = fromMaybe s (listToMaybe [smtRoundingMode m | m <- [minBound .. maxBound] :: [RoundingMode], show m == s])
@@ -333,10 +448,32 @@ cvToSMTLib rm x
                                   in mkSeq (mkUnit . cvToSMTLib rm . CV ek <$> xs)
         smtLibSeq k _ = error "SBV.cvToSMTLib: Impossible case (smtLibSeq), received kind: " ++ show k
 
+        smtLibSet :: Kind -> RCSet CVal -> String
+        smtLibSet k set = case set of
+                            RegularSet    rs -> Set.foldr' (modify "true")  (start "false") rs
+                            ComplementSet rs -> Set.foldr' (modify "false") (start "true")  rs
+          where ke = case k of
+                       KSet ek -> ek
+                       _       -> error $ "SBV.cvToSMTLib: Impossible case (smtLibSet), received kind: " ++ show k
+
+                start def = "((as const " ++ smtType k ++ ") " ++ def ++ ")"
+
+                modify how e s = "(store " ++ s ++ " " ++ cvToSMTLib rm (CV ke e) ++ " " ++ how ++ ")"
+
         smtLibTup :: Kind -> [CVal] -> String
-        smtLibTup (KTuple []) _  = "SBVTuple0"
+        smtLibTup (KTuple []) _  = "mkSBVTuple0"
         smtLibTup (KTuple ks) xs = "(mkSBVTuple" ++ show (length ks) ++ " " ++ unwords (zipWith (\ek e -> cvToSMTLib rm (CV ek e)) ks xs) ++ ")"
         smtLibTup k           _  = error $ "SBV.cvToSMTLib: Impossible case (smtLibTup), received kind: " ++ show k
+
+        smtLibMaybe :: Kind -> Maybe CVal -> String
+        smtLibMaybe (KMaybe k) Nothing   = "(as nothing_SBVMaybe " ++ smtType (KMaybe k) ++ ")"
+        smtLibMaybe (KMaybe k) (Just  c) = "(just_SBVMaybe " ++ cvToSMTLib rm (CV k c) ++ ")"
+        smtLibMaybe k          _         = error $ "SBV.cvToSMTLib: Impossible case (smtLibMaybe), received kind: " ++ show k
+
+        smtLibEither :: Kind -> Either CVal CVal -> String
+        smtLibEither (KEither  k _) (Left c)  = "(left_SBVEither "  ++ cvToSMTLib rm (CV k c) ++ ")"
+        smtLibEither (KEither  _ k) (Right c) = "(right_SBVEither " ++ cvToSMTLib rm (CV k c) ++ ")"
+        smtLibEither k              _         = error $ "SBV.cvToSMTLib: Impossible case (smtLibEither), received kind: " ++ show k
 
         -- anomaly at the 2's complement min value! Have to use binary notation here
         -- as there is no positive value we can provide to make the bvneg work.. (see above)

@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Core.Floating
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -9,14 +9,20 @@
 -- Implementation of floating-point operations mapping to SMT-Lib2 floats
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE Rank2Types          #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE DefaultSignatures    #-}
+{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE Rank2Types           #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE TypeApplications     #-}
+{-# LANGUAGE TypeFamilies         #-}
+
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.SBV.Core.Floating (
-         IEEEFloating(..), IEEEFloatConvertable(..)
+         IEEEFloating(..), IEEEFloatConvertible(..)
        , sFloatAsSWord32, sDoubleAsSWord64, sWord32AsSFloat, sWord64AsSDouble
        , blastSFloat, blastSDouble
+       , sFloatAsComparableSWord32, sDoubleAsComparableSWord64
        ) where
 
 import qualified Data.Numbers.CrackNum as CN (wordToFloat, wordToDouble, floatToWord, doubleToWord)
@@ -26,10 +32,21 @@ import Data.Word           (Word8, Word16, Word32, Word64)
 
 import Data.Proxy
 
+import Data.SBV.Core.AlgReals (isExactRational)
+
 import Data.SBV.Core.Data
 import Data.SBV.Core.Model
-import Data.SBV.Core.AlgReals (isExactRational)
+import Data.SBV.Core.Symbolic (addSValOptGoal)
+
 import Data.SBV.Utils.Numeric
+
+-- For doctest use only
+--
+-- $setup
+-- >>> :set -XTypeApplications
+-- >>> :set -XRankNTypes
+-- >>> :set -XScopedTypeVariables
+-- >>> import Data.SBV.Provers.Prover (prove)
 
 -- | A class of floating-point (IEEE754) operations, some of
 -- which behave differently based on rounding modes. Note that unless
@@ -141,109 +158,196 @@ instance IEEEFloating Float
 -- | SDouble instance
 instance IEEEFloating Double
 
--- | Capture convertability from/to FloatingPoint representations
--- NB. 'fromSFloat' and 'fromSDouble' are underspecified when given
--- when given a @NaN@, @+oo@, or @-oo@ value that cannot be represented
--- in the target domain. For these inputs, we define the result to be +0, arbitrarily.
-class IEEEFloatConvertable a where
-  fromSFloat  :: SRoundingMode -> SFloat  -> SBV a
-  toSFloat    :: SRoundingMode -> SBV a   -> SFloat
+-- | Capture convertability from/to FloatingPoint representations.
+--
+-- Conversions to float: 'toSFloat' and 'toSDouble' simply return the
+-- nearest representable float from the given type based on the rounding
+-- mode provided.
+--
+-- Conversions from float: 'fromSFloat' and 'fromSDouble' functions do
+-- the reverse conversion. However some care is needed when given values
+-- that are not representable in the integral target domain. For instance,
+-- converting an 'SFloat' to an 'SInt8' is problematic. The rules are as follows:
+--
+-- If the input value is a finite point and when rounded in the given rounding mode to an
+-- integral value lies within the target bounds, then that result is returned.
+-- (This is the regular interpretation of rounding in IEEE754.)
+--
+-- Otherwise (i.e., if the integral value in the float or double domain) doesn't
+-- fit into the target type, then the result is unspecified. Note that if the input
+-- is @+oo@, @-oo@, or @NaN@, then the result is unspecified.
+--
+-- Due to the unspecified nature of conversions, SBV will never constant fold
+-- conversions from floats to integral values. That is, you will always get a
+-- symbolic value as output. (Conversions from floats to other floats will be
+-- constant folded. Conversions from integral values to floats will also be
+-- constant folded.)
+--
+-- Note that unspecified really means unspecified: In particular, SBV makes
+-- no guarantees about matching the behavior between what you might get in
+-- Haskell, via SMT-Lib, or the C-translation. If the input value is out-of-bounds
+-- as defined above, or is @NaN@ or @oo@ or @-oo@, then all bets are off. In particular
+-- C and SMTLib are decidedly undefine this case, though that doesn't mean they do the
+-- same thing! Same goes for Haskell, which seems to convert via Int64, but we do
+-- not model that behavior in SBV as it doesn't seem to be intentional nor well documented.
+--
+-- You can check for @NaN@, @oo@ and @-oo@, using the predicates 'fpIsNaN', 'fpIsInfinite',
+-- and 'fpIsPositive', 'fpIsNegative' predicates, respectively; and do the proper conversion
+-- based on your needs. (0 is a good choice, as are min/max bounds of the target type.)
+--
+-- Currently, SBV provides no predicates to check if a value would lie within range for a
+-- particular conversion task, as this depends on the rounding mode and the types involved
+-- and can be rather tricky to determine. (See <http://github.com/LeventErkok/sbv/issues/456>
+-- for a discussion of the issues involved.) In a future release, we hope to be able to
+-- provide underflow and overflow predicates for these conversions as well.
+class SymVal a => IEEEFloatConvertible a where
+  -- | Convert from an IEEE74 single precision float.
+  fromSFloat :: SRoundingMode -> SFloat -> SBV a
+  fromSFloat = genericFromFloat
+
+  -- | Convert to an IEEE-754 Single-precision float.
+  --
+  -- >>> :{
+  -- roundTrip :: forall a. (Eq a, IEEEFloatConvertible a) => SRoundingMode -> SBV a -> SBool
+  -- roundTrip m x = fromSFloat m (toSFloat m x) .== x
+  -- :}
+  --
+  -- >>> prove $ roundTrip @Int8
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Word8
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Int16
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Word16
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Int32
+  -- Falsifiable. Counter-example:
+  --   s0 = RoundNearestTiesToEven :: RoundingMode
+  --   s1 =            -2130176960 :: Int32
+  --
+  -- Note how we get a failure on `Int32`. The counter-example value is not representable exactly as a single precision float:
+  --
+  -- >>> toRational (-2130176960 :: Float)
+  -- (-2130177024) % 1
+  --
+  -- Note how the numerator is different, it is off by 64. This is hardly surprising, since floats become sparser as
+  -- the magnitude increases to be able to cover all the integer values representable.
+  toSFloat :: SRoundingMode -> SBV a -> SFloat
+
+  -- default definition if we have an integral like
+  default toSFloat :: Integral a => SRoundingMode -> SBV a -> SFloat
+  toSFloat = genericToFloat (Just . fromRational . fromIntegral)
+
+  -- | Convert from an IEEE74 double precision float.
   fromSDouble :: SRoundingMode -> SDouble -> SBV a
-  toSDouble   :: SRoundingMode -> SBV a   -> SDouble
+  fromSDouble = genericFromFloat
 
--- | A generic converter that will work for most of our instances. (But not all!)
-genericFPConverter :: forall a r. (SymVal a, HasKind r, SymVal r, Num r) => Maybe (a -> Bool) -> Maybe (SBV a -> SBool) -> (a -> r) -> SRoundingMode -> SBV a -> SBV r
-genericFPConverter mbConcreteOK mbSymbolicOK converter rm f
-  | Just w <- unliteral f, Just RoundNearestTiesToEven <- unliteral rm, check w
-  = literal $ converter w
-  | Just symCheck <- mbSymbolicOK
-  = ite (symCheck f) result (literal 0)
+  -- | Convert to an IEEE-754 Double-precision float.
+  --
+  -- >>> :{
+  -- roundTrip :: forall a. (Eq a, IEEEFloatConvertible a) => SRoundingMode -> SBV a -> SBool
+  -- roundTrip m x = fromSDouble m (toSDouble m x) .== x
+  -- :}
+  --
+  -- >>> prove $ roundTrip @Int8
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Word8
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Int16
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Word16
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Int32
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Word32
+  -- Q.E.D.
+  -- >>> prove $ roundTrip @Int64
+  -- Falsifiable. Counter-example:
+  --   s0 = RoundNearestTiesToEven :: RoundingMode
+  --   s1 =    4611686018427387902 :: Int64
+  --
+  -- Just like in the `SFloat` case, once we reach 64-bits, we no longer can exactly represent the
+  -- integer value for all possible values:
+  --
+  -- >>> toRational (4611686018427387902 ::Double)
+  -- 4611686018427387904 % 1
+  --
+  -- In this case the numerator is off by 2!
+  toSDouble :: SRoundingMode -> SBV a -> SDouble
+
+  -- default definition if we have an integral like
+  default toSDouble :: Integral a => SRoundingMode -> SBV a -> SDouble
+  toSDouble = genericToFloat (Just . fromRational . fromIntegral)
+
+-- | A generic from-float converter. Note that this function does no constant folding since
+-- it's behavior is undefined when the input float is out-of-bounds or not a point.
+genericFromFloat :: forall a r. (IEEEFloating a, IEEEFloatConvertible r)
+                 => SRoundingMode            -- Rounding mode
+                 -> SBV a                    -- Input float/double
+                 -> SBV r
+genericFromFloat rm f = SBV (SVal kTo (Right (cache r)))
+  where kFrom = kindOf f
+        kTo   = kindOf (Proxy @r)
+        r st  = do msv <- sbvToSV st rm
+                   xsv <- sbvToSV st f
+                   newExpr st kTo (SBVApp (IEEEFP (FP_Cast kFrom kTo msv)) [xsv])
+
+-- | A generic to-float converter, which will constant-fold as necessary, but only in the sRNE mode.
+genericToFloat :: forall a r. (IEEEFloatConvertible a, IEEEFloating r)
+               => (a -> Maybe r)     -- How to convert concretely, if possible
+               -> SRoundingMode      -- Rounding mode
+               -> SBV a              -- Input convertible
+               -> SBV r
+genericToFloat converter rm i
+  | Just w <- unliteral i, Just RoundNearestTiesToEven <- unliteral rm, Just result <- converter w
+  = literal result
   | True
-  = result
-  where result  = SBV (SVal kTo (Right (cache y)))
-        check w = maybe True ($ w) mbConcreteOK
-        kFrom   = kindOf f
-        kTo     = kindOf (Proxy @r)
-        y st    = do msv <- sbvToSV st rm
-                     xsv <- sbvToSV st f
-                     newExpr st kTo (SBVApp (IEEEFP (FP_Cast kFrom kTo msv)) [xsv])
+  = SBV (SVal kTo (Right (cache r)))
+  where kFrom = kindOf i
+        kTo   = kindOf (Proxy @r)
+        r st  = do msv <- sbvToSV st rm
+                   xsv <- sbvToSV st i
+                   newExpr st kTo (SBVApp (IEEEFP (FP_Cast kFrom kTo msv)) [xsv])
 
--- | Check that a given float is a point
-ptCheck :: IEEEFloating a => Maybe (SBV a -> SBool)
-ptCheck = Just fpIsPoint
+instance IEEEFloatConvertible Int8
+instance IEEEFloatConvertible Int16
+instance IEEEFloatConvertible Int32
+instance IEEEFloatConvertible Int64
+instance IEEEFloatConvertible Word8
+instance IEEEFloatConvertible Word16
+instance IEEEFloatConvertible Word32
+instance IEEEFloatConvertible Word64
+instance IEEEFloatConvertible Integer
 
-instance IEEEFloatConvertable Int8 where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
+-- For float and double, skip the conversion if the same and do the constant folding, unlike all others.
+instance IEEEFloatConvertible Float where
+  toSFloat  _ f = f
+  toSDouble     = genericToFloat (Just . fp2fp)
 
-instance IEEEFloatConvertable Int16 where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
+  fromSFloat  _  f = f
+  fromSDouble rm f
+    | Just RoundNearestTiesToEven <- unliteral rm
+    , Just fv                     <- unliteral f
+    = literal (fp2fp fv)
+    | True
+    = genericFromFloat rm f
 
-instance IEEEFloatConvertable Int32 where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
+instance IEEEFloatConvertible Double where
+  toSFloat      = genericToFloat (Just . fp2fp)
+  toSDouble _ d = d
 
-instance IEEEFloatConvertable Int64 where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-
-instance IEEEFloatConvertable Word8 where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-
-instance IEEEFloatConvertable Word16 where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-
-instance IEEEFloatConvertable Word32 where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-
-instance IEEEFloatConvertable Word64 where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-
-instance IEEEFloatConvertable Float where
-  fromSFloat _ f = f
-  toSFloat   _ f = f
-  fromSDouble    = genericFPConverter Nothing Nothing fp2fp
-  toSDouble      = genericFPConverter Nothing Nothing fp2fp
-
-instance IEEEFloatConvertable Double where
-  fromSFloat      = genericFPConverter Nothing Nothing fp2fp
-  toSFloat        = genericFPConverter Nothing Nothing fp2fp
-  fromSDouble _ d = d
-  toSDouble   _ d = d
-
-instance IEEEFloatConvertable Integer where
-  fromSFloat  = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Float -> Integer))
-  toSFloat    = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
-  fromSDouble = genericFPConverter Nothing ptCheck (fromIntegral . (fpRound0 :: Double -> Integer))
-  toSDouble   = genericFPConverter Nothing Nothing (fromRational . fromIntegral)
+  fromSDouble _  d = d
+  fromSFloat  rm d
+    | Just RoundNearestTiesToEven <- unliteral rm
+    , Just dv                     <- unliteral d
+    = literal (fp2fp dv)
+    | True
+    = genericFromFloat rm d
 
 -- For AlgReal; be careful to only process exact rationals concretely
-instance IEEEFloatConvertable AlgReal where
-  fromSFloat  = genericFPConverter Nothing                ptCheck (fromRational . fpRatio0)
-  toSFloat    = genericFPConverter (Just isExactRational) Nothing (fromRational . toRational)
-  fromSDouble = genericFPConverter Nothing                ptCheck (fromRational . fpRatio0)
-  toSDouble   = genericFPConverter (Just isExactRational) Nothing (fromRational . toRational)
+instance IEEEFloatConvertible AlgReal where
+  toSFloat  = genericToFloat (\r -> if isExactRational r then Just (fromRational (toRational r)) else Nothing)
+  toSDouble = genericToFloat (\r -> if isExactRational r then Just (fromRational (toRational r)) else Nothing)
 
 -- | Concretely evaluate one arg function, if rounding mode is RoundNearestTiesToEven and we have enough concrete data
 concEval1 :: SymVal a => Maybe (a -> a) -> Maybe SRoundingMode -> SBV a -> Maybe (SBV a)
@@ -442,5 +546,49 @@ sWord64AsSDouble dVal
   | True                     = SBV (SVal KDouble (Right (cache y)))
   where y st = do xsv <- sbvToSV st dVal
                   newExpr st KDouble (SBVApp (IEEEFP (FP_Reinterpret (kindOf dVal) KDouble)) [xsv])
+
+-- | Convert a float to a comparable 'SWord32'. The trick is to ignore the
+-- sign of -0, and if it's a negative value flip all the bits, and otherwise
+-- only flip the sign bit. This is known as the lexicographic ordering on floats
+-- and it works as long as you do not have a @NaN@.
+sFloatAsComparableSWord32 :: SFloat -> SWord32
+sFloatAsComparableSWord32 f = ite (fpIsNegativeZero f) (sFloatAsComparableSWord32 0) (fromBitsBE $ sNot sb : ite sb (map sNot rest) rest)
+  where (sb : rest) = blastBE $ sFloatAsSWord32 f
+
+-- | Convert a double to a comparable 'SWord64'. The trick is to ignore the
+-- sign of -0, and if it's a negative value flip all the bits, and otherwise
+-- only flip the sign bit. This is known as the lexicographic ordering on doubles
+-- and it works as long as you do not have a @NaN@.
+sDoubleAsComparableSWord64 :: SDouble -> SWord64
+sDoubleAsComparableSWord64 d = ite (fpIsNegativeZero d) (sDoubleAsComparableSWord64 0) (fromBitsBE $ sNot sb : ite sb (map sNot rest) rest)
+  where (sb : rest) = blastBE $ sDoubleAsSWord64 d
+
+-- | 'Float' instance for 'Metric' goes through the lexicographic ordering on 'Word32'.
+-- It implicitly makes sure that the value is not @NaN@.
+instance Metric Float where
+
+   type MetricSpace Float = Word32
+   toMetricSpace          = sFloatAsComparableSWord32
+   fromMetricSpace        = sWord32AsSFloat
+
+   msMinimize nm o = do constrain $ sNot $ fpIsNaN o
+                        addSValOptGoal $ unSBV `fmap` Minimize nm (toMetricSpace o)
+
+   msMaximize nm o = do constrain $ sNot $ fpIsNaN o
+                        addSValOptGoal $ unSBV `fmap` Maximize nm (toMetricSpace o)
+
+-- | 'Double' instance for 'Metric' goes through the lexicographic ordering on 'Word64'.
+-- It implicitly makes sure that the value is not @NaN@.
+instance Metric Double where
+
+   type MetricSpace Double = Word64
+   toMetricSpace           = sDoubleAsComparableSWord64
+   fromMetricSpace         = sWord64AsSDouble
+
+   msMinimize nm o = do constrain $ sNot $ fpIsNaN o
+                        addSValOptGoal $ unSBV `fmap` Minimize nm (toMetricSpace o)
+
+   msMaximize nm o = do constrain $ sNot $ fpIsNaN o
+                        addSValOptGoal $ unSBV `fmap` Maximize nm (toMetricSpace o)
 
 {-# ANN module ("HLint: ignore Reduce duplication" :: String) #-}

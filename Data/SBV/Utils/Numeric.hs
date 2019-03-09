@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Utils.Numeric
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -10,18 +10,6 @@
 -----------------------------------------------------------------------------
 
 module Data.SBV.Utils.Numeric where
-
--- | A variant of round; except defaulting to 0 when fed NaN or Infinity
-fpRound0 :: (RealFloat a, Integral b) => a -> b
-fpRound0 x
- | isNaN x || isInfinite x = 0
- | True                    = round x
-
--- | A variant of toRational; except defaulting to 0 when fed NaN or Infinity
-fpRatio0 :: (RealFloat a) => a -> Rational
-fpRatio0 x
- | isNaN x || isInfinite x = 0
- | True                    = toRational x
 
 -- | The SMT-Lib (in particular Z3) implementation for min/max for floats does not agree with
 -- Haskell's; and also it does not agree with what the hardware does. Sigh.. See:

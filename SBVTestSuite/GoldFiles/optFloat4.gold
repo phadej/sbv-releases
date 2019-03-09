@@ -1,0 +1,35 @@
+Optimal model:
+  min-x+y        =    3.0e-45 :: Float
+                  3  2          1         0
+                  1 09876543 21098765432109876543210
+                  S ---E8--- ----------F23----------
+          Binary: 0 00000000 00000000000000000000010
+             Hex: 0000 0002
+       Precision: SP
+            Sign: Positive
+        Exponent: -126 (Stored: 0, Bias: 126)
+       Hex-float: +0x1p-148
+           Value: +3.0e-45 (DENORMAL)
+  x              =    1.0e-45 :: Float
+                  3  2          1         0
+                  1 09876543 21098765432109876543210
+                  S ---E8--- ----------F23----------
+          Binary: 0 00000000 00000000000000000000001
+             Hex: 0000 0001
+       Precision: SP
+            Sign: Positive
+        Exponent: -126 (Stored: 0, Bias: 126)
+       Hex-float: +0x1p-149
+           Value: +1.0e-45 (DENORMAL)
+  y              =    1.0e-45 :: Float
+                  3  2          1         0
+                  1 09876543 21098765432109876543210
+                  S ---E8--- ----------F23----------
+          Binary: 0 00000000 00000000000000000000001
+             Hex: 0000 0001
+       Precision: SP
+            Sign: Positive
+        Exponent: -126 (Stored: 0, Bias: 126)
+       Hex-float: +0x1p-149
+           Value: +1.0e-45 (DENORMAL)
+  metric-min-x+y = 0x80000002 :: Word32

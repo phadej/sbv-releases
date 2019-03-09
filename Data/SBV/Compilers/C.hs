@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Compilers.C
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -191,8 +191,11 @@ specifier cfg sv = case kindOf sv of
                      KString            -> text "%s"
                      KChar              -> text "%c"
                      KList k            -> die $ "list sort: " ++ show k
+                     KSet  k            -> die $ "set sort: " ++ show k
                      KUninterpreted s _ -> die $ "uninterpreted sort: " ++ s
                      KTuple k           -> die $ "tuple sort: " ++ show k
+                     KMaybe  k          -> die $ "maybe sort: "  ++ show k
+                     KEither k1 k2      -> die $ "either sort: " ++ show (k1, k2)
   where spec :: (Bool, Int) -> Doc
         spec (False,  1) = text "%d"
         spec (False,  8) = text "%\"PRIu8\""
@@ -204,9 +207,10 @@ specifier cfg sv = case kindOf sv of
         spec (False, 64) = text "0x%016\"PRIx64\"ULL"
         spec (True,  64) = text "%\"PRId64\"LL"
         spec (s, sz)     = die $ "Format specifier at type " ++ (if s then "SInt" else "SWord") ++ show sz
+
         specF :: CgSRealType -> Doc
-        specF CgFloat      = text "%.6g"    -- float.h: __FLT_DIG__
-        specF CgDouble     = text "%.15g"   -- float.h: __DBL_DIG__
+        specF CgFloat      = text "%a"
+        specF CgDouble     = text "%a"
         specF CgLongDouble = text "%Lf"
 
 -- | Make a constant value of the given type. We don't check for out of bounds here, as it should not be needed.
@@ -372,7 +376,7 @@ genDriver cfg randVals fn inps outs mbRet = [pre, header, body, post]
               $$  text "}"
               $$  text ""
        nm = text fn
-       pairedInputs = matchRands (map abs randVals) inps
+       pairedInputs = matchRands randVals inps
        matchRands _      []                                 = []
        matchRands []     _                                  = die "Run out of driver values!"
        matchRands (r:rs) ((n, CgAtomic sv)            : cs) = ([mkRVal sv r], n, CgAtomic sv) : matchRands rs cs
@@ -427,6 +431,16 @@ genCProg cfg fn proto (Result kindInfo _tvals _ovals cgs ins preConsts tbls arrs
   = error "SBV->C: Strings are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
   | KChar `Set.member` kindInfo
   = error "SBV->C: Characters are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
+  | any isSet kindInfo
+  = error "SBV->C: Sets (SSet) are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
+  | any isList kindInfo
+  = error "SBV->C: Lists (SList) are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
+  | any isTuple kindInfo
+  = error "SBV->C: Tuples (STupleN) are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
+  | any isMaybe kindInfo
+  = error "SBV->C: Optional (SMaybe) values are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
+  | any isEither kindInfo
+  = error "SBV->C: Either (SEither) values are currently not supported by the C compiler. Please get in touch if you'd like support for this feature!"
   | isNothing (cgReal cfg) && KReal `Set.member` kindInfo
   = error $ "SBV->C: SReal values are not supported by the C compiler."
           ++ "\nUse 'cgSRealType' to specify a custom type for SReal representation."
@@ -488,7 +502,10 @@ genCProg cfg fn proto (Result kindInfo _tvals _ovals cgs ins preConsts tbls arrs
                       len (KBounded False n)   = 5 + length (show n) -- SWordN
                       len (KBounded True  n)   = 4 + length (show n) -- SIntN
                       len (KList s)            = die $ "List sort: " ++ show s
+                      len (KSet  s)            = die $ "Set sort: " ++ show s
                       len (KTuple s)           = die $ "Tuple sort: " ++ show s
+                      len (KMaybe k)           = die $ "Maybe sort: " ++ show k
+                      len (KEither k1 k2)      = die $ "Either sort: " ++ show (k1, k2)
                       len (KUninterpreted s _) = die $ "Uninterpreted sort: " ++ s
 
                       getMax 8 _      = 8  -- 8 is the max we can get with SInteger, so don't bother looking any further
@@ -583,18 +600,18 @@ handleIEEE w consts as var = cvt w
   where same f                   = (f, f)
         named fnm dnm f          = (f fnm, f dnm)
 
-        castToUnsigned f to = parens (text "!isnan" P.<> parens a <+> text "&&" <+> text "signbit" P.<> parens a) <+> text "?" <+> cvt1 <+> text ":" <+> cvt2
-          where [a]  = map snd fpArgs
-                absA = text (if f == KFloat then "fabsf" else "fabs") P.<> parens a
-                cvt1 = parens (text "-" <+> parens (parens (text (show to)) <+> absA))
-                cvt2 =                      parens (parens (text (show to)) <+> a)
+        cvt (FP_Cast from to m)     = case checkRM (m `lookup` consts) of
+                                        Nothing          -> cast $ \[a] -> parens (text (show to)) <+> rnd a
+                                        Just (Left  msg) -> die msg
+                                        Just (Right msg) -> tbd msg
+                                      where -- if we're converting from float to some integral like; first use rint/rintf to do the internal conversion and then cast.
+                                            rnd a
+                                             | (isFloat from || isDouble from) && (isBounded to || isUnbounded to)
+                                             = let f = if isFloat from then "rintf" else "rint"
+                                               in text f P.<> parens a
+                                             | True
+                                             = a
 
-        cvt (FP_Cast f to m)     = case checkRM (m `lookup` consts) of
-                                     Nothing          -> if f `elem` [KFloat, KDouble] && not (hasSign to)
-                                                         then castToUnsigned f to
-                                                         else cast $ \[a] -> parens (text (show to)) <+> a
-                                     Just (Left  msg) -> die msg
-                                     Just (Right msg) -> tbd msg
         cvt (FP_Reinterpret f t) = case (f, t) of
                                      (KBounded False 32, KFloat)  -> cast $ cpy "sizeof(SFloat)"
                                      (KBounded False 64, KDouble) -> cast $ cpy "sizeof(SDouble)"
@@ -746,7 +763,10 @@ ppExpr cfg consts (SBVApp op opArgs) lhs (typ, var)
                                                                        Nothing -> (True, True) -- won't matter, it'll be rejected later
                                                                        Just i  -> (True, canOverflow True i)
                                                KList     s        -> die $ "List sort " ++ show s
+                                               KSet      s        -> die $ "Set sort " ++ show s
                                                KTuple    s        -> die $ "Tuple sort " ++ show s
+                                               KMaybe    ek       -> die $ "Maybe sort " ++ show ek
+                                               KEither   k1 k2    -> die $ "Either sort " ++ show (k1, k2)
                                                KUninterpreted s _ -> die $ "Uninterpreted sort: " ++ s
 
         -- Div/Rem should be careful on 0, in the SBV world x `div` 0 is 0, x `rem` 0 is x

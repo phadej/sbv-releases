@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Documentation.SBV.Examples.Puzzles.Fish
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -74,8 +74,10 @@ mkSymbolicEnumeration ''Sport
 --
 -- It's not hard to modify this program to grab the values of all the assignments, i.e., the full
 -- solution to the puzzle. We leave that as an exercise to the interested reader!
+-- NB. We use the 'satTrackUFs' configuration to indicate that the uninterpreted function
+-- changes do not matter for generating different values. All we care is that the fishOwner changes!
 fishOwner :: IO ()
-fishOwner = do vs <- getModelValues "fishOwner" `fmap` allSat puzzle
+fishOwner = do vs <- getModelValues "fishOwner" `fmap` allSatWith z3{satTrackUFs = False} puzzle
                case vs of
                  [Just (v::Nationality)] -> print v
                  []                      -> error "no solution"

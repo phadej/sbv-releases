@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Core.Model
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -9,26 +9,30 @@
 -- Instance declarations for our symbolic world
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE BangPatterns          #-}
-{-# LANGUAGE DefaultSignatures     #-}
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE FlexibleInstances     #-}
-{-# LANGUAGE Rank2Types            #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE TypeApplications      #-}
-{-# LANGUAGE TypeOperators         #-}
-{-# LANGUAGE TypeSynonymInstances  #-}
+{-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE DefaultSignatures   #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE FlexibleInstances   #-}
+{-# LANGUAGE Rank2Types          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE TypeOperators       #-}
 
-{-# OPTIONS_GHC -fno-warn-orphans  #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.SBV.Core.Model (
-    Mergeable(..), Equality(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), assertWithPenalty, SIntegral, SFiniteBits(..)
-  , ite, iteLazy, sFromIntegral, sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight, (.^)
+    Mergeable(..), Equality(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), Metric(..), minimize, maximize, assertWithPenalty, SIntegral, SFiniteBits(..)
+  , ite, iteLazy, sFromIntegral, sShiftLeft, sShiftRight, sRotateLeft, sBarrelRotateLeft, sRotateRight, sBarrelRotateRight, sSignedShiftArithRight, (.^)
   , oneIf, genVar, genVar_, forall, forall_, exists, exists_
   , pbAtMost, pbAtLeast, pbExactly, pbLe, pbGe, pbEq, pbMutexed, pbStronglyMutexed
-  , sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
-  , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
-  , sInt64s, sInteger, sIntegers, sReal, sReals, sFloat, sFloats, sDouble, sDoubles, sChar, sChars, sString, sStrings, sList, sLists, sTuple, sTuples
+  , sBool, sBool_, sBools, sWord8, sWord8_, sWord8s, sWord16, sWord16_, sWord16s, sWord32, sWord32_, sWord32s
+  , sWord64, sWord64_, sWord64s, sInt8, sInt8_, sInt8s, sInt16, sInt16_, sInt16s, sInt32, sInt32_, sInt32s, sInt64, sInt64_
+  , sInt64s, sInteger, sInteger_, sIntegers, sReal, sReal_, sReals, sFloat, sFloat_, sFloats, sDouble, sDouble_, sDoubles
+  , sChar, sChar_, sChars, sString, sString_, sStrings, sList, sList_, sLists
+  , sTuple, sTuple_, sTuples
+  , sEither, sEither_, sEithers, sMaybe, sMaybe_, sMaybes
+  , sSet, sSet_, sSets
   , solve
   , slet
   , sRealToSInteger, label, observe, observeIf
@@ -57,6 +61,8 @@ import Data.Maybe  (fromMaybe, mapMaybe)
 import Data.String (IsString(..))
 import Data.Word   (Word8, Word16, Word32, Word64)
 
+import qualified Data.Set as Set
+
 import Data.Proxy
 import Data.Dynamic (fromDynamic, toDyn)
 
@@ -64,6 +70,8 @@ import Test.QuickCheck                         (Testable(..), Arbitrary(..))
 import qualified Test.QuickCheck.Test    as QC (isSuccess)
 import qualified Test.QuickCheck         as QC (quickCheckResult, counterexample)
 import qualified Test.QuickCheck.Monadic as QC (monadicIO, run, assert, pre, monitor)
+
+import qualified Data.Foldable as F (toList)
 
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Data
@@ -232,6 +240,47 @@ fromCVTup i inp@(CV (KTuple ks) (CTuple cs))
          lcs = length cs
 fromCVTup i inp = error $ "SymVal.fromCVTup: Impossible happened. Non-tuple received: " ++ show (i, inp)
 
+instance (SymVal a, SymVal b) => SymVal (Either a b) where
+  mkSymVal = genMkSymVar (kindOf (Proxy @(Either a b)))
+
+  literal s
+    | Left  a <- s = mk $ Left  (toCV a)
+    | Right b <- s = mk $ Right (toCV b)
+    where k  = kindOf (Proxy @(Either a b))
+
+          mk = SBV . SVal k . Left . CV k . CEither
+
+  fromCV (CV (KEither k1 _ ) (CEither (Left c)))  = Left  $ fromCV $ CV k1 c
+  fromCV (CV (KEither _  k2) (CEither (Right c))) = Right $ fromCV $ CV k2 c
+  fromCV bad                                   = error $ "SymVal.fromCV (Either): Malformed either received: " ++ show bad
+
+instance SymVal a => SymVal (Maybe a) where
+  mkSymVal = genMkSymVar (kindOf (Proxy @(Maybe a)))
+
+  literal s
+    | Nothing <- s = mk Nothing
+    | Just  a <- s = mk $ Just (toCV a)
+    where k = kindOf (Proxy @(Maybe a))
+
+          mk = SBV . SVal k . Left . CV k . CMaybe
+
+  fromCV (CV (KMaybe _) (CMaybe Nothing))  = Nothing
+  fromCV (CV (KMaybe k) (CMaybe (Just x))) = Just $ fromCV $ CV k x
+  fromCV bad                               = error $ "SymVal.fromCV (Maybe): Malformed sum received: " ++ show bad
+
+instance (Ord a, SymVal a) => SymVal (RCSet a) where
+  mkSymVal = genMkSymVar (kindOf (Proxy @(RCSet a)))
+
+  literal eur = SBV $ SVal k $ Left $ CV k $ CSet $ dir $ Set.map toCV s
+    where (dir, s) = case eur of
+                      RegularSet x    -> (RegularSet,    x)
+                      ComplementSet x -> (ComplementSet, x)
+          k        = kindOf (Proxy @(RCSet a))
+
+  fromCV (CV (KSet a) (CSet (RegularSet    s))) = RegularSet    $ Set.map (fromCV . CV a) s
+  fromCV (CV (KSet a) (CSet (ComplementSet s))) = ComplementSet $ Set.map (fromCV . CV a) s
+  fromCV bad                                    = error $ "SymVal.fromCV (Set): Malformed set received: " ++ show bad
+
 -- | SymVal for 0-tuple (i.e., unit)
 instance SymVal () where
   mkSymVal   = genMkSymVar (KTuple [])
@@ -295,9 +344,14 @@ instance IsString SString where
 -- necessary, as they are mere aliases for 'symbolic' and 'symbolics', but
 -- they nonetheless make programming easier.
 ------------------------------------------------------------------------------------
+
 -- | Generalization of 'Data.SBV.sBool'
 sBool :: MonadSymbolic m => String -> m SBool
 sBool = symbolic
+
+-- | Generalization of 'Data.SBV.sBool_'
+sBool_ :: MonadSymbolic m => m SBool
+sBool_ = free_
 
 -- | Generalization of 'Data.SBV.sBools'
 sBools :: MonadSymbolic m => [String] -> m [SBool]
@@ -307,6 +361,10 @@ sBools = symbolics
 sWord8 :: MonadSymbolic m => String -> m SWord8
 sWord8 = symbolic
 
+-- | Generalization of 'Data.SBV.sWord8_'
+sWord8_ :: MonadSymbolic m => m SWord8
+sWord8_ = free_
+
 -- | Generalization of 'Data.SBV.sWord8s'
 sWord8s :: MonadSymbolic m => [String] -> m [SWord8]
 sWord8s = symbolics
@@ -314,6 +372,10 @@ sWord8s = symbolics
 -- | Generalization of 'Data.SBV.sWord16'
 sWord16 :: MonadSymbolic m => String -> m SWord16
 sWord16 = symbolic
+
+-- | Generalization of 'Data.SBV.sWord16_'
+sWord16_ :: MonadSymbolic m => m SWord16
+sWord16_ = free_
 
 -- | Generalization of 'Data.SBV.sWord16s'
 sWord16s :: MonadSymbolic m => [String] -> m [SWord16]
@@ -323,6 +385,10 @@ sWord16s = symbolics
 sWord32 :: MonadSymbolic m => String -> m SWord32
 sWord32 = symbolic
 
+-- | Generalization of 'Data.SBV.sWord32_'
+sWord32_ :: MonadSymbolic m => m SWord32
+sWord32_ = free_
+
 -- | Generalization of 'Data.SBV.sWord32s'
 sWord32s :: MonadSymbolic m => [String] -> m [SWord32]
 sWord32s = symbolics
@@ -330,6 +396,10 @@ sWord32s = symbolics
 -- | Generalization of 'Data.SBV.sWord64'
 sWord64 :: MonadSymbolic m => String -> m SWord64
 sWord64 = symbolic
+
+-- | Generalization of 'Data.SBV.sWord64_'
+sWord64_ :: MonadSymbolic m => m SWord64
+sWord64_ = free_
 
 -- | Generalization of 'Data.SBV.sWord64s'
 sWord64s :: MonadSymbolic m => [String] -> m [SWord64]
@@ -339,6 +409,10 @@ sWord64s = symbolics
 sInt8 :: MonadSymbolic m => String -> m SInt8
 sInt8 = symbolic
 
+-- | Generalization of 'Data.SBV.sInt8_'
+sInt8_ :: MonadSymbolic m => m SInt8
+sInt8_ = free_
+
 -- | Generalization of 'Data.SBV.sInt8s'
 sInt8s :: MonadSymbolic m => [String] -> m [SInt8]
 sInt8s = symbolics
@@ -346,6 +420,10 @@ sInt8s = symbolics
 -- | Generalization of 'Data.SBV.sInt16'
 sInt16 :: MonadSymbolic m => String -> m SInt16
 sInt16 = symbolic
+
+-- | Generalization of 'Data.SBV.sInt16_'
+sInt16_ :: MonadSymbolic m => m SInt16
+sInt16_ = free_
 
 -- | Generalization of 'Data.SBV.sInt16s'
 sInt16s :: MonadSymbolic m => [String] -> m [SInt16]
@@ -355,6 +433,10 @@ sInt16s = symbolics
 sInt32 :: MonadSymbolic m => String -> m SInt32
 sInt32 = symbolic
 
+-- | Generalization of 'Data.SBV.sInt32_'
+sInt32_ :: MonadSymbolic m => m SInt32
+sInt32_ = free_
+
 -- | Generalization of 'Data.SBV.sInt32s'
 sInt32s :: MonadSymbolic m => [String] -> m [SInt32]
 sInt32s = symbolics
@@ -362,6 +444,10 @@ sInt32s = symbolics
 -- | Generalization of 'Data.SBV.sInt64'
 sInt64 :: MonadSymbolic m => String -> m SInt64
 sInt64 = symbolic
+
+-- | Generalization of 'Data.SBV.sInt64_'
+sInt64_ :: MonadSymbolic m => m SInt64
+sInt64_ = free_
 
 -- | Generalization of 'Data.SBV.sInt64s'
 sInt64s :: MonadSymbolic m => [String] -> m [SInt64]
@@ -371,6 +457,10 @@ sInt64s = symbolics
 sInteger:: MonadSymbolic m => String -> m SInteger
 sInteger = symbolic
 
+-- | Generalization of 'Data.SBV.sInteger_'
+sInteger_:: MonadSymbolic m => m SInteger
+sInteger_ = free_
+
 -- | Generalization of 'Data.SBV.sIntegers'
 sIntegers :: MonadSymbolic m => [String] -> m [SInteger]
 sIntegers = symbolics
@@ -378,6 +468,10 @@ sIntegers = symbolics
 -- | Generalization of 'Data.SBV.sReal'
 sReal:: MonadSymbolic m => String -> m SReal
 sReal = symbolic
+
+-- | Generalization of 'Data.SBV.sReal_'
+sReal_:: MonadSymbolic m => m SReal
+sReal_ = free_
 
 -- | Generalization of 'Data.SBV.sReals'
 sReals :: MonadSymbolic m => [String] -> m [SReal]
@@ -387,6 +481,10 @@ sReals = symbolics
 sFloat :: MonadSymbolic m => String -> m SFloat
 sFloat = symbolic
 
+-- | Generalization of 'Data.SBV.sFloat_'
+sFloat_ :: MonadSymbolic m => m SFloat
+sFloat_ = free_
+
 -- | Generalization of 'Data.SBV.sFloats'
 sFloats :: MonadSymbolic m => [String] -> m [SFloat]
 sFloats = symbolics
@@ -394,6 +492,10 @@ sFloats = symbolics
 -- | Generalization of 'Data.SBV.sDouble'
 sDouble :: MonadSymbolic m => String -> m SDouble
 sDouble = symbolic
+
+-- | Generalization of 'Data.SBV.sDouble_'
+sDouble_ :: MonadSymbolic m => m SDouble
+sDouble_ = free_
 
 -- | Generalization of 'Data.SBV.sDoubles'
 sDoubles :: MonadSymbolic m => [String] -> m [SDouble]
@@ -403,13 +505,21 @@ sDoubles = symbolics
 sChar :: MonadSymbolic m => String -> m SChar
 sChar = symbolic
 
--- | Generalization of 'Data.SBV.sString'
-sString :: MonadSymbolic m => String -> m SString
-sString = symbolic
+-- | Generalization of 'Data.SBV.sChar_'
+sChar_ :: MonadSymbolic m => m SChar
+sChar_ = free_
 
 -- | Generalization of 'Data.SBV.sChars'
 sChars :: MonadSymbolic m => [String] -> m [SChar]
 sChars = symbolics
+
+-- | Generalization of 'Data.SBV.sString'
+sString :: MonadSymbolic m => String -> m SString
+sString = symbolic
+
+-- | Generalization of 'Data.SBV.sString_'
+sString_ :: MonadSymbolic m => m SString
+sString_ = free_
 
 -- | Generalization of 'Data.SBV.sStrings'
 sStrings :: MonadSymbolic m => [String] -> m [SString]
@@ -419,6 +529,10 @@ sStrings = symbolics
 sList :: (SymVal a, MonadSymbolic m) => String -> m (SList a)
 sList = symbolic
 
+-- | Generalization of 'Data.SBV.sList_'
+sList_ :: (SymVal a, MonadSymbolic m) => m (SList a)
+sList_ = free_
+
 -- | Generalization of 'Data.SBV.sLists'
 sLists :: (SymVal a, MonadSymbolic m) => [String] -> m [SList a]
 sLists = symbolics
@@ -427,9 +541,49 @@ sLists = symbolics
 sTuple :: (SymVal tup, MonadSymbolic m) => String -> m (SBV tup)
 sTuple = symbolic
 
+-- | Generalization of 'Data.SBV.sTuple_'
+sTuple_ :: (SymVal tup, MonadSymbolic m) => m (SBV tup)
+sTuple_ = free_
+
 -- | Generalization of 'Data.SBV.sTuples'
 sTuples :: (SymVal tup, MonadSymbolic m) => [String] -> m [SBV tup]
 sTuples = symbolics
+
+-- | Generalization of 'Data.SBV.sEither'
+sEither :: (SymVal a, SymVal b, MonadSymbolic m) => String -> m (SEither a b)
+sEither = symbolic
+
+-- | Generalization of 'Data.SBV.sEither_'
+sEither_ :: (SymVal a, SymVal b, MonadSymbolic m) => m (SEither a b)
+sEither_ = free_
+
+-- | Generalization of 'Data.SBV.sEithers'
+sEithers :: (SymVal a, SymVal b, MonadSymbolic m) => [String] -> m [SEither a b]
+sEithers = symbolics
+
+-- | Generalization of 'Data.SBV.sMaybe'
+sMaybe :: (SymVal a, MonadSymbolic m) => String -> m (SMaybe a)
+sMaybe = symbolic
+
+-- | Generalization of 'Data.SBV.sMaybe_'
+sMaybe_ :: (SymVal a, MonadSymbolic m) => m (SMaybe a)
+sMaybe_ = free_
+
+-- | Generalization of 'Data.SBV.sMaybes'
+sMaybes :: (SymVal a, MonadSymbolic m) => [String] -> m [SMaybe a]
+sMaybes = symbolics
+
+-- | Generalization of 'Data.SBV.sSet'
+sSet :: (Ord a, SymVal a, MonadSymbolic m) => String -> m (SSet a)
+sSet = symbolic
+
+-- | Generalization of 'Data.SBV.sMaybe_'
+sSet_ :: (Ord a, SymVal a, MonadSymbolic m) => m (SSet a)
+sSet_ = free_
+
+-- | Generalization of 'Data.SBV.sMaybes'
+sSets :: (Ord a, SymVal a, MonadSymbolic m) => [String] -> m [SSet a]
+sSets = symbolics
 
 -- | Generalization of 'Data.SBV.solve'
 solve :: MonadSymbolic m => [SBool] -> m SBool
@@ -485,12 +639,24 @@ observe = observeIf (const True)
 
 -- | Symbolic Equality. Note that we can't use Haskell's 'Eq' class since Haskell insists on returning Bool
 -- Comparing symbolic values will necessarily return a symbolic value.
-infix 4 .==, ./=
+infix 4 .==, ./=, .===, ./==
 class EqSymbolic a where
   -- | Symbolic equality.
   (.==) :: a -> a -> SBool
   -- | Symbolic inequality.
   (./=) :: a -> a -> SBool
+  -- | Strong equality. On floats ('SFloat'/'SDouble'), strong equality is object equality; that
+  -- is @NaN == NaN@ holds, but @+0 == -0@ doesn't. On other types, (.===) is simply (.==).
+  -- Note that (.==) is the /right/ notion of equality for floats per IEEE754 specs, since by
+  -- definition @+0 == -0@ and @NaN@ equals no other value including itself. But occasionally
+  -- we want to be stronger and state @NaN@ equals @NaN@ and @+0@ and @-0@ are different from
+  -- each other. In a context where your type is concrete, simply use `Data.SBV.fpIsEqualObject`. But in
+  -- a polymorphic context, use the strong equality instead.
+  --
+  -- NB. If you do not care about or work with floats, simply use (.==) and (./=).
+  (.===) :: a -> a -> SBool
+  -- | Negation of strong equality. Equaivalent to negation of (.===) on all types.
+  (./==) :: a -> a -> SBool
 
   -- | Returns (symbolic) 'sTrue' if all the elements of the given list are different.
   distinct :: [a] -> SBool
@@ -502,7 +668,9 @@ class EqSymbolic a where
   sElem    :: a -> [a] -> SBool
   {-# MINIMAL (.==) #-}
 
-  x ./= y = sNot (x .== y)
+  x ./=  y = sNot (x .==  y)
+  x .=== y = x .== y
+  x ./== y = sNot (x .=== y)
 
   allEqual []     = sTrue
   allEqual (x:xs) = sAll (x .==) xs
@@ -559,9 +727,14 @@ the right choice obviously; as the Eq instance is bogus for SBV
 for natural reasons..
 -}
 
+-- It is tempting to put in an @Eq a@ superclass here. But doing so
+-- is complicated, as it requires all underlying types to have equality,
+-- which is at best shaky for algebraic reals and sets. So, leave it out.
 instance EqSymbolic (SBV a) where
   SBV x .== SBV y = SBV (svEqual x y)
   SBV x ./= SBV y = SBV (svNotEqual x y)
+
+  SBV x .=== SBV y = SBV (svStrongEqual x y)
 
   -- Custom version of distinct that generates better code for base types
   distinct []                                             = sTrue
@@ -595,7 +768,7 @@ instance EqSymbolic (SBV a) where
           isBool (SBV (SVal KBool _)) = True
           isBool _                    = False
 
-instance SymVal a => OrdSymbolic (SBV a) where
+instance (Ord a, SymVal a) => OrdSymbolic (SBV a) where
   SBV x .<  SBV y = SBV (svLessThan x y)
   SBV x .<= SBV y = SBV (svLessEq x y)
   SBV x .>  SBV y = SBV (svGreaterThan x y)
@@ -712,7 +885,7 @@ instance SIntegral Integer
 -- | Finite bit-length symbolic values. Essentially the same as 'SIntegral', but further leaves out 'Integer'. Loosely
 -- based on Haskell's @FiniteBits@ class, but with more methods defined and structured differently to fit into the
 -- symbolic world view. Minimal complete definition: 'sFiniteBitSize'.
-class (SymVal a, Num a, Bits a) => SFiniteBits a where
+class (Ord a, SymVal a, Num a, Bits a) => SFiniteBits a where
     -- | Bit size.
     sFiniteBitSize      :: SBV a -> Int
     -- | Least significant bit of a word, always stored at index 0.
@@ -833,7 +1006,7 @@ instance SFiniteBits Int32  where sFiniteBitSize _ = 32
 instance SFiniteBits Int64  where sFiniteBitSize _ = 64
 
 -- | Returns 1 if the boolean is 'sTrue', otherwise 0.
-oneIf :: (Num a, SymVal a) => SBool -> SBV a
+oneIf :: (Ord a, Num a, SymVal a) => SBool -> SBV a
 oneIf t = ite t 1 0
 
 -- | Lift a pseudo-boolean op, performing checks
@@ -982,7 +1155,7 @@ b .^ e
                           blasted
                           (iterate (\x -> x*x) b)
 
-instance (SymVal a, Fractional a) => Fractional (SBV a) where
+instance (Ord a, SymVal a, Fractional a) => Fractional (SBV a) where
   fromRational  = literal . fromRational
   SBV x / sy@(SBV y) | div0 = ite (sy .== 0) 0 res
                      | True = res
@@ -999,13 +1172,16 @@ instance (SymVal a, Fractional a) => Fractional (SBV a) where
                       k@KString          -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KChar            -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KList{}          -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KSet{}           -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KUninterpreted{} -> error $ "Unexpected Fractional case for: " ++ show k
                       k@KTuple{}         -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KMaybe{}         -> error $ "Unexpected Fractional case for: " ++ show k
+                      k@KEither{}        -> error $ "Unexpected Fractional case for: " ++ show k
 
 -- | Define Floating instance on SBV's; only for base types that are already floating; i.e., SFloat and SDouble
 -- Note that most of the fields are "undefined" for symbolic values, we add methods as they are supported by SMTLib.
 -- Currently, the only symbolicly available function in this class is sqrt.
-instance (SymVal a, Fractional a, Floating a) => Floating (SBV a) where
+instance (Ord a, SymVal a, Fractional a, Floating a) => Floating (SBV a) where
     pi      = literal pi
     exp     = lift1FNS "exp"     exp
     log     = lift1FNS "log"     log
@@ -1054,7 +1230,7 @@ lift2FNS nm f sv1 sv2
 -- -1 has all bits set to True for both signed and unsigned values
 -- | Using 'popCount' or 'testBit' on non-concrete values will result in an
 -- error. Use 'sPopCount' or 'sTestBit' instead.
-instance (Num a, Bits a, SymVal a) => Bits (SBV a) where
+instance (Ord a, Num a, Bits a, SymVal a) => Bits (SBV a) where
   SBV x .&. SBV y    = SBV (svAnd x y)
   SBV x .|. SBV y    = SBV (svOr x y)
   SBV x `xor` SBV y  = SBV (svXOr x y)
@@ -1138,14 +1314,34 @@ sSignedShiftArithRight x i
 -- | Generalization of 'rotateL', when the shift-amount is symbolic. Since Haskell's
 -- 'rotateL' only takes an 'Int' as the shift amount, it cannot be used when we have
 -- a symbolic amount to shift with. The first argument should be a bounded quantity.
-sRotateLeft :: (SIntegral a, SIntegral b, SDivisible (SBV b)) => SBV a -> SBV b -> SBV a
+sRotateLeft :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
 sRotateLeft = liftViaSVal svRotateLeft
+
+-- | An implementation of rotate-left, using a barrel shifter like design. Only works when both
+-- arguments are finite bitvectors, and furthermore when the second argument is unsigned.
+-- The first condition is enforced by the type, but the second is dynamically checked.
+-- We provide this implementation as an alternative to `sRotateLeft` since SMTLib logic
+-- does not support variable argument rotates (as opposed to shifts), and thus this
+-- implementation can produce better code for verification compared to `sRotateLeft`.
+--
+-- >>> prove $ \x y -> (x `sBarrelRotateLeft`  y) `sBarrelRotateRight` (y :: SWord32) .== (x :: SWord64)
+-- Q.E.D.
+sBarrelRotateLeft :: (SFiniteBits a, SFiniteBits b) => SBV a -> SBV b -> SBV a
+sBarrelRotateLeft = liftViaSVal svBarrelRotateLeft
 
 -- | Generalization of 'rotateR', when the shift-amount is symbolic. Since Haskell's
 -- 'rotateR' only takes an 'Int' as the shift amount, it cannot be used when we have
 -- a symbolic amount to shift with. The first argument should be a bounded quantity.
-sRotateRight :: (SIntegral a, SIntegral b, SDivisible (SBV b)) => SBV a -> SBV b -> SBV a
+sRotateRight :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
 sRotateRight = liftViaSVal svRotateRight
+
+-- | An implementation of rotate-right, using a barrel shifter like design. See comments
+-- for `sBarrelRotateLeft` for details.
+--
+-- >>> prove $ \x y -> (x `sBarrelRotateRight` y) `sBarrelRotateLeft`  (y :: SWord32) .== (x :: SWord64)
+-- Q.E.D.
+sBarrelRotateRight :: (SFiniteBits a, SFiniteBits b) => SBV a -> SBV b -> SBV a
+sBarrelRotateRight = liftViaSVal svBarrelRotateRight
 
 -- Enum instance. These instances are suitable for use with concrete values,
 -- and will be less useful for symbolic values around. Note that `fromEnum` requires
@@ -1328,7 +1524,7 @@ instance SDivisible SInt8 where
 
 -- | Lift 'quotRem' to symbolic words. Division by 0 is defined s.t. @x/0 = 0@; which
 -- holds even when @x@ is @0@ itself.
-liftQRem :: SymVal a => SBV a -> SBV a -> (SBV a, SBV a)
+liftQRem :: (Eq a, SymVal a) => SBV a -> SBV a -> (SBV a, SBV a)
 liftQRem x y
   | isConcreteZero x
   = (x, x)
@@ -1352,7 +1548,7 @@ liftQRem x y
 -- | Lift 'divMod' to symbolic words. Division by 0 is defined s.t. @x/0 = 0@; which
 -- holds even when @x@ is @0@ itself. Essentially, this is conversion from quotRem
 -- (truncate to 0) to divMod (truncate towards negative infinity)
-liftDMod :: (SymVal a, Num a, SDivisible (SBV a)) => SBV a -> SBV a -> (SBV a, SBV a)
+liftDMod :: (Ord a, SymVal a, Num a, SDivisible (SBV a)) => SBV a -> SBV a -> (SBV a, SBV a)
 liftDMod x y
   | isConcreteZero x
   = (x, x)
@@ -1418,7 +1614,7 @@ class Mergeable a where
    -- | Total indexing operation. @select xs default index@ is intuitively
    -- the same as @xs !! index@, except it evaluates to @default@ if @index@
    -- underflows/overflows.
-   select :: (SymVal b, Num b) => [a] -> a -> SBV b -> a
+   select :: (Ord b, SymVal b, Num b) => [a] -> a -> SBV b -> a
    -- NB. Earlier implementation of select used the binary-search trick
    -- on the index to chop down the search space. While that is a good trick
    -- in general, it doesn't work for SBV since we do not have any notion of
@@ -1463,7 +1659,7 @@ sAssert cs msg cond x
    | Just mustHold <- unliteral cond
    = if mustHold
      then x
-     else error $ show $ SafeResult ((locInfo . getCallStack) `fmap` cs, msg, Satisfiable defaultSMTCfg (SMTModel [] []))
+     else error $ show $ SafeResult ((locInfo . getCallStack) `fmap` cs, msg, Satisfiable defaultSMTCfg (SMTModel [] Nothing [] []))
    | True
    = SBV $ SVal k $ Right $ cache r
   where k     = kindOf x
@@ -1523,6 +1719,17 @@ instance Mergeable () where
    symbolicMerge _ _ _ _ = ()
    select _ _ _ = ()
 
+-- | Construct a useful error message if we hit an unmergeable case.
+cannotMerge :: String -> String -> String -> a
+cannotMerge typ why hint = error $ unlines [ ""
+                                           , "*** Data.SBV.Mergeable: Cannot merge instances of " ++ typ ++ "."
+                                           , "*** While trying to do a symbolic if-then-else with incompatible branch results."
+                                           , "***"
+                                           , "*** " ++ why
+                                           , "*** "
+                                           , "*** Hint: " ++ hint
+                                           ]
+
 -- Mergeable instances for List/Maybe/Either/Array are useful, but can
 -- throw exceptions if there is no structural matching of the results
 -- It's a question whether we should really keep them..
@@ -1531,7 +1738,9 @@ instance Mergeable () where
 instance Mergeable a => Mergeable [a] where
   symbolicMerge f t xs ys
     | lxs == lys = zipWith (symbolicMerge f t) xs ys
-    | True       = error $ "SBV.Mergeable.List: No least-upper-bound for lists of differing size " ++ show (lxs, lys)
+    | True       = cannotMerge "lists"
+                               ("Branches produce different sizes: " ++ show lxs ++ " vs " ++ show lys ++ ". Must have the same length.")
+                               "Use the 'SList' type (and Data.SBV.List routines) to model fully symbolic lists."
     where (lxs, lys) = (length xs, length ys)
 
 -- ZipList
@@ -1543,7 +1752,9 @@ instance Mergeable a => Mergeable (ZipList a) where
 instance Mergeable a => Mergeable (Maybe a) where
   symbolicMerge _ _ Nothing  Nothing  = Nothing
   symbolicMerge f t (Just a) (Just b) = Just $ symbolicMerge f t a b
-  symbolicMerge _ _ a b = error $ "SBV.Mergeable.Maybe: No least-upper-bound for " ++ show (k a, k b)
+  symbolicMerge _ _ a b = cannotMerge "'Maybe' values"
+                                      ("Branches produce different constructors: " ++ show (k a, k b))
+                                      "Instead of an option type, try using a valid bit to indicate when a result is valid."
       where k Nothing = "Nothing"
             k _       = "Just"
 
@@ -1551,7 +1762,9 @@ instance Mergeable a => Mergeable (Maybe a) where
 instance (Mergeable a, Mergeable b) => Mergeable (Either a b) where
   symbolicMerge f t (Left a)  (Left b)  = Left  $ symbolicMerge f t a b
   symbolicMerge f t (Right a) (Right b) = Right $ symbolicMerge f t a b
-  symbolicMerge _ _ a b = error $ "SBV.Mergeable.Either: No least-upper-bound for " ++ show (k a, k b)
+  symbolicMerge _ _ a b = cannotMerge "'Either' values"
+                                      ("Branches produce different constructors: " ++ show (k a, k b))
+                                      "Consider using a product type by a tag instead."
      where k (Left _)  = "Left"
            k (Right _) = "Right"
 
@@ -1559,7 +1772,9 @@ instance (Mergeable a, Mergeable b) => Mergeable (Either a b) where
 instance (Ix a, Mergeable b) => Mergeable (Array a b) where
   symbolicMerge f t a b
     | ba == bb = listArray ba (zipWith (symbolicMerge f t) (elems a) (elems b))
-    | True     = error $ "SBV.Mergeable.Array: No least-upper-bound for rangeSizes" ++ show (k ba, k bb)
+    | True     = cannotMerge "'Array' values"
+                             ("Branches produce different ranges: " ++ show (k ba, k bb))
+                             "Consider using SBV's native arrays 'SArray' and 'SFunArray' instead."
     where [ba, bb] = map bounds [a, b]
           k = rangeSize
 
@@ -1575,44 +1790,99 @@ instance Mergeable b => Mergeable (a -> b) where
 
 -- 2-Tuple
 instance (Mergeable a, Mergeable b) => Mergeable (a, b) where
-  symbolicMerge f t (i0, i1) (j0, j1) = (i i0 j0, i i1 j1)
-    where i a b = symbolicMerge f t a b
-  select xs (err1, err2) ind = (select as err1 ind, select bs err2 ind)
+  symbolicMerge f t (i0, i1) (j0, j1) = ( symbolicMerge f t i0 j0
+                                        , symbolicMerge f t i1 j1
+                                        )
+
+  select xs (err1, err2) ind = ( select as err1 ind
+                               , select bs err2 ind
+                               )
     where (as, bs) = unzip xs
 
 -- 3-Tuple
 instance (Mergeable a, Mergeable b, Mergeable c) => Mergeable (a, b, c) where
-  symbolicMerge f t (i0, i1, i2) (j0, j1, j2) = (i i0 j0, i i1 j1, i i2 j2)
-    where i a b = symbolicMerge f t a b
-  select xs (err1, err2, err3) ind = (select as err1 ind, select bs err2 ind, select cs err3 ind)
+  symbolicMerge f t (i0, i1, i2) (j0, j1, j2) = ( symbolicMerge f t i0 j0
+                                                , symbolicMerge f t i1 j1
+                                                , symbolicMerge f t i2 j2
+                                                )
+
+  select xs (err1, err2, err3) ind = ( select as err1 ind
+                                     , select bs err2 ind
+                                     , select cs err3 ind
+                                     )
+
     where (as, bs, cs) = unzip3 xs
 
 -- 4-Tuple
 instance (Mergeable a, Mergeable b, Mergeable c, Mergeable d) => Mergeable (a, b, c, d) where
-  symbolicMerge f t (i0, i1, i2, i3) (j0, j1, j2, j3) = (i i0 j0, i i1 j1, i i2 j2, i i3 j3)
-    where i a b = symbolicMerge f t a b
-  select xs (err1, err2, err3, err4) ind = (select as err1 ind, select bs err2 ind, select cs err3 ind, select ds err4 ind)
+  symbolicMerge f t (i0, i1, i2, i3) (j0, j1, j2, j3) = ( symbolicMerge f t i0 j0
+                                                        , symbolicMerge f t i1 j1
+                                                        , symbolicMerge f t i2 j2
+                                                        , symbolicMerge f t i3 j3
+                                                        )
+
+  select xs (err1, err2, err3, err4) ind = ( select as err1 ind
+                                           , select bs err2 ind
+                                           , select cs err3 ind
+                                           , select ds err4 ind
+                                           )
     where (as, bs, cs, ds) = unzip4 xs
 
 -- 5-Tuple
 instance (Mergeable a, Mergeable b, Mergeable c, Mergeable d, Mergeable e) => Mergeable (a, b, c, d, e) where
-  symbolicMerge f t (i0, i1, i2, i3, i4) (j0, j1, j2, j3, j4) = (i i0 j0, i i1 j1, i i2 j2, i i3 j3, i i4 j4)
-    where i a b = symbolicMerge f t a b
-  select xs (err1, err2, err3, err4, err5) ind = (select as err1 ind, select bs err2 ind, select cs err3 ind, select ds err4 ind, select es err5 ind)
+  symbolicMerge f t (i0, i1, i2, i3, i4) (j0, j1, j2, j3, j4) = ( symbolicMerge f t i0 j0
+                                                                , symbolicMerge f t i1 j1
+                                                                , symbolicMerge f t i2 j2
+                                                                , symbolicMerge f t i3 j3
+                                                                , symbolicMerge f t i4 j4
+                                                                )
+
+  select xs (err1, err2, err3, err4, err5) ind = ( select as err1 ind
+                                                 , select bs err2 ind
+                                                 , select cs err3 ind
+                                                 , select ds err4 ind
+                                                 , select es err5 ind
+                                                 )
     where (as, bs, cs, ds, es) = unzip5 xs
 
 -- 6-Tuple
 instance (Mergeable a, Mergeable b, Mergeable c, Mergeable d, Mergeable e, Mergeable f) => Mergeable (a, b, c, d, e, f) where
-  symbolicMerge f t (i0, i1, i2, i3, i4, i5) (j0, j1, j2, j3, j4, j5) = (i i0 j0, i i1 j1, i i2 j2, i i3 j3, i i4 j4, i i5 j5)
-    where i a b = symbolicMerge f t a b
-  select xs (err1, err2, err3, err4, err5, err6) ind = (select as err1 ind, select bs err2 ind, select cs err3 ind, select ds err4 ind, select es err5 ind, select fs err6 ind)
+  symbolicMerge f t (i0, i1, i2, i3, i4, i5) (j0, j1, j2, j3, j4, j5) = ( symbolicMerge f t i0 j0
+                                                                        , symbolicMerge f t i1 j1
+                                                                        , symbolicMerge f t i2 j2
+                                                                        , symbolicMerge f t i3 j3
+                                                                        , symbolicMerge f t i4 j4
+                                                                        , symbolicMerge f t i5 j5
+                                                                        )
+
+  select xs (err1, err2, err3, err4, err5, err6) ind = ( select as err1 ind
+                                                       , select bs err2 ind
+                                                       , select cs err3 ind
+                                                       , select ds err4 ind
+                                                       , select es err5 ind
+                                                       , select fs err6 ind
+                                                       )
     where (as, bs, cs, ds, es, fs) = unzip6 xs
 
 -- 7-Tuple
 instance (Mergeable a, Mergeable b, Mergeable c, Mergeable d, Mergeable e, Mergeable f, Mergeable g) => Mergeable (a, b, c, d, e, f, g) where
-  symbolicMerge f t (i0, i1, i2, i3, i4, i5, i6) (j0, j1, j2, j3, j4, j5, j6) = (i i0 j0, i i1 j1, i i2 j2, i i3 j3, i i4 j4, i i5 j5, i i6 j6)
-    where i a b = symbolicMerge f t a b
-  select xs (err1, err2, err3, err4, err5, err6, err7) ind = (select as err1 ind, select bs err2 ind, select cs err3 ind, select ds err4 ind, select es err5 ind, select fs err6 ind, select gs err7 ind)
+  symbolicMerge f t (i0, i1, i2, i3, i4, i5, i6) (j0, j1, j2, j3, j4, j5, j6) = ( symbolicMerge f t i0 j0
+                                                                                , symbolicMerge f t i1 j1
+                                                                                , symbolicMerge f t i2 j2
+                                                                                , symbolicMerge f t i3 j3
+                                                                                , symbolicMerge f t i4 j4
+                                                                                , symbolicMerge f t i5 j5
+                                                                                , symbolicMerge f t i6 j6
+                                                                                )
+
+  select xs (err1, err2, err3, err4, err5, err6, err7) ind = ( select as err1 ind
+                                                             , select bs err2 ind
+                                                             , select cs err3 ind
+                                                             , select ds err4 ind
+                                                             , select es err5 ind
+                                                             , select fs err6 ind
+                                                             , select gs err7 ind
+                                                             )
     where (as, bs, cs, ds, es, fs, gs) = unzip7 xs
 
 -- Arbitrary product types, using GHC.Generics
@@ -1919,6 +2189,7 @@ instance MonadIO m => SolverContext (SymbolicT m) where
    softConstrain               (SBV c) = imposeConstraint True  []               c
    namedConstraint        nm   (SBV c) = imposeConstraint False [(":named", nm)] c
    constrainWithAttribute atts (SBV c) = imposeConstraint False atts             c
+   contextState                        = symbolicEnv
 
    setOption o = addNewSMTOption  o
 
@@ -1926,32 +2197,88 @@ instance MonadIO m => SolverContext (SymbolicT m) where
 assertWithPenalty :: MonadSymbolic m => String -> SBool -> Penalty -> m ()
 assertWithPenalty nm o p = addSValOptGoal $ unSBV `fmap` AssertWithPenalty nm o p
 
--- | Class of metrics we can optimize for. Currently,
+-- | Class of metrics we can optimize for. Currently, booleans,
 -- bounded signed/unsigned bit-vectors, unbounded integers,
--- and algebraic reals can be optimized. (But not, say, SFloat, SDouble, or SBool.)
--- Minimal complete definition: minimize/maximize.
+-- algebraic reals and floats can be optimized. You can add
+-- your instances, but bewared that the 'MetricSpace' should
+-- map your type to something the backend solver understands, which
+-- are limited to unsigned bit-vectors, reals, and unbounded integers
+-- for z3.
 --
 -- A good reference on these features is given in the following paper:
 -- <http://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/nbjorner-scss2014.pdf>.
+--
+-- Minimal completion: None. However, if @MetricSpace@ is not identical to the type, you want
+-- to define 'toMetricSpace' and possbly 'minimize'/'maximize' to add extra constraints as necessary.
 class Metric a where
-  -- | Generalization of 'Data.SBV.minimize'
-  minimize :: MonadSymbolic m => String -> a -> m ()
+  -- | The metric space we optimize the goal over. Usually the same as the type itself, but not always!
+  -- For instance, signed bit-vectors are optimized over their unsigned counterparts, floats are
+  -- optimized over their 'Word32' comparable counterparts, etc.
+  type MetricSpace a :: *
+  type MetricSpace a = a
 
-  -- | Generalization of 'Data.SBV.maximize'
-  maximize :: MonadSymbolic m => String -> a -> m ()
+  -- | Compute the metric value to optimize.
+  toMetricSpace   :: SBV a -> SBV (MetricSpace a)
+  -- | Compute the value itself from the metric corresponding to it.
+  fromMetricSpace :: SBV (MetricSpace a) -> SBV a
 
-  {-# MINIMAL minimize, maximize #-}
+  -- | Minimizing a metric space
+  msMinimize :: (MonadSymbolic m, SolverContext m) => String -> SBV a -> m ()
+  msMinimize nm o = addSValOptGoal $ unSBV `fmap` Minimize nm (toMetricSpace o)
 
-instance Metric SWord8   where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SWord16  where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SWord32  where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SWord64  where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SInt8    where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SInt16   where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SInt32   where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SInt64   where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SInteger where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
-instance Metric SReal    where minimize nm o = addSValOptGoal (unSBV `fmap` Minimize nm o); maximize nm o = addSValOptGoal (unSBV `fmap` Maximize nm o)
+  -- | Maximizing a metric space
+  msMaximize :: (MonadSymbolic m, SolverContext m) => String -> SBV a -> m ()
+  msMaximize nm o = addSValOptGoal $ unSBV `fmap` Maximize nm (toMetricSpace o)
+
+  -- if MetricSpace is the same, we can give a default definition
+  default toMetricSpace :: (a ~ MetricSpace a) => SBV a -> SBV (MetricSpace a)
+  toMetricSpace = id
+
+  default fromMetricSpace :: (a ~ MetricSpace a) => SBV (MetricSpace a) -> SBV a
+  fromMetricSpace = id
+
+-- Booleans assume True is greater than False
+instance Metric Bool where
+  type MetricSpace Bool = Word8
+  toMetricSpace t       = ite t 1 0
+  fromMetricSpace w     = w ./= 0
+
+-- | Generalization of 'Data.SBV.minimize'
+minimize :: (Metric a, MonadSymbolic m, SolverContext m) => String -> SBV a -> m ()
+minimize = msMinimize
+
+-- | Generalization of 'Data.SBV.maximize'
+maximize :: (Metric a, MonadSymbolic m, SolverContext m) => String -> SBV a -> m ()
+maximize = msMaximize
+
+-- Unsigned types, integers, and reals directly optimize
+instance Metric Word8
+instance Metric Word16
+instance Metric Word32
+instance Metric Word64
+instance Metric Integer
+instance Metric AlgReal
+
+-- To optimize signed bounded values, we have to adjust to the range
+instance Metric Int8 where
+  type MetricSpace Int8 = Word8
+  toMetricSpace    x    = sFromIntegral x + 128  -- 2^7
+  fromMetricSpace  x    = sFromIntegral x - 128
+
+instance Metric Int16 where
+  type MetricSpace Int16 = Word16
+  toMetricSpace    x     = sFromIntegral x + 32768  -- 2^15
+  fromMetricSpace  x     = sFromIntegral x - 32768
+
+instance Metric Int32 where
+  type MetricSpace Int32 = Word32
+  toMetricSpace    x     = sFromIntegral x + 2147483648 -- 2^31
+  fromMetricSpace  x     = sFromIntegral x - 2147483648
+
+instance Metric Int64 where
+  type MetricSpace Int64 = Word64
+  toMetricSpace    x     = sFromIntegral x + 9223372036854775808  -- 2^63
+  fromMetricSpace  x     = sFromIntegral x - 9223372036854775808
 
 -- Quickcheck interface on symbolic-booleans..
 instance Testable SBool where
@@ -1963,10 +2290,10 @@ instance Testable (Symbolic SBool) where
                                      QC.pre cond
                                      unless (r || null modelVals) $ QC.monitor (QC.counterexample (complain modelVals))
                                      QC.assert r
-     where test = do (r, Result{resTraces=tvals, resObservables=ovals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic Concrete prop
+     where test = do (r, Result{resTraces=tvals, resObservables=ovals, resConsts=cs, resConstraints=cstrs, resUIConsts=unints}) <- runSymbolic (Concrete Nothing) prop
 
                      let cval = fromMaybe (error "Cannot quick-check in the presence of uninterpeted constants!") . (`lookup` cs)
-                         cond = and [cvToBool (cval v) | (False, _, v) <- cstrs] -- Only pick-up "hard" constraints, as indicated by False in the fist component
+                         cond = and [cvToBool (cval v) | (False, _, v) <- F.toList cstrs] -- Only pick-up "hard" constraints, as indicated by False in the fist component
 
                          getObservable (nm, f, v) = case v `lookup` cs of
                                                       Just cv -> if f cv then Just (nm, cv) else Nothing
@@ -1978,7 +2305,7 @@ instance Testable (Symbolic SBool) where
                                Just b  -> return (cond, b, tvals ++ mapMaybe getObservable ovals)
                        us -> noQC us
 
-           complain qcInfo = showModel defaultSMTCfg (SMTModel [] qcInfo)
+           complain qcInfo = showModel defaultSMTCfg (SMTModel [] Nothing qcInfo [])
 
            noQC us         = error $ "Cannot quick-check in the presence of uninterpreted constants: " ++ intercalate ", " us
 

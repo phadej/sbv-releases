@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.SMT.SMT
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -21,7 +21,7 @@ module Data.SBV.SMT.SMT (
        , SatModel(..), genParse
        , extractModels, getModelValues
        , getModelDictionaries, getModelUninterpretedValues
-       , displayModels, showModel
+       , displayModels, showModel, shCV, showModelDictionary
 
        -- * Standard prover engine
        , standardEngine
@@ -43,7 +43,7 @@ import Control.Monad      (zipWithM)
 import Data.Char          (isSpace)
 import Data.Maybe         (fromMaybe, isJust)
 import Data.Int           (Int8, Int16, Int32, Int64)
-import Data.List          (intercalate, isPrefixOf)
+import Data.List          (intercalate, isPrefixOf, transpose)
 import Data.Word          (Word8, Word16, Word32, Word64)
 
 import Data.IORef (readIORef, writeIORef)
@@ -61,6 +61,8 @@ import qualified Data.Map.Strict as M
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Data
 import Data.SBV.Core.Symbolic (SMTEngine, State(..))
+import Data.SBV.Core.Concrete (showCV)
+import Data.SBV.Core.Kind     (showBaseKind)
 
 import Data.SBV.SMT.Utils     (showTimeoutValue, alignPlain, debug, mergeSExpr, SBVException(..))
 
@@ -73,11 +75,11 @@ import qualified System.Timeout as Timeout (timeout)
 
 -- | Extract the final configuration from a result
 resultConfig :: SMTResult -> SMTConfig
-resultConfig (Unsatisfiable c _) = c
-resultConfig (Satisfiable   c _) = c
-resultConfig (SatExtField   c _) = c
-resultConfig (Unknown       c _) = c
-resultConfig (ProofError    c _) = c
+resultConfig (Unsatisfiable c _  ) = c
+resultConfig (Satisfiable   c _  ) = c
+resultConfig (SatExtField   c _  ) = c
+resultConfig (Unknown       c _  ) = c
+resultConfig (ProofError    c _ _) = c
 
 -- | A 'Data.SBV.prove' call results in a 'ThmResult'
 newtype ThmResult = ThmResult SMTResult
@@ -90,8 +92,9 @@ newtype SatResult = SatResult SMTResult
 
 -- | An 'Data.SBV.allSat' call results in a 'AllSatResult'. The first boolean says whether we
 -- hit the max-model limit as we searched. The second boolean says whether
--- there were prefix-existentials.
-newtype AllSatResult = AllSatResult (Bool, Bool, [SMTResult])
+-- there were prefix-existentials. The third boolean says whether we stopped because
+-- the solver returned 'Unknown'.
+newtype AllSatResult = AllSatResult (Bool, Bool, Bool, [SMTResult])
 
 -- | A 'Data.SBV.safe' call results in a 'SafeResult'
 newtype SafeResult   = SafeResult   (Maybe String, String, SMTResult)
@@ -126,17 +129,22 @@ instance Show SafeResult where
 -- The Show instance of AllSatResults. Note that we have to be careful in being lazy enough
 -- as the typical use case is to pull results out as they become available.
 instance Show AllSatResult where
-  show (AllSatResult (l, e, xs)) = go (0::Int) xs
-    where uniqueWarn | e    = " (Unique up to prefix existentials.)"
-                     | True = ""
+  show (AllSatResult (l, e, u, xs)) = go (0::Int) xs
+    where warnings = case (e, u) of
+                       (False, False) -> ""
+                       (False, True)  -> " (Search stopped since solver has returned unknown.)"
+                       (True,  False) -> " (Unique up to prefix existentials.)"
+                       (True,  True)  -> " (Search stopped becase solver has returned unknown, only prefix existentials were considered.)"
+
           go c (s:ss) = let c'      = c+1
                             (ok, o) = sh c' s
                         in c' `seq` if ok then o ++ "\n" ++ go c' ss else o
           go c []     = case (l, c) of
-                          (True,  _) -> "Search stopped since model count request was reached." ++ uniqueWarn
+                          (True,  _) -> "Search stopped since model count request was reached." ++ warnings
                           (False, 0) -> "No solutions found."
-                          (False, 1) -> "This is the only solution." ++ uniqueWarn
-                          (False, _) -> "Found " ++ show c ++ " different solutions." ++ uniqueWarn
+                          (False, 1) -> "This is the only solution." ++ warnings
+                          (False, _) -> "Found " ++ show c ++ " different solutions." ++ warnings
+
           sh i c = (ok, showSMTResult "Unsatisfiable"
                                       "Unknown"
                                       ("Solution #" ++ show i ++ ":\nSatisfiable") ("Solution #" ++ show i ++ ":\n")
@@ -153,7 +161,7 @@ instance Show OptimizeResult where
 
                IndependentResult   rs  -> multi "objectives" (map (uncurry shI) rs)
 
-               ParetoResult (False, [r]) -> sh (\s -> "Unique pareto front: " ++ s) r
+               ParetoResult (False, [r]) -> sh ("Unique pareto front: " ++) r
                ParetoResult (False, rs)  -> multi "pareto optimal values" (zipWith shP [(1::Int)..] rs)
                ParetoResult (True,  rs)  ->    multi "pareto optimal values" (zipWith shP [(1::Int)..] rs)
                                            ++ "\n*** Note: Pareto-front extraction was terminated as requested by the user."
@@ -349,44 +357,53 @@ class Modelable a where
   getModelObjectiveValue :: String -> a -> Maybe GeneralizedCV
   getModelObjectiveValue v r = v `M.lookup` getModelObjectives r
 
+  -- | Extract model uninterpreted-functions
+  getModelUIFuns :: a -> M.Map String (SBVType, ([([CV], CV)], CV))
+
+  -- | Extract the value of an uninterpreted-function as an association list
+  getModelUIFunValue :: String -> a -> Maybe (SBVType, ([([CV], CV)], CV))
+  getModelUIFunValue v r = v `M.lookup` getModelUIFuns r
+
 -- | Return all the models from an 'Data.SBV.allSat' call, similar to 'extractModel' but
 -- is suitable for the case of multiple results.
 extractModels :: SatModel a => AllSatResult -> [a]
-extractModels (AllSatResult (_, _, xs)) = [ms | Right (_, ms) <- map getModelAssignment xs]
+extractModels (AllSatResult (_, _, _, xs)) = [ms | Right (_, ms) <- map getModelAssignment xs]
 
 -- | Get dictionaries from an all-sat call. Similar to `getModelDictionary`.
 getModelDictionaries :: AllSatResult -> [M.Map String CV]
-getModelDictionaries (AllSatResult (_, _, xs)) = map getModelDictionary xs
+getModelDictionaries (AllSatResult (_, _, _, xs)) = map getModelDictionary xs
 
 -- | Extract value of a variable from an all-sat call. Similar to `getModelValue`.
 getModelValues :: SymVal b => String -> AllSatResult -> [Maybe b]
-getModelValues s (AllSatResult (_, _, xs)) =  map (s `getModelValue`) xs
+getModelValues s (AllSatResult (_, _, _, xs)) =  map (s `getModelValue`) xs
 
 -- | Extract value of an uninterpreted variable from an all-sat call. Similar to `getModelUninterpretedValue`.
 getModelUninterpretedValues :: String -> AllSatResult -> [Maybe String]
-getModelUninterpretedValues s (AllSatResult (_, _, xs)) =  map (s `getModelUninterpretedValue`) xs
+getModelUninterpretedValues s (AllSatResult (_, _, _, xs)) =  map (s `getModelUninterpretedValue`) xs
 
 -- | 'ThmResult' as a generic model provider
 instance Modelable ThmResult where
   getModelAssignment (ThmResult r) = getModelAssignment r
-  modelExists        (ThmResult r) = modelExists r
+  modelExists        (ThmResult r) = modelExists        r
   getModelDictionary (ThmResult r) = getModelDictionary r
   getModelObjectives (ThmResult r) = getModelObjectives r
+  getModelUIFuns     (ThmResult r) = getModelUIFuns     r
 
 -- | 'SatResult' as a generic model provider
 instance Modelable SatResult where
   getModelAssignment (SatResult r) = getModelAssignment r
-  modelExists        (SatResult r) = modelExists r
+  modelExists        (SatResult r) = modelExists        r
   getModelDictionary (SatResult r) = getModelDictionary r
   getModelObjectives (SatResult r) = getModelObjectives r
+  getModelUIFuns     (SatResult r) = getModelUIFuns     r
 
 -- | 'SMTResult' as a generic model provider
 instance Modelable SMTResult where
-  getModelAssignment (Unsatisfiable _ _) = Left "SBV.getModelAssignment: Unsatisfiable result"
-  getModelAssignment (Satisfiable _ m)   = Right (False, parseModelOut m)
-  getModelAssignment (SatExtField _ _)   = Left "SBV.getModelAssignment: The model is in an extension field"
-  getModelAssignment (Unknown _ m)       = Left $ "SBV.getModelAssignment: Solver state is unknown: " ++ show m
-  getModelAssignment (ProofError _ s)    = error $ unlines $ "Backend solver complains: " : s
+  getModelAssignment (Unsatisfiable _ _  ) = Left "SBV.getModelAssignment: Unsatisfiable result"
+  getModelAssignment (Satisfiable   _ m  ) = Right (False, parseModelOut m)
+  getModelAssignment (SatExtField   _ _  ) = Left "SBV.getModelAssignment: The model is in an extension field"
+  getModelAssignment (Unknown       _ m  ) = Left $ "SBV.getModelAssignment: Solver state is unknown: " ++ show m
+  getModelAssignment (ProofError    _ s _) = error $ unlines $ "SBV.getModelAssignment: Failed to produce a model: " : s
 
   modelExists Satisfiable{}   = True
   modelExists Unknown{}       = False -- don't risk it
@@ -404,6 +421,12 @@ instance Modelable SMTResult where
   getModelObjectives Unknown{}         = M.empty
   getModelObjectives ProofError{}      = M.empty
 
+  getModelUIFuns Unsatisfiable{}   = M.empty
+  getModelUIFuns (Satisfiable _ m) = M.fromList (modelUIFuns m)
+  getModelUIFuns (SatExtField _ m) = M.fromList (modelUIFuns m)
+  getModelUIFuns Unknown{}         = M.empty
+  getModelUIFuns ProofError{}      = M.empty
+
 -- | Extract a model out, will throw error if parsing is unsuccessful
 parseModelOut :: SatModel a => SMTModel -> a
 parseModelOut m = case parseCVs [c | (_, c) <- modelAssocs m] of
@@ -416,7 +439,7 @@ parseModelOut m = case parseCVs [c | (_, c) <- modelAssocs m] of
 -- 'Int' argument to @disp@ 'is the current model number. The second argument is a tuple, where the first
 -- element indicates whether the model is alleged (i.e., if the solver is not sure, returing Unknown)
 displayModels :: SatModel a => (Int -> (Bool, a) -> IO ()) -> AllSatResult -> IO Int
-displayModels disp (AllSatResult (_, _, ms)) = do
+displayModels disp (AllSatResult (_, _, _, ms)) = do
     inds <- zipWithM display [a | Right a <- map (getModelAssignment . SatResult) ms] [(1::Int)..]
     return $ last (0:inds)
   where display r i = disp i r >> return i
@@ -424,13 +447,20 @@ displayModels disp (AllSatResult (_, _, ms)) = do
 -- | Show an SMTResult; generic version
 showSMTResult :: String -> String -> String -> String -> String -> SMTResult -> String
 showSMTResult unsatMsg unkMsg satMsg satMsgModel satExtMsg result = case result of
-  Unsatisfiable _ uc            -> unsatMsg ++ showUnsatCore uc
-  Satisfiable _ (SMTModel _ []) -> satMsg
-  Satisfiable _ m               -> satMsgModel ++ showModel cfg m
-  SatExtField _ (SMTModel b _)  -> satExtMsg   ++ showModelDictionary cfg b
-  Unknown     _ r               -> unkMsg ++ ".\n" ++ "  Reason: " `alignPlain` show r
-  ProofError  _ []              -> "*** An error occurred. No additional information available. Try running in verbose mode"
-  ProofError  _ ls              -> "*** An error occurred.\n" ++ intercalate "\n" (map ("***  " ++) ls)
+  Unsatisfiable _ uc                 -> unsatMsg ++ showUnsatCore uc
+  Satisfiable _ (SMTModel _ _ [] []) -> satMsg
+  Satisfiable _ m                    -> satMsgModel ++ showModel cfg m
+  SatExtField _ (SMTModel b _ _ _)   -> satExtMsg   ++ showModelDictionary True False cfg b
+  Unknown     _ r                    -> unkMsg ++ ".\n" ++ "  Reason: " `alignPlain` show r
+  ProofError  _ [] Nothing           -> "*** An error occurred. No additional information available. Try running in verbose mode."
+  ProofError  _ ls Nothing           -> "*** An error occurred.\n" ++ intercalate "\n" (map ("***  " ++) ls)
+  ProofError  _ ls (Just r)          -> intercalate "\n" $  [ "*** " ++ l | l <- ls]
+                                                         ++ [ "***"
+                                                            , "*** Alleged model:"
+                                                            , "***"
+                                                            ]
+                                                         ++ ["*** "  ++ l | l <- lines (showSMTResult unsatMsg unkMsg satMsg satMsgModel satExtMsg r)]
+
  where cfg = resultConfig result
        showUnsatCore Nothing   = ""
        showUnsatCore (Just xs) = ". Unsat core:\n" ++ intercalate "\n" ["    " ++ x | x <- xs]
@@ -438,19 +468,31 @@ showSMTResult unsatMsg unkMsg satMsg satMsgModel satExtMsg result = case result 
 -- | Show a model in human readable form. Ignore bindings to those variables that start
 -- with "__internal_sbv_" and also those marked as "nonModelVar" in the config; as these are only for internal purposes
 showModel :: SMTConfig -> SMTModel -> String
-showModel cfg model = showModelDictionary cfg [(n, RegularCV c) | (n, c) <- modelAssocs model]
+showModel cfg model
+   | null uiFuncs
+   = nonUIFuncs
+   | True
+   = sep nonUIFuncs ++ intercalate "\n\n" (map (showModelUI cfg) uiFuncs)
+   where nonUIFuncs = showModelDictionary (null uiFuncs) False cfg [(n, RegularCV c) | (n, c) <- modelAssocs model]
+         uiFuncs    = modelUIFuns model
+         sep ""     = ""
+         sep x      = x ++ "\n\n"
 
 -- | Show bindings in a generalized model dictionary, tabulated
-showModelDictionary :: SMTConfig -> [(String, GeneralizedCV)] -> String
-showModelDictionary cfg allVars
+showModelDictionary :: Bool -> Bool -> SMTConfig -> [(String, GeneralizedCV)] -> String
+showModelDictionary warnEmpty includeEverything cfg allVars
    | null allVars
-   = "[There are no variables bound by the model.]"
+   = warn "[There are no variables bound by the model.]"
    | null relevantVars
-   = "[There are no model-variables bound by the model.]"
+   = warn "[There are no model-variables bound by the model.]"
    | True
    = intercalate "\n" . display . map shM $ relevantVars
-  where relevantVars  = filter (not . ignore) allVars
-        ignore (s, _) = "__internal_sbv_" `isPrefixOf` s || isNonModelVar cfg s
+  where warn s = if warnEmpty then s else ""
+
+        relevantVars  = filter (not . ignore) allVars
+        ignore (s, _)
+          | includeEverything = False
+          | True              = "__internal_sbv_" `isPrefixOf` s || isNonModelVar cfg s
 
         shM (s, RegularCV v) = let vs = shCV cfg v in ((length s, s), (vlength vs, vs))
         shM (s, other)       = let vs = show other in ((length s, s), (vlength vs, vs))
@@ -471,6 +513,45 @@ showModelDictionary cfg allVars
         valPart (x:xs)      = x : valPart xs
 
         lTrimRight = length . dropWhile isSpace . reverse
+
+-- | Show an uninterpreted function
+showModelUI :: SMTConfig -> (String, (SBVType, ([([CV], CV)], CV))) -> String
+showModelUI cfg (nm, (SBVType ts, (defs, dflt))) = intercalate "\n" ["  " ++ l | l <- sig : map align body]
+  where noOfArgs = length ts - 1
+
+        sig      = nm ++ " :: " ++ intercalate " -> " (map showBaseKind ts)
+
+        ls       = map line defs
+        defLine  = (nm : replicate noOfArgs "_", scv dflt)
+
+        body     = ls ++ [defLine]
+
+        colWidths = [maximum (0 : map length col) | col <- transpose (map fst body)]
+
+        resWidth  = maximum  (0 : map (length . snd) body)
+
+        align (xs, r) = unwords $ zipWith left colWidths xs ++ ["=", left resWidth r]
+           where left i x = take i (x ++ repeat ' ')
+
+        scv = sh (printBase cfg)
+          where sh 2  = binP
+                sh 10 = showCV False
+                sh 16 = hexP
+                sh _  = show
+
+        -- NB. If we have a float NaN/Infinity/+0/-0 etc. these will
+        -- simply print as is, but will not be valid patterns. (We
+        -- have the semi-goal of being able to paste these definitions
+        -- in a Haskell file.) For the time being, punt on this, but
+        -- we might want to do this properly later somehow. (Perhaps
+        -- using some sort of a view pattern.)
+        line :: ([CV], CV) -> ([String], String)
+        line (args, r) = (nm : map (paren . scv) args, scv r)
+          where -- If negative, parenthesize. I think this is the only case
+                -- we need to worry about. Hopefully!
+                paren :: String -> String
+                paren x@('-':_) = '(' : x ++ ")"
+                paren x         = x
 
 -- | Show a constant value, in the user-specified base
 shCV :: SMTConfig -> CV -> String
@@ -587,8 +668,8 @@ runSolver cfg ctx execPath opts pgm continuation
                       where safeGetLine isFirst h =
                                          let timeOutToUse | isFirst = mbTimeOut
                                                           | True    = Just 5000000
-                                             timeOutMsg t | isFirst = "User specified timeout of " ++ showTimeoutValue t ++ " exceeded."
-                                                          | True    = "A multiline complete response wasn't received before " ++ showTimeoutValue t ++ " exceeded."
+                                             timeOutMsg t | isFirst = "User specified timeout of " ++ showTimeoutValue t ++ " exceeded"
+                                                          | True    = "A multiline complete response wasn't received before " ++ showTimeoutValue t ++ " exceeded"
 
                                              -- Like hGetLine, except it keeps getting lines if inside a string.
                                              getFullLine :: IO String
@@ -679,6 +760,9 @@ runSolver cfg ctx execPath opts pgm continuation
                                    ]
                                 ++ [ "Std-out  : " ++ intercalate "\n           " (lines out) | not (null out)]
                                 ++ [ "Std-err  : " ++ intercalate "\n           " (lines err) | not (null err)]
+
+                           finalizeTranscript (transcript cfg) ex
+                           recordEndTime cfg ctx
 
                            case ex of
                              ExitSuccess -> return ()
@@ -815,17 +899,14 @@ runSolver cfg ctx execPath opts pgm continuation
                              continuation ctx
 
       -- NB. Don't use 'bracket' here, as it wouldn't have access to the exception.
-      let launchSolver = do startTranscript    (transcript cfg) cfg
-                            r <- executeSolver
-                            finalizeTranscript (transcript cfg) Nothing
-                            recordEndTime      cfg ctx
-                            return r
+      let launchSolver = do startTranscript (transcript cfg) cfg
+                            executeSolver
 
       launchSolver `C.catch` (\(e :: C.SomeException) -> handleAsync e $ do terminateProcess pid
                                                                             ec <- waitForProcess pid
                                                                             recordException    (transcript cfg) (show e)
-                                                                            finalizeTranscript (transcript cfg) (Just ec)
-                                                                            recordEndTime      cfg ctx
+                                                                            finalizeTranscript (transcript cfg) ec
+                                                                            recordEndTime cfg ctx
                                                                             C.throwIO e)
 
 -- | Compute and report the end time
@@ -857,19 +938,19 @@ startTranscript (Just f) cfg = do ts <- show <$> getZonedTime
                                   ]
 
 -- | Finish up the transcript file.
-finalizeTranscript :: Maybe FilePath -> Maybe ExitCode -> IO ()
-finalizeTranscript Nothing  _    = return ()
-finalizeTranscript (Just f) mbEC = do ts <- show <$> getZonedTime
-                                      appendFile f $ end ts
-  where end ts = unlines $ [ ""
-                           , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
-                           , ";;;"
-                           , ";;; SBV: Finished at " ++ ts
-                           ]
-                       ++  [ ";;;\n;;; Exit code: " ++ show ec | Just ec <- [mbEC] ]
-                       ++  [ ";;;"
-                           , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
-                           ]
+finalizeTranscript :: Maybe FilePath -> ExitCode -> IO ()
+finalizeTranscript Nothing  _  = return ()
+finalizeTranscript (Just f) ec = do ts <- show <$> getZonedTime
+                                    appendFile f $ end ts
+  where end ts = unlines [ ""
+                         , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
+                         , ";;;"
+                         , ";;; SBV: Finished at " ++ ts
+                         , ";;;"
+                         , ";;; Exit code: " ++ show ec
+                         , ";;;"
+                         , ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;"
+                         ]
 
 -- If requested, record in the transcript file
 recordTranscript :: Maybe FilePath -> Either (String, Maybe Int) String -> IO ()

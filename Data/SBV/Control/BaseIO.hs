@@ -1,7 +1,8 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Control.BaseIO
--- Author    : Brian Schroeder, Levent Erkok
+-- Copyright : (c) Brian Schroeder
+--                 Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -16,7 +17,7 @@ import Data.SBV.Control.Query (Assignment)
 import Data.SBV.Control.Types (CheckSatResult, SMTInfoFlag, SMTInfoResponse, SMTOption, SMTReasonUnknown)
 import Data.SBV.Control.Utils (SMTValue)
 import Data.SBV.Core.Concrete (CV)
-import Data.SBV.Core.Data     (HasKind, Symbolic, SymArray, SymVal, SBool, SBV)
+import Data.SBV.Core.Data     (HasKind, Symbolic, SymArray, SymVal, SBool, SBV, SBVType)
 import Data.SBV.Core.Symbolic (Query, QueryContext, QueryState, State, SMTModel, SMTResult, SV)
 
 import qualified Data.SBV.Control.Query as Trans
@@ -51,6 +52,12 @@ getUnknownReason = Trans.getUnknownReason
 -- NB. For a version which generalizes over the underlying monad, see 'Data.SBV.Trans.Control.getObservables'
 getObservables :: Query [(String, CV)]
 getObservables = Trans.getObservables
+
+-- | Get the uinterpreted constants/functions recorded during a run.
+--
+-- NB. For a version which generalizes over the underlying monad, see 'Data.SBV.Trans.Control.getUIs'
+getUIs :: Query [(String, SBVType)]
+getUIs = Trans.getUIs
 
 -- | Issue check-sat and get an SMT Result out.
 --
@@ -384,12 +391,24 @@ getValue = Trans.getValue
 getUninterpretedValue :: HasKind a => SBV a -> Query String
 getUninterpretedValue = Trans.getUninterpretedValue
 
+-- | Get the value of an uninterpreted function, as a list of domain, value pairs.
+-- The final value is the "else" clause, i.e., what the function maps values outside
+-- of the domain of the first list.
+getFunction :: Trans.SMTFunction fun a r => fun -> Query ([(a, r)], r)
+getFunction = Trans.getFunction
+
 -- | Get the value of a term. If the kind is Real and solver supports decimal approximations,
 -- we will "squash" the representations.
 --
 -- NB. For a version which generalizes over the underlying monad, see 'Data.SBV.Trans.Control.getValueCV'
 getValueCV :: Maybe Int -> SV -> Query CV
 getValueCV = Trans.getValueCV
+
+-- | Get the value of an uninterpreted function as an association list
+--
+-- NB. For a version which generalizes over the underlying monad, see 'Data.SBV.Trans.Control.getUIFunCVAssoc'
+getUIFunCVAssoc :: Maybe Int -> (String, SBVType) -> Query ([([CV], CV)], CV)
+getUIFunCVAssoc = Trans.getUIFunCVAssoc
 
 -- | Check for satisfiability.
 --

@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Provers.Prover
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -16,7 +16,6 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE TypeSynonymInstances  #-}
 
 module Data.SBV.Provers.Prover (
          SMTSolver(..), SMTConfig(..), Predicate
@@ -46,7 +45,7 @@ import System.Directory  (getCurrentDirectory)
 import Data.Time (getZonedTime, NominalDiffTime, UTCTime, getCurrentTime, diffUTCTime)
 import Data.List (intercalate, isPrefixOf, nub)
 
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, listToMaybe)
 
 import qualified Data.Map.Strict as M
 import qualified Data.Foldable   as S (toList)
@@ -54,9 +53,9 @@ import qualified Data.Foldable   as S (toList)
 import Data.SBV.Core.Data
 import Data.SBV.Core.Symbolic
 import Data.SBV.SMT.SMT
+import Data.SBV.SMT.Utils (debug, alignPlain)
 import Data.SBV.Utils.ExtractIO
 import Data.SBV.Utils.TDiff
-import Data.SBV.Utils.PrettyNum
 
 import qualified Data.SBV.Trans.Control as Control
 import qualified Data.SBV.Control.Query as Control
@@ -72,20 +71,24 @@ import qualified Data.SBV.Provers.MathSAT    as MathSAT
 import qualified Data.SBV.Provers.ABC        as ABC
 
 mkConfig :: SMTSolver -> SMTLibVersion -> [Control.SMTOption] -> SMTConfig
-mkConfig s smtVersion startOpts = SMTConfig { verbose             = False
-                                            , timing              = NoTiming
-                                            , printBase           = 10
-                                            , printRealPrec       = 16
-                                            , transcript          = Nothing
-                                            , solver              = s
-                                            , smtLibVersion       = smtVersion
-                                            , satCmd              = "(check-sat)"
-                                            , allSatMaxModelCount = Nothing                -- i.e., return all satisfying models
-                                            , isNonModelVar       = const False            -- i.e., everything is a model-variable by default
-                                            , roundingMode        = RoundNearestTiesToEven
-                                            , solverSetOptions    = startOpts
-                                            , ignoreExitCode      = False
-                                            , redirectVerbose     = Nothing
+mkConfig s smtVersion startOpts = SMTConfig { verbose                = False
+                                            , timing                 = NoTiming
+                                            , printBase              = 10
+                                            , printRealPrec          = 16
+                                            , transcript             = Nothing
+                                            , solver                 = s
+                                            , smtLibVersion          = smtVersion
+                                            , satCmd                 = "(check-sat)"
+                                            , satTrackUFs            = True                   -- i.e., yes, do extract UI function values
+                                            , allSatMaxModelCount    = Nothing                -- i.e., return all satisfying models
+                                            , allSatPrintAlong       = False                  -- i.e., do not print models as they are found
+                                            , isNonModelVar          = const False            -- i.e., everything is a model-variable by default
+                                            , validateModel          = False
+                                            , allowQuantifiedQueries = False
+                                            , roundingMode           = RoundNearestTiesToEven
+                                            , solverSetOptions       = startOpts
+                                            , ignoreExitCode         = False
+                                            , redirectVerbose        = Nothing
                                             }
 
 -- | If supported, this makes all output go to stdout, which works better with SBV
@@ -158,7 +161,10 @@ class ExtractIO m => MProvable m a where
 
   -- | Generalization of 'Data.SBV.proveWith'
   proveWith :: SMTConfig -> a -> m ThmResult
-  proveWith = runWithQuery False $ checkNoOptimizations >> ThmResult <$> Control.getSMTResult
+  proveWith cfg a = do r <- runWithQuery False (checkNoOptimizations >> Control.getSMTResult) cfg a
+                       ThmResult <$> if validateModel cfg
+                                     then validate False cfg a r
+                                     else return r
 
   -- | Generalization of 'Data.SBV.sat'
   sat :: a -> m SatResult
@@ -166,7 +172,10 @@ class ExtractIO m => MProvable m a where
 
   -- | Generalization of 'Data.SBV.satWith'
   satWith :: SMTConfig -> a -> m SatResult
-  satWith = runWithQuery True $ checkNoOptimizations >> SatResult <$> Control.getSMTResult
+  satWith cfg a = do r <- runWithQuery True (checkNoOptimizations >> Control.getSMTResult) cfg a
+                     SatResult <$> if validateModel cfg
+                                   then validate True cfg a r
+                                   else return r
 
   -- | Generalization of 'Data.SBV.allSat'
   allSat :: a -> m AllSatResult
@@ -174,7 +183,11 @@ class ExtractIO m => MProvable m a where
 
   -- | Generalization of 'Data.SBV.allSatWith'
   allSatWith :: SMTConfig -> a -> m AllSatResult
-  allSatWith = runWithQuery True $ checkNoOptimizations >> AllSatResult <$> Control.getAllSatResult
+  allSatWith cfg a = do f@(mm, pe, un, rs) <- runWithQuery True (checkNoOptimizations >> Control.getAllSatResult) cfg a
+                        AllSatResult <$> if validateModel cfg
+                                         then do rs' <- mapM (validate True cfg a) rs
+                                                 return (mm, pe, un, rs')
+                                         else return f
 
   -- | Generalization of 'Data.SBV.optimize'
   optimize :: OptimizeStyle -> a -> m OptimizeResult
@@ -186,6 +199,12 @@ class ExtractIO m => MProvable m a where
     where opt = do objectives <- Control.getObjectives
                    qinps      <- Control.getQuantifiedInputs
                    spgm       <- Control.getSBVPgm
+
+                   when (validateModel config) $
+                          error $ unlines [ ""
+                                          , "*** Data.SBV: Model validation is not supported in optimization calls."
+                                          , "*** To turn validation off, use `cfg{validateModel = False}`"
+                                          ]
 
                    when (null objectives) $
                           error $ unlines [ ""
@@ -245,9 +264,10 @@ class ExtractIO m => MProvable m a where
 
                    let optimizerDirectives = concatMap minmax objectives ++ priority style
                          where mkEq (x, y) = "(assert (= " ++ show x ++ " " ++ show y ++ "))"
-                               minmax (Minimize          _  xy@(_, v))     = [mkEq xy, "(minimize "    ++ signAdjust v (show v) ++ ")"]
-                               minmax (Maximize          _  xy@(_, v))     = [mkEq xy, "(maximize "    ++ signAdjust v (show v) ++ ")"]
-                               minmax (AssertWithPenalty nm xy@(_, v) mbp) = [mkEq xy, "(assert-soft " ++ signAdjust v (show v) ++ penalize mbp ++ ")"]
+
+                               minmax (Minimize          _  xy@(_, v))     = [mkEq xy, "(minimize "    ++ show v                 ++ ")"]
+                               minmax (Maximize          _  xy@(_, v))     = [mkEq xy, "(maximize "    ++ show v                 ++ ")"]
+                               minmax (AssertWithPenalty nm xy@(_, v) mbp) = [mkEq xy, "(assert-soft " ++ show v ++ penalize mbp ++ ")"]
                                  where penalize DefaultPenalty    = ""
                                        penalize (Penalty w mbGrp)
                                           | w <= 0         = error $ unlines [ "SBV.AssertWithPenalty: Goal " ++ show nm ++ " is assigned a non-positive penalty: " ++ shw
@@ -261,21 +281,6 @@ class ExtractIO m => MProvable m a where
                                priority Lexicographic = [] -- default, no option needed
                                priority Independent   = ["(set-option :opt.priority box)"]
                                priority (Pareto _)    = ["(set-option :opt.priority pareto)"]
-
-                               -- if the goal is a signed-BV, then we need to add 2^{n-1} to the maximal value
-                               -- is properly placed in the correct range. See http://github.com/Z3Prover/z3/issues/1339 for
-                               -- details on why we have to do this:
-                               signAdjust :: SV -> String -> String
-                               signAdjust v o = case kindOf v of
-                                                  -- NB. The order we spit out the addition here (i.e., "bvadd v constant")
-                                                  -- is important as we parse it back in precisely that form when we
-                                                  -- get the objective. Don't change it!
-                                                  KBounded True sz -> "(bvadd " ++ o ++ " " ++ adjust sz ++ ")"
-                                                  _                -> o
-                                  where adjust :: Int -> String
-                                        adjust sz = cvToSMTLib RoundNearestTiesToEven -- rounding mode doesn't matter here, just pick one
-                                                              (mkConstCV (KBounded False sz)
-                                                                         ((2::Integer)^(fromIntegral sz - (1::Integer))))
 
                    mapM_ (Control.send True) optimizerDirectives
 
@@ -291,7 +296,7 @@ class ExtractIO m => MProvable m a where
   -- | Generalization of 'Data.SBV.isVacuousWith'
   isVacuousWith :: SMTConfig -> a -> m Bool
   isVacuousWith cfg a = -- NB. Can't call runWithQuery since last constraint would become the implication!
-       fst <$> runSymbolic (SMTMode ISetup True cfg) (forSome_ a >> Control.query check)
+       fst <$> runSymbolic (SMTMode QueryInternal ISetup True cfg) (forSome_ a >> Control.executeQuery QueryInternal check)
      where
        check :: QueryT m Bool
        check = do cs <- Control.checkSat
@@ -324,6 +329,143 @@ class ExtractIO m => MProvable m a where
                                  SatResult Satisfiable{}   -> return True
                                  SatResult Unsatisfiable{} -> return False
                                  _                         -> error $ "SBV.isSatisfiable: Received: " ++ show r
+
+  -- | Validate a model obtained from the solver
+  validate :: Bool -> SMTConfig -> a -> SMTResult -> m SMTResult
+  validate isSAT cfg p res = case res of
+                               Unsatisfiable{} -> return res
+                               Satisfiable _ m -> case modelBindings m of
+                                                    Nothing  -> error "Data.SBV.validate: Impossible happaned; no bindings during model validation."
+                                                    Just env -> check env
+                               SatExtField{}   -> return $ ProofError cfg [ "Cannot validate models produced during optimization."
+                                                                          , ""
+                                                                          , "To turn validation off, use `cfg{validateModel = False}`"
+                                                                          , ""
+                                                                          , "Unable to validate the produced model."
+                                                                          ]
+                                                                          (Just res)
+                               Unknown{}       -> return res
+                               ProofError{}    -> return res
+
+    where check env = do let envShown = showModelDictionary True True cfg modelBinds
+                                where modelBinds = [(n, fake q s v) | ((q, (s, n)), v) <- env]
+                                      fake q s Nothing
+                                        | q == ALL
+                                        = RegularCV $ CV (kindOf s) $ CUserSort (Nothing, "<universally quantified>")
+                                        | True
+                                        = RegularCV $ CV (kindOf s) $ CUserSort (Nothing, "<no binding found>")
+                                      fake _ _ (Just v) = RegularCV v
+
+                             notify s
+                               | not (verbose cfg) = return ()
+                               | True              = debug cfg ["[VALIDATE] " `alignPlain` s]
+
+                         notify $ "Validating the model in the " ++ if null env then "empty environment." else "environment:"
+                         mapM_ notify ["    " ++ l | l <- lines envShown]
+
+                         result <- snd <$> runSymbolic (Concrete (Just (isSAT, env))) ((if isSAT then forSome_ p else forAll_ p) >>= output)
+
+                         let explain  = [ ""
+                                        , "Environment:"  ++ if null env then " <empty>" else ""
+                                        ]
+                                     ++ [ ""          | not (null env)]
+                                     ++ [ "    " ++ l | l <- lines envShown]
+                                     ++ [ "" ]
+
+                             wrap tag extras = return $ ProofError cfg (tag : explain ++ extras) (Just res)
+
+                             giveUp   s     = wrap ("Data.SBV: Cannot validate the model: " ++ s)
+                                                   [ "SBV's model validator is incomplete, and cannot handle this particular case."
+                                                   , "Please report this as a feature request or possibly a bug!"
+                                                   ]
+
+                             badModel s     = wrap ("Data.SBV: Model validation failure: " ++ s)
+                                                   [ "Backend solver returned a model that does not satisfy the constraints."
+                                                   , "This could indicate a bug in the backend solver, or SBV itself. Please report."
+                                                   ]
+
+                             notConcrete sv = wrap ("Data.SBV: Cannot validate the model, since " ++ show sv ++ " is not concretely computable.")
+                                                   (  perhaps (why sv)
+                                                   ++ [ "SBV's model validator is incomplete, and cannot handle this particular case."
+                                                      , "Please report this as a feature request or possibly a bug!"
+                                                      ]
+                                                   )
+                                  where perhaps Nothing  = []
+                                        perhaps (Just x) = [x, ""]
+
+                                        -- This is incomplete, but should capture the most common cases
+                                        why s = case s `lookup` S.toList (pgmAssignments (resAsgns result)) of
+                                                  Nothing            -> Nothing
+                                                  Just (SBVApp o as) -> case o of
+                                                                          Uninterpreted v   -> Just $ "The value depends on the uninterpreted constant " ++ show v ++ "."
+                                                                          IEEEFP FP_FMA     -> Just "Floating point FMA operation is not supported concretely."
+                                                                          IEEEFP _          -> Just "Not all floating point operations are supported concretely."
+                                                                          OverflowOp _      -> Just "Overflow-checking is not done concretely."
+                                                                          StrOp (StrInRe _) -> Just "Regular expression matches are not supported in validation mode."
+                                                                          _                 -> listToMaybe $ mapMaybe why as
+
+                             cstrs = S.toList $ resConstraints result
+
+                             walkConstraints [] cont = do
+                                unless (null cstrs) $ notify "Validated all constraints."
+                                cont
+                             walkConstraints ((isSoft, attrs, sv) : rest) cont
+                                | kindOf sv /= KBool
+                                = giveUp $ "Constraint tied to " ++ show sv ++ " is non-boolean."
+                                | isSoft || sv == trueSV
+                                = walkConstraints rest cont
+                                | sv == falseSV
+                                = case mbName of
+                                    Just nm -> badModel $ "Named constraint " ++ show nm ++ " evaluated to False."
+                                    Nothing -> badModel "A constraint was violated."
+                                | True
+                                = notConcrete sv
+                                where mbName = listToMaybe [n | (":named", n) <- attrs]
+
+                             -- SAT: All outputs must be true
+                             satLoop []
+                               = do notify "All outputs are satisfied. Validation complete."
+                                    return res
+                             satLoop (sv:svs)
+                               | kindOf sv /= KBool
+                               = giveUp $ "Output tied to " ++ show sv ++ " is non-boolean."
+                               | sv == trueSV
+                               = satLoop svs
+                               | sv == falseSV
+                               = badModel "Final output evaluated to False."
+                               | True
+                               = notConcrete sv
+
+                             -- Proof: At least one output must be false
+                             proveLoop [] somethingFailed
+                               | somethingFailed = do notify "Counterexample is validated."
+                                                      return res
+                               | True            = do notify "Counterexample violates none of the outputs."
+                                                      badModel "Counter-example violates no constraints."
+                             proveLoop (sv:svs) somethingFailed
+                               | kindOf sv /= KBool
+                               = giveUp $ "Output tied to " ++ show sv ++ " is non-boolean."
+                               | sv == trueSV
+                               = proveLoop svs somethingFailed
+                               | sv == falseSV
+                               = proveLoop svs True
+                               | True
+                               = notConcrete sv
+
+                             -- Output checking is tricky, since we behave differently for different modes
+                             checkOutputs []
+                               | null cstrs
+                               = giveUp "Impossible happened: There are no outputs nor any constraints to check."
+                             checkOutputs os
+                               = do notify "Validating outputs."
+                                    if isSAT then satLoop   os
+                                             else proveLoop os False
+
+                         notify $ if null cstrs
+                                  then "There are no constraints to check."
+                                  else "Validating " ++ show (length cstrs) ++ " constraint(s)."
+
+                         walkConstraints cstrs (checkOutputs (resOutputs result))
 
 -- | `Provable` is specialization of `MProvable` to the `IO` monad. Unless you are using
 -- transformers explicitly, this is the type you should prefer.
@@ -364,9 +506,9 @@ generateSMTBenchmark isSat a = do
       let comments = ["Automatically created by SBV on " ++ show t]
           cfg      = defaultSMTCfg { smtLibVersion = SMTLib2 }
 
-      (_, res) <- runSymbolic (SMTMode ISetup isSat cfg) $ (if isSat then forSome_ else forAll_) a >>= output
+      (_, res) <- runSymbolic (SMTMode QueryInternal ISetup isSat cfg) $ (if isSat then forSome_ else forAll_) a >>= output
 
-      let SMTProblem{smtLibPgm} = Control.runProofOn (SMTMode IRun isSat cfg) QueryInternal comments res
+      let SMTProblem{smtLibPgm} = Control.runProofOn (SMTMode QueryInternal IRun isSat cfg) QueryInternal comments res
           out                   = show (smtLibPgm cfg)
 
       return $ out ++ "\n(check-sat)\n"
@@ -499,11 +641,11 @@ runSMT = runSMTWith defaultSMTCfg
 
 -- | Generalization of 'Data.SBV.runSMTWith'
 runSMTWith :: MonadIO m => SMTConfig -> SymbolicT m a -> m a
-runSMTWith cfg a = fst <$> runSymbolic (SMTMode ISetup True cfg) a
+runSMTWith cfg a = fst <$> runSymbolic (SMTMode QueryExternal ISetup True cfg) a
 
 -- | Runs with a query.
 runWithQuery :: MProvable m a => Bool -> QueryT m b -> SMTConfig -> a -> m b
-runWithQuery isSAT q cfg a = fst <$> runSymbolic (SMTMode ISetup isSAT cfg) comp
+runWithQuery isSAT q cfg a = fst <$> runSymbolic (SMTMode QueryInternal ISetup isSAT cfg) comp
   where comp =  do _ <- (if isSAT then forSome_ else forAll_) a >>= output
                    Control.executeQuery QueryInternal q
 
@@ -566,9 +708,9 @@ class ExtractIO m => SExecutable m a where
                        let mkRelative path
                               | cwd `isPrefixOf` path = drop (length cwd) path
                               | True                  = path
-                       fst <$> runSymbolic (SMTMode ISafe True cfg) (sName_ a >> check mkRelative)
+                       fst <$> runSymbolic (SMTMode QueryInternal ISafe True cfg) (sName_ a >> check mkRelative)
      where check :: (FilePath -> FilePath) -> SymbolicT m [SafeResult]
-           check mkRelative = Control.query $ Control.getSBVAssertions >>= mapM (verify mkRelative)
+           check mkRelative = Control.executeQuery QueryInternal $ Control.getSBVAssertions >>= mapM (verify mkRelative)
 
            -- check that the cond is unsatisfiable. If satisfiable, that would
            -- indicate the assignment under which the 'Data.SBV.sAssert' would fail

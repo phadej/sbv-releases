@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Provers.MathSAT
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -35,11 +35,15 @@ mathSAT = SMTSolver {
                               , supportsReals              = True
                               , supportsApproxReals        = False
                               , supportsIEEE754            = True
+                              , supportsSets               = False
                               , supportsOptimization       = False
                               , supportsPseudoBooleans     = False
                               , supportsCustomQueries      = True
                               , supportsGlobalDecls        = False
-                              , supportsFlattenedSequences = Nothing
+                              , supportsDataTypes          = True
+                              , supportsDTConstructorSigs  = False
+                              , supportsDTAccessorSigs     = False
+                              , supportsFlattenedModels    = Nothing
                               }
          }
 

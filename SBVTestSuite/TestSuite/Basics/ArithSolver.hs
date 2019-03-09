@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : TestSuite.Basics.ArithSolver
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -93,18 +93,18 @@ genBinTest unboundedOK nm op = map mkTest $  [(show x, show y, mkThm2 x y (x `op
                                       return $ literal r .== a `op` b
 
 genBoolTest :: String -> (forall a. Ord a => a -> a -> Bool) -> (forall a. OrdSymbolic a => a -> a -> SBool) -> [TestTree]
-genBoolTest nm op opS = map mkTest $  [(show x, show y, mkThm2  x y (x `op` y)) | x <- w8s,       y <- w8s                             ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- w16s,      y <- w16s                            ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- w32s,      y <- w32s                            ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- w64s,      y <- w64s                            ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- i8s,       y <- i8s                             ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- i16s,      y <- i16s                            ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- i32s,      y <- i32s                            ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- i64s,      y <- i64s                            ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- iUBs,      y <- iUBs                            ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- reducedCS, y <- reducedCS                       ]
-                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | x <- ss,        y <- ss, nm `elem` allowedStringComps]
-                                   ++ [(show x, show y, mkThm2L x y (x `op` y)) | x <- sl,        y <- sl, nm `elem` allowedListComps  ]
+genBoolTest nm op opS = map mkTest $  [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- w8s,       y <- w8s      ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- w16s,      y <- w16s     ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- w32s,      y <- w32s     ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- w64s,      y <- w64s     ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- i8s,       y <- i8s      ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- i16s,      y <- i16s     ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- i32s,      y <- i32s     ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- i64s,      y <- i64s     ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- iUBs,      y <- iUBs     ]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) |                               x <- reducedCS, y <- reducedCS]
+                                   ++ [(show x, show y, mkThm2  x y (x `op` y)) | nm `elem` allowedStringComps, x <- ss,        y <- ss       ]
+                                   ++ [(show x, show y, mkThm2L x y (x `op` y)) | nm `elem` allowedListComps  , x <- sl,        y <- sl       ]
   where -- Currently Z3 doesn't allow for string/list comparisons, so only test equals and distinct
         -- See: http://github.com/LeventErkok/sbv/issues/368 for tracking issue.
         allowedStringComps = ["==", "/="]
@@ -203,7 +203,7 @@ genShiftMixSize = map mkTest $  [(show x, show y, "shl_w8_w16", mk sShiftLeft  x
          yw16s = [0, 255, 256, 257, maxBound]
 
          mkTest (x, y, l, t) = testCase ("genShiftMixSize." ++ l ++ "." ++ x ++ "_" ++ y) (assert t)
-         mk :: (SymVal a, SymVal b) => (SBV a -> SBV b -> SBV a) -> a -> b -> a -> IO Bool
+         mk :: (Eq a, Eq b, SymVal a, SymVal b) => (SBV a -> SBV b -> SBV a) -> a -> b -> a -> IO Bool
          mk o x y r
           = isTheorem $ do a <- free "x"
                            b <- free "y"
@@ -299,9 +299,9 @@ genDoubles :: [TestTree]
 genDoubles = genIEEE754 "genDoubles" ds
 
 genIEEE754 :: (IEEEFloating a, Show a) => String -> [a] -> [TestTree]
-genIEEE754 origin vs =  map tst1 [("pred_"   ++ nm, x, y)    | (nm, x, y)    <- preds]
-                     ++ map tst1 [("unary_"  ++ nm, x, y)    | (nm, x, y)    <- uns]
-                     ++ map tst2 [("binary_" ++ nm, x, y, r) | (nm, x, y, r) <- bins]
+genIEEE754 origin vs =  [tst1 ("pred_"   ++ nm, x, y)    | (nm, x, y)    <- preds]
+                     ++ [tst1 ("unary_"  ++ nm, x, y)    | (nm, x, y)    <- uns]
+                     ++ [tst2 ("binary_" ++ nm, x, y, r) | (nm, x, y, r) <- bins]
   where uns =     [("abs",               show x, mkThm1 abs                   x  (abs x))                | x <- vs]
                ++ [("negate",            show x, mkThm1 negate                x  (negate x))             | x <- vs]
                ++ [("signum",            show x, mkThm1 signum                x  (signum x))             | x <- vs]
@@ -398,7 +398,7 @@ genIEEE754 origin vs =  map tst1 [("pred_"   ++ nm, x, y)    | (nm, x, y)    <- 
                      ]
 
 genFPConverts :: [TestTree]
-genFPConverts = map tst1 [("fpCast_" ++ nm, x, y) | (nm, x, y) <- converts]
+genFPConverts = [tst1 ("fpCast_" ++ nm, x, y) | (nm, x, y) <- converts]
   where converts =   [("toFP_Int8_ToFloat",     show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- i8s ]
                  ++  [("toFP_Int16_ToFloat",    show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- i16s]
                  ++  [("toFP_Int32_ToFloat",    show x, mkThmC (m toSFloat) x (fromRational (toRational x))) | x <- i32s]
@@ -425,35 +425,35 @@ genFPConverts = map tst1 [("fpCast_" ++ nm, x, y) | (nm, x, y) <- converts]
                  ++  [("toFP_Integer_ToDouble", show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- iUBs]
                  ++  [("toFP_Real_ToDouble",    show x, mkThmC (m toSDouble) x (fromRational (toRational x))) | x <- rs  ]
 
-                 ++  [("fromFP_Float_ToInt8",    show x, mkThmC' (m fromSFloat :: SFloat -> SInt8)    x (((fromIntegral :: Integer -> Int8)    . fpRound0) x)) | x <- fs]
-                 ++  [("fromFP_Float_ToInt16",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt16)   x (((fromIntegral :: Integer -> Int16)   . fpRound0) x)) | x <- fs]
-                 ++  [("fromFP_Float_ToInt32",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt32)   x (((fromIntegral :: Integer -> Int32)   . fpRound0) x)) | x <- fs]
-                 ++  [("fromFP_Float_ToInt64",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt64)   x (((fromIntegral :: Integer -> Int64)   . fpRound0) x)) | x <- fs]
-                 ++  [("fromFP_Float_ToWord8",   show x, mkThmC' (m fromSFloat :: SFloat -> SWord8)   x (((fromIntegral :: Integer -> Word8)   . fpRound0) x)) | x <- fs]
-                 ++  [("fromFP_Float_ToWord16",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord16)  x (((fromIntegral :: Integer -> Word16)  . fpRound0) x)) | x <- fs]
-                 ++  [("fromFP_Float_ToWord32",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord32)  x (((fromIntegral :: Integer -> Word32)  . fpRound0) x)) | x <- fs]
-                 ++  [("fromFP_Float_ToWord64",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord64)  x (((fromIntegral :: Integer -> Word64)  . fpRound0) x)) | x <- fs]
-                 ++  [("fromFP_Float_ToFloat",   show x, mkThm1  (m fromSFloat :: SFloat -> SFloat)   x                                                    x ) | x <- fs]
-                 ++  [("fromFP_Float_ToDouble",  show x, mkThm1  (m fromSFloat :: SFloat -> SDouble)  x (                                           fp2fp  x)) | x <- fs]
-                 -- Neither Z3 nor MathSAT support Float->Integer/Float->Real conversion for the time being; so comment out.
-                 -- See GitHub issue: #191
-                 -- ++  [("fromFP_Float_ToInteger", show x, mkThmC' (m fromSFloat :: SFloat -> SInteger) x (((fromIntegral :: Integer -> Integer) . fpRound0) x)) | x <- fs]
-                 -- ++  [("fromFP_Float_ToReal",    show x, mkThmC' (m fromSFloat :: SFloat -> SReal)    x (                        (fromRational . fpRatio0) x)) | x <- fs]
+                 -- Conversions from floats are only well-defined if the input is in-bounds. So we just check round-trip for these.
+                 -- Also note that we clamp Int32/Word32/Int64/Word64 conversions further as floats become too sparse to handle those.
+                 ++  [("fromFP_Float_ToInt8",    show x, mkThmC' (m fromSFloat :: SFloat -> SInt8)     x ((round :: Float  -> Int8  )  x)) | i <- i8s,  let x = fromIntegral i]
+                 ++  [("fromFP_Float_ToInt16",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt16)    x ((round :: Float  -> Int16 )  x)) | i <- i16s, let x = fromIntegral i]
+                 ++  [("fromFP_Float_ToInt32",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt32)    x ((round :: Float  -> Int32 )  x)) | i <- i16s, let x = fromIntegral i]
+                 ++  [("fromFP_Float_ToInt64",   show x, mkThmC' (m fromSFloat :: SFloat -> SInt64)    x ((round :: Float  -> Int64 )  x)) | i <- i16s, let x = fromIntegral i]
+                 ++  [("fromFP_Float_ToWord8",   show x, mkThmC' (m fromSFloat :: SFloat -> SWord8)    x ((round :: Float  -> Word8 )  x)) | i <- w8s,  let x = fromIntegral i]
+                 ++  [("fromFP_Float_ToWord16",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord16)   x ((round :: Float  -> Word16)  x)) | i <- w16s, let x = fromIntegral i]
+                 ++  [("fromFP_Float_ToWord32",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord32)   x ((round :: Float  -> Word32)  x)) | i <- w16s, let x = fromIntegral i]
+                 ++  [("fromFP_Float_ToWord64",  show x, mkThmC' (m fromSFloat :: SFloat -> SWord64)   x ((round :: Float  -> Word64)  x)) | i <- w16s, let x = fromIntegral i]
 
-                 ++  [("fromFP_Double_ToInt8",    show x, mkThmC' (m fromSDouble :: SDouble -> SInt8)    x (((fromIntegral :: Integer -> Int8)    . fpRound0) x)) | x <- ds]
-                 ++  [("fromFP_Double_ToInt16",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt16)   x (((fromIntegral :: Integer -> Int16)   . fpRound0) x)) | x <- ds]
-                 ++  [("fromFP_Double_ToInt32",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt32)   x (((fromIntegral :: Integer -> Int32)   . fpRound0) x)) | x <- ds]
-                 ++  [("fromFP_Double_ToInt64",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt64)   x (((fromIntegral :: Integer -> Int64)   . fpRound0) x)) | x <- ds]
-                 ++  [("fromFP_Double_ToWord8",   show x, mkThmC' (m fromSDouble :: SDouble -> SWord8)   x (((fromIntegral :: Integer -> Word8)   . fpRound0) x)) | x <- ds]
-                 ++  [("fromFP_Double_ToWord16",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord16)  x (((fromIntegral :: Integer -> Word16)  . fpRound0) x)) | x <- ds]
-                 ++  [("fromFP_Double_ToWord32",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord32)  x (((fromIntegral :: Integer -> Word32)  . fpRound0) x)) | x <- ds]
-                 ++  [("fromFP_Double_ToWord64",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord64)  x (((fromIntegral :: Integer -> Word64)  . fpRound0) x)) | x <- ds]
-                 ++  [("fromFP_Double_ToFloat",   show x, mkThm1  (m fromSDouble :: SDouble -> SFloat)   x (                                            fp2fp x)) | x <- ds]
-                 ++  [("fromFP_Double_ToDouble",  show x, mkThm1  (m fromSDouble :: SDouble -> SDouble)  x                                                    x ) | x <- ds]
-                 -- Neither Z3 nor MathSAT support Float->Integer/Float->Real conversion for the time being; so comment out.
-                 -- See GitHub issue: #191
-                 -- ++  [("fromFP_Double_ToInteger", show x, mkThmC' (m fromSDouble :: SDouble -> SInteger) x (((fromIntegral :: Integer -> Integer) . fpRound0) x)) | x <- ds]
-                 -- ++  [("fromFP_Double_ToReal",    show x, mkThmC' (m fromSDouble :: SDouble -> SReal)    x (                        (fromRational . fpRatio0) x)) | x <- ds]
+                 ++  [("fromFP_Float_ToFloat",   show x, mkThm1  (m fromSFloat :: SFloat -> SFloat)    x                               x)  | x <- fs]
+                 ++  [("fromFP_Float_ToDouble",  show x, mkThm1  (m fromSFloat :: SFloat -> SDouble)   x (                    fp2fp    x)) | x <- fs]
+                 -- Neither Z3 nor MathSAT support Float->Integer/Float->Real conversion for the time being; so we skip those. See GitHub issue: #191
+
+                 -- Conversions from doubles are only well-defined if the input is in-bounds. So we just check round-trip for these.
+                 -- Also note that we clamp Int64/Word64 conversions further as floats become too sparse to handle those.
+                 ++  [("fromFP_Double_ToInt8",    show x, mkThmC' (m fromSDouble :: SDouble -> SInt8)   x ((round :: Double -> Int8  ) x)) | i <- i8s,  let x = fromIntegral i]
+                 ++  [("fromFP_Double_ToInt16",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt16)  x ((round :: Double -> Int16 ) x)) | i <- i16s, let x = fromIntegral i]
+                 ++  [("fromFP_Double_ToInt32",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt32)  x ((round :: Double -> Int32 ) x)) | i <- i32s, let x = fromIntegral i]
+                 ++  [("fromFP_Double_ToInt64",   show x, mkThmC' (m fromSDouble :: SDouble -> SInt64)  x ((round :: Double -> Int64 ) x)) | i <- i32s, let x = fromIntegral i]
+                 ++  [("fromFP_Double_ToWord8",   show x, mkThmC' (m fromSDouble :: SDouble -> SWord8)  x ((round :: Double -> Word8 ) x)) | i <- w8s,  let x = fromIntegral i]
+                 ++  [("fromFP_Double_ToWord16",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord16) x ((round :: Double -> Word16) x)) | i <- w16s, let x = fromIntegral i]
+                 ++  [("fromFP_Double_ToWord32",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord32) x ((round :: Double -> Word32) x)) | i <- w32s, let x = fromIntegral i]
+                 ++  [("fromFP_Double_ToWord64",  show x, mkThmC' (m fromSDouble :: SDouble -> SWord64) x ((round :: Double -> Word64) x)) | i <- w32s, let x = fromIntegral i]
+
+                 ++  [("fromFP_Double_ToFloat",   show x, mkThm1  (m fromSDouble :: SDouble -> SFloat)  x (                    fp2fp   x)) | x <- ds]
+                 ++  [("fromFP_Double_ToDouble",  show x, mkThm1  (m fromSDouble :: SDouble -> SDouble) x                              x ) | x <- ds]
+                 -- Neither Z3 nor MathSAT support Double->Integer/Double->Real conversion for the time being; so we skip those. See GitHub issue: #191
 
                  ++  [("reinterp_Word32_Float",  show x, mkThmC sWord32AsSFloat  x (RC.wordToFloat  x)) | x <- w32s]
                  ++  [("reinterp_Word64_Double", show x, mkThmC sWord64AsSDouble x (RC.wordToDouble x)) | x <- w64s]

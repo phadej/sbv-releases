@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Control.Query
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -13,7 +13,6 @@
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE Rank2Types          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TupleSections       #-}
 
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
@@ -226,9 +225,10 @@ getSMTResult = do cfg <- getConfig
 
 -- | Classify a model based on whether it has unbound objectives or not.
 classifyModel :: SMTConfig -> SMTModel -> SMTResult
-classifyModel cfg m = case filter (not . isRegularCV . snd) (modelObjectives m) of
-                        [] -> Satisfiable cfg m
-                        _  -> SatExtField cfg m
+classifyModel cfg m
+  | any isExt (modelObjectives m) = SatExtField cfg m
+  | True                          = Satisfiable cfg m
+  where isExt (_, v) = not $ isRegularCV v
 
 -- | Generalization of 'Data.SBV.Control.getLexicographicOptResults'
 getLexicographicOptResults :: (MonadIO m, MonadQuery m) => m SMTResult
@@ -272,7 +272,7 @@ getParetoOptResults mbN      = do cfg <- getConfig
                                     Unsat -> return (False, [])
                                     Sat   -> continue (classifyModel cfg)
                                     Unk   -> do ur <- getUnknownReason
-                                                return (False, [ProofError cfg [show ur]])
+                                                return (False, [ProofError cfg [show ur] Nothing])
 
   where continue classify = do m <- getModel
                                (limReached, fronts) <- getParetoFronts (subtract 1 <$> mbN) [m]
@@ -294,37 +294,72 @@ getModel = getModelAtIndex Nothing
 -- | Get a model stored at an index. This is likely very Z3 specific!
 getModelAtIndex :: (MonadIO m, MonadQuery m) => Maybe Int -> m SMTModel
 getModelAtIndex mbi = do
-             State{runMode} <- queryState
-             cfg    <- getConfig
-             inps   <- getQuantifiedInputs
-             obsvs  <- getObservables
-             rm     <- io $ readIORef runMode
-             assocs <- case rm of
-                         m@CodeGen         -> error $ "SBV.getModel: Model is not available in mode: " ++ show m
-                         m@Concrete        -> error $ "SBV.getModel: Model is not available in mode: " ++ show m
-                         SMTMode _ isSAT _ -> -- for "sat", display the prefix existentials. for "proof", display the prefix universals
-                                              let allModelInputs = if isSAT then takeWhile ((/= ALL) . fst) inps
-                                                                            else takeWhile ((== ALL) . fst) inps
+    State{runMode} <- queryState
+    rm     <- io $ readIORef runMode
+    case rm of
+      m@CodeGen           -> error $ "SBV.getModel: Model is not available in mode: " ++ show m
+      m@Concrete{}        -> error $ "SBV.getModel: Model is not available in mode: " ++ show m
+      SMTMode _ _ isSAT _ -> do
+          cfg   <- getConfig
+          inps  <- getQuantifiedInputs
+          obsvs <- getObservables
+          uis   <- getUIs
 
-                                                  -- are we inside a quantifier
-                                                  insideQuantifier = length allModelInputs < length inps
+           -- for "sat", display the prefix existentials. for "proof", display the prefix universals
+          let allModelInputs = if isSAT then takeWhile ((/= ALL) . fst) inps
+                                        else takeWhile ((== ALL) . fst) inps
 
-                                                  -- observables are only meaningful if we're not in a quantified context
-                                                  prefixObservables | insideQuantifier = []
-                                                                    | True             = obsvs
+              -- are we inside a quantifier
+              insideQuantifier = length allModelInputs < length inps
 
-                                                  sortByNodeId :: [(NamedSymVar, a)] -> [a]
-                                                  sortByNodeId = map snd . sortBy (compare `on` (\((SV _ nid, _), _) -> nid))
+              -- observables are only meaningful if we're not in a quantified context
+              prefixObservables | insideQuantifier = []
+                                | True             = obsvs
 
-                                                  grab (sv, nm) = ((sv, nm),) <$> getValueCV mbi sv
+              sortByNodeId :: [(SV, (String, CV))] -> [(String, CV)]
+              sortByNodeId = map snd . sortBy (compare `on` (\(SV _ nid, _) -> nid))
 
-                                              in do inputAssocs <- mapM (grab . snd) allModelInputs
-                                                    return $  sortOn fst prefixObservables
-                                                           ++ sortByNodeId [(sv, (nm, val)) | (sv@(_, nm), val) <- inputAssocs, not (isNonModelVar cfg nm)]
+              grab (sv, nm) = wrap <$> getValueCV mbi sv
+                 where wrap c = (sv, (nm, c))
 
-             return SMTModel { modelObjectives = []
-                             , modelAssocs     = assocs
-                             }
+          inputAssocs <- mapM (grab . snd) allModelInputs
+
+          let assocs =  sortOn fst prefixObservables
+                     ++ sortByNodeId [p | p@(_, (nm, _)) <- inputAssocs, not (isNonModelVar cfg nm)]
+
+          -- collect UIs if requested
+          let uiFuns = [ui | ui@(_, SBVType as) <- uis, length as > 1, satTrackUFs cfg] -- functions have at least two things in their type!
+
+          -- If there are uninterpreted functions, arrange so that z3's pretty-printer flattens things out
+          -- as cex's tend to get larger
+          unless (null uiFuns) $
+             let solverCaps = capabilities (solver cfg)
+             in case supportsFlattenedModels solverCaps of
+                  Nothing   -> return ()
+                  Just cmds -> mapM_ (send True) cmds
+
+          bindings <- let get i@(ALL, _)      = return (i, Nothing)
+                          get i@(EX, (sv, _)) = case sv `lookup` inputAssocs of
+                                                  Just (_, cv) -> return (i, Just cv)
+                                                  Nothing      -> do cv <- getValueCV mbi sv
+                                                                     return (i, Just cv)
+
+                          flipQ i@(q, sv) = case (isSAT, q) of
+                                             (True,  _ )  -> i
+                                             (False, EX)  -> (ALL, sv)
+                                             (False, ALL) -> (EX,  sv)
+
+                      in if validateModel cfg
+                         then Just <$> mapM (get . flipQ) inps
+                         else return Nothing
+
+          uivs <- mapM (\ui@(nm, t) -> (\a -> (nm, (t, a))) <$> getUIFunCVAssoc mbi ui) uiFuns
+
+          return SMTModel { modelObjectives = []
+                          , modelBindings   = bindings
+                          , modelAssocs     = assocs
+                          , modelUIFuns     = uivs
+                          }
 
 -- | Just after a check-sat is issued, collect objective values. Used
 -- internally only, not exposed to the user.
@@ -344,38 +379,17 @@ getObjectiveValues = do let cmd = "(get-objectives)"
         getObjValue :: (forall a. Maybe [String] -> m a) -> [NamedSymVar] -> SExpr -> m (Maybe (String, GeneralizedCV))
         getObjValue bailOut inputs expr =
                 case expr of
-                  EApp [_]                                            -> return Nothing            -- Happens when a soft-assertion has no associated group.
-                  EApp [ECon nm, v]                                   -> locate nm v Nothing       -- Regular case
-                  EApp [EApp [ECon "bvadd", ECon nm, ENum (a, _)], v] -> locate nm v (Just a)      -- Happens when we "adjust" a signed-bounded objective
-                  _                                                   -> dontUnderstand (show expr)
+                  EApp [_]          -> return Nothing            -- Happens when a soft-assertion has no associated group.
+                  EApp [ECon nm, v] -> locate nm v               -- Regular case
+                  _                 -> dontUnderstand (show expr)
 
-          where locate nm v mbAdjust = case listToMaybe [p | p@(sv, _) <- inputs, show sv == nm] of
-                                         Nothing               -> return Nothing -- Happens when the soft assertion has a group-id that's not one of the input names
-                                         Just (sv, actualName) -> grab sv v >>= \val -> return $ Just (actualName, signAdjust mbAdjust val)
+          where locate nm v = case listToMaybe [p | p@(sv, _) <- inputs, show sv == nm] of
+                                Nothing               -> return Nothing -- Happens when the soft assertion has a group-id that's not one of the input names
+                                Just (sv, actualName) -> grab sv v >>= \val -> return $ Just (actualName, val)
 
                 dontUnderstand s = bailOut $ Just [ "Unable to understand solver output."
                                                   , "While trying to process: " ++ s
                                                   ]
-
-                signAdjust :: Maybe Integer -> GeneralizedCV -> GeneralizedCV
-                signAdjust Nothing    v = v
-                signAdjust (Just adj) e = goG e
-                  where goG :: GeneralizedCV -> GeneralizedCV
-                        goG (ExtendedCV ecv) = ExtendedCV $ goE ecv
-                        goG (RegularCV  cv)  = RegularCV  $ go cv
-
-                        goE :: ExtCV -> ExtCV
-                        goE (Infinite k)      = Infinite k
-                        goE (Epsilon  k)      = Epsilon  k
-                        goE (Interval  lo hi) = Interval  (goE lo) (goE hi)
-                        goE (BoundedCV cv)    = BoundedCV (go cv)
-                        goE (AddExtCV  a b)   = AddExtCV  (goE a) (goE b)
-                        goE (MulExtCV  a b)   = MulExtCV  (goE a) (goE b)
-
-                        go :: CV -> CV
-                        go cv = case (kindOf cv, cvVal cv) of
-                                  (k@(KBounded True _), CInteger v) -> normCV $ CV k (CInteger (v - adj))
-                                  _                                 -> error $ "SBV.getObjValue: Unexpected cv received! " ++ show cv
 
                 grab :: SV -> SExpr -> m GeneralizedCV
                 grab s topExpr
@@ -721,6 +735,9 @@ SBV a |-> v = case literal v of
                 r                      -> error $ "Data.SBV: Impossible happened in |->: Cannot construct a CV with literal: " ++ show r
 
 -- | Generalization of 'Data.SBV.Control.mkSMTResult'
+-- NB. This function does not allow users to create interpretations for UI-Funs. But that's
+-- probably not a good idea anyhow. Also, if you use the 'validateModel' feature, SBV will
+-- fail on models returned via this function.
 mkSMTResult :: (MonadIO m, MonadQuery m) => [Assignment] -> m SMTResult
 mkSMTResult asgns = do
              QueryState{queryConfig} <- getQueryState
@@ -782,7 +799,11 @@ mkSMTResult asgns = do
              assocs <- inNewContext grabValues
 
              let m = SMTModel { modelObjectives = []
+                              , modelBindings   = Nothing
                               , modelAssocs     = assocs
+                              , modelUIFuns     = []
                               }
 
              return $ Satisfiable queryConfig m
+
+{-# ANN getModelAtIndex ("HLint: ignore Use forM_"          :: String) #-}

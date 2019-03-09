@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Utils.SBVTestFramework
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -60,7 +60,7 @@ import Data.Maybe (fromMaybe, catMaybes)
 
 import System.FilePath ((</>), (<.>))
 
-import Data.SBV.Internals (runSymbolic, Symbolic, Result, SBVRunMode(..), IStage(..), SBV(..), SVal(..), showModel, SMTModel(..))
+import Data.SBV.Internals (runSymbolic, Symbolic, Result, SBVRunMode(..), IStage(..), SBV(..), SVal(..), showModel, SMTModel(..), QueryContext(..))
 
 ---------------------------------------------------------------------------------------
 -- Test environment; continuous integration
@@ -161,14 +161,21 @@ doTheDiff nm ref new act = goldenTest nm (BS.readFile ref) (act >> BS.readFile n
          cleanUp = BS.filter (/= slashr)
          slashr  = fromIntegral (ord '\r')
 
--- | Count the number of models
+-- | Count the number of models. It's not kosher to
+-- call this function if you provided a max-model count
+-- that was hit, or the search was stopped because the
+-- solver said 'Unknown' at some point.
 numberOfModels :: Provable a => a -> IO Int
-numberOfModels p = do AllSatResult (_, _, rs) <- allSat p
-                      return $ length rs
+numberOfModels p = do AllSatResult (maxHit, _, unk, rs) <- allSat p
+                      let l = length rs
+                      case (unk, maxHit) of
+                        (True, _)   -> error $ "Data.SBV.numberOfModels: Search was stopped because solver said 'Unknown'. At this point, we saw: " ++ show l ++ " model(s)."
+                        (_,   True) -> error $ "Data.SBV.numberOfModels: Search was stopped because the user-specified max-model count was hit at " ++ show l ++ " model(s)."
+                        _           -> return l
 
 -- | Symbolicly run a SAT instance using the default config
 runSAT :: Symbolic a -> IO Result
-runSAT cmp = snd <$> runSymbolic (SMTMode ISetup True defaultSMTCfg) cmp
+runSAT cmp = snd <$> runSymbolic (SMTMode QueryInternal ISetup True defaultSMTCfg) cmp
 
 -- | Turn provable to an assertion, theorem case
 assertIsThm :: Provable a => a -> Assertion
@@ -187,7 +194,7 @@ assertIsntSat :: Provable a => a -> Assertion
 assertIsntSat p = assert (fmap not (isSatisfiable p))
 
 -- | Quick-check a unary function, creating one version for constant folding, and another for solver
-qc1 :: (SymVal a, SymVal b, Show a, QC.Arbitrary a, SMTValue b) => String -> (a -> b) -> (SBV a -> SBV b) -> [TestTree]
+qc1 :: (Eq a, SymVal a, SymVal b, Show a, QC.Arbitrary a, Eq b, SMTValue b) => String -> (a -> b) -> (SBV a -> SBV b) -> [TestTree]
 qc1 nm opC opS = [cf, sm]
    where cf = QC.testProperty (nm ++ ".constantFold") $ do
                         i <- free "i"
@@ -228,8 +235,8 @@ qc1 nm opC opS = [cf, sm]
                                    ]
 
                             model = case result of
-                                      Right v -> showModel defaultSMTCfg (SMTModel [] (vals ++ [getCV "Result" (literal v)]))
-                                      Left  e -> showModel defaultSMTCfg (SMTModel [] vals) ++ "\n" ++ e
+                                      Right v -> showModel defaultSMTCfg (SMTModel [] Nothing (vals ++ [getCV "Result" (literal v)]) [])
+                                      Left  e -> showModel defaultSMTCfg (SMTModel [] Nothing vals []) ++ "\n" ++ e
 
                         QC.monitor (QC.counterexample model)
 
@@ -239,7 +246,7 @@ qc1 nm opC opS = [cf, sm]
 
 
 -- | Quick-check a binary function, creating one version for constant folding, and another for solver
-qc2 :: (SymVal a, SymVal b, SymVal c, Show a, Show b, QC.Arbitrary a, QC.Arbitrary b, SMTValue c) => String -> (a -> b -> c) -> (SBV a -> SBV b -> SBV c) -> [TestTree]
+qc2 :: (Eq a, Eq b, SymVal a, SymVal b, SymVal c, Show a, Show b, QC.Arbitrary a, QC.Arbitrary b, Eq c, SMTValue c) => String -> (a -> b -> c) -> (SBV a -> SBV b -> SBV c) -> [TestTree]
 qc2 nm opC opS = [cf, sm]
    where cf = QC.testProperty (nm ++ ".constantFold") $ do
                         i1 <- free "i1"
@@ -286,8 +293,8 @@ qc2 nm opC opS = [cf, sm]
                                    ]
 
                             model = case result of
-                                      Right v -> showModel defaultSMTCfg (SMTModel [] (vals ++ [getCV "Result" (literal v)]))
-                                      Left  e -> showModel defaultSMTCfg (SMTModel [] vals) ++ "\n" ++ e
+                                      Right v -> showModel defaultSMTCfg (SMTModel [] Nothing (vals ++ [getCV "Result" (literal v)]) [])
+                                      Left  e -> showModel defaultSMTCfg (SMTModel [] Nothing vals []) ++ "\n" ++ e
 
                         QC.monitor (QC.counterexample model)
 

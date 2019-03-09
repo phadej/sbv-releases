@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -19,7 +19,7 @@
 --
 -- >>> prove $ \x -> x `shiftL` 2 .== 2 * (x :: SWord8)
 -- Falsifiable. Counter-example:
---   s0 = 64 :: Word8
+--   s0 = 32 :: Word8
 --
 -- The function 'prove' has the following type:
 --
@@ -52,6 +52,14 @@
 --
 --   * 'SList': Symbolic lists (which can be nested)
 --
+--   * 'STuple', 'STuple2', 'STuple3', .., 'STuple8' : Symbolic tuples (upto 8-tuples, can be nested)
+--
+--   * 'SEither': Symbolic sums
+--
+--   * 'SMaybe': Symbolic optional values
+--
+--   * 'SSet': Symbolic sets
+--
 --   * 'SArray', 'SFunArray': Flat arrays of symbolic values.
 --
 --   * Symbolic polynomials over GF(2^n), polynomial arithmetic, and CRCs.
@@ -60,6 +68,10 @@
 --     defined SMT-Lib axioms.
 --
 --   * Uninterpreted sorts, and proofs over such sorts, potentially with axioms.
+--
+--   * Model validation: SBV can validate models returned by solvers, which allows
+--     for protection against bugs in SMT solvers and SBV itself. (See the 'validateModel'
+--     parameter.)
 --
 -- The user can construct ordinary Haskell programs using these types, which behave
 -- very similar to their concrete counterparts. In particular these types belong to the
@@ -145,18 +157,48 @@ module Data.SBV (
   , SList
   -- ** Tuples
   -- $tuples
-  , STuple2, STuple3, STuple4, STuple5, STuple6, STuple7, STuple8
+  , STuple, STuple2, STuple3, STuple4, STuple5, STuple6, STuple7, STuple8
+  -- ** Sum types
+  , SMaybe, SEither
+  -- ** Sets
+  , RCSet(..), SSet
   -- * Arrays of symbolic values
   , SymArray(readArray, writeArray, mergeArrays), newArray_, newArray, SArray, SFunArray
 
   -- * Creating symbolic values
   -- ** Single value
   -- $createSym
-  , sBool, sWord8, sWord16, sWord32, sWord64, sInt8, sInt16, sInt32, sInt64, sInteger, sReal, sFloat, sDouble, sChar, sString, sList, sTuple
+  , sBool, sBool_
+  , sWord8, sWord8_, sWord16, sWord16_, sWord32, sWord32_, sWord64, sWord64_
+  , sInt8,  sInt8_,  sInt16,  sInt16_,  sInt32,  sInt32_,  sInt64,  sInt64_
+  , sInteger, sInteger_
+  , sReal, sReal_
+  , sFloat, sFloat_
+  , sDouble, sDouble_
+  , sChar, sChar_
+  , sString, sString_
+  , sList, sList_
+  , sTuple, sTuple_
+  , sEither, sEither_
+  , sMaybe, sMaybe_
+  , sSet, sSet_
 
   -- ** List of values
   -- $createSyms
-  , sBools, sWord8s, sWord16s, sWord32s, sWord64s, sInt8s, sInt16s, sInt32s, sInt64s, sIntegers, sReals, sFloats, sDoubles, sChars, sStrings, sLists, sTuples
+  , sBools
+  , sWord8s, sWord16s, sWord32s, sWord64s
+  , sInt8s,  sInt16s,  sInt32s,  sInt64s
+  , sIntegers
+  , sReals
+  , sFloats
+  , sDoubles
+  , sChars
+  , sStrings
+  , sLists
+  , sTuples
+  , sEithers
+  , sMaybes
+  , sSets
 
   -- * Symbolic Equality and Comparisons
   , EqSymbolic(..), OrdSymbolic(..), Equality(..)
@@ -172,7 +214,7 @@ module Data.SBV (
   , sFromIntegral
   -- ** Shifts and rotates
   -- $shiftRotate
-  , sShiftLeft, sShiftRight, sRotateLeft, sRotateRight, sSignedShiftArithRight
+  , sShiftLeft, sShiftRight, sRotateLeft, sBarrelRotateLeft, sRotateRight, sBarrelRotateRight, sSignedShiftArithRight
   -- ** Finite bit-vector operations
   , SFiniteBits(..)
   -- ** Splitting, joining, and extending
@@ -184,7 +226,7 @@ module Data.SBV (
   -- ** Rounding modes
   , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero, sRNE, sRNA, sRTP, sRTN, sRTZ
   -- ** Conversion to/from floats
-  , IEEEFloatConvertable(..)
+  , IEEEFloatConvertible(..)
   -- ** Bit-pattern conversions
   , sFloatAsSWord32, sWord32AsSFloat, sDoubleAsSWord64, sWord64AsSDouble, blastSFloat, blastSDouble
 
@@ -240,9 +282,9 @@ module Data.SBV (
   -- ** Multiple optimization goals
   -- $multiOpt
   , OptimizeStyle(..)
-  -- ** Objectives
+  -- ** Objectives and Metrics
   , Objective(..)
-  , Metric, minimize, maximize
+  , Metric(..), minimize, maximize
   -- ** Soft assertions
   -- $softAssertions
   , assertWithPenalty , Penalty(..)
@@ -303,14 +345,15 @@ import Data.SBV.Core.Data       hiding (addAxiom, forall, forall_,
                                         newArray, newArray_)
 import Data.SBV.Core.Model      hiding (assertWithPenalty, minimize, maximize,
                                         forall, forall_, exists, exists_,
-                                        solve, sBool, sBools, sChar, sChars,
-                                        sDouble, sDoubles, sFloat, sFloats,
-                                        sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s,
-                                        sInt64, sInt64s, sInteger, sIntegers,
-                                        sList, sLists, sTuple, sTuples,
-                                        sReal, sReals, sString, sStrings,
-                                        sWord8, sWord8s, sWord16, sWord16s,
-                                        sWord32, sWord32s, sWord64, sWord64s)
+                                        solve, sBool, sBool_, sBools, sChar, sChar_, sChars,
+                                        sDouble, sDouble_, sDoubles, sFloat, sFloat_, sFloats,
+                                        sInt8, sInt8_, sInt8s, sInt16, sInt16_, sInt16s, sInt32, sInt32_, sInt32s,
+                                        sInt64, sInt64_, sInt64s, sInteger, sInteger_, sIntegers,
+                                        sList, sList_, sLists, sTuple, sTuple_, sTuples,
+                                        sReal, sReal_, sReals, sString, sString_, sStrings,
+                                        sWord8, sWord8_, sWord8s, sWord16, sWord16_, sWord16s,
+                                        sWord32, sWord32_, sWord32s, sWord64, sWord64_, sWord64s,
+                                        sMaybe, sMaybe_, sMaybes, sEither, sEither_, sEithers, sSet, sSet_, sSets)
 import Data.SBV.Core.Floating
 import Data.SBV.Core.Splittable
 import Data.SBV.Core.Symbolic   (MonadSymbolic(..), SymbolicT)
@@ -418,8 +461,8 @@ We can use 'safe' to statically see if such a violation is possible before we us
 
 >>> safe (sub :: SInt8 -> SInt8 -> SInt8)
 [sub: x >= y must hold!: Violated. Model:
-  s0 = 0 :: Int8
-  s1 = 1 :: Int8]
+  s0 = 30 :: Int8
+  s1 = 32 :: Int8]
 
 What happens if we make sure to arrange for this invariant? Consider this version:
 
@@ -582,7 +625,8 @@ modules to make any sensible use of the SBV functionality.
 
 {- $createSym
 These functions simplify declaring symbolic variables of various types. Strictly speaking, they are just synonyms
-for 'free' (specialized at the given type), but they might be easier to use.
+for 'free' (specialized at the given type), but they might be easier to use. We provide both the named and anonymous
+versions, latter with the underscore suffix.
 -}
 
 {- $createSyms

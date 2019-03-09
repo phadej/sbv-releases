@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Internals
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -9,11 +9,17 @@
 -- Low level functions to access the SBV infrastructure, for developers who
 -- want to build further tools on top of SBV. End-users of the library
 -- should not need to use this module.
+--
+-- NB. There are various coding invariants in SBV that are maintained
+-- throughout the code. Indiscriminate use of functions in this module
+-- can break those invariants. So, you are on your own if you do utilize
+-- the functions here. (Unfortunately, what exactly those invariants are
+-- is a very good but also a very difficult question to answer!)
 -----------------------------------------------------------------------------
 
 module Data.SBV.Internals (
   -- * Running symbolic programs /manually/
-    Result(..), SBVRunMode(..), IStage(..)
+    Result(..), SBVRunMode(..), IStage(..), QueryContext(..)
 
   -- * Solver capabilities
   , SolverCapabilities(..)
@@ -44,15 +50,16 @@ module Data.SBV.Internals (
   , sendStringToSolver, sendRequestToSolver, retrieveResponseFromSolver
 
   -- * Defining new metrics
-  , addSValOptGoal
-
+  , addSValOptGoal, sFloatAsComparableSWord32, sDoubleAsComparableSWord64
   ) where
 
 import Control.Monad.IO.Class (MonadIO)
 
 import Data.SBV.Core.Data
 import Data.SBV.Core.Model      (genLiteral, genFromCV, genMkSymVar, liftQRem, liftDMod)
-import Data.SBV.Core.Symbolic   (IStage(..), MonadQuery, addSValOptGoal, registerKind)
+import Data.SBV.Core.Symbolic   (IStage(..), QueryContext(..), MonadQuery, addSValOptGoal, registerKind)
+
+import Data.SBV.Core.Floating   (sFloatAsComparableSWord32, sDoubleAsComparableSWord64)
 
 import Data.SBV.Compilers.C       (compileToC', compileToCLib')
 import Data.SBV.Compilers.CodeGen

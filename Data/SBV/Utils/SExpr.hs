@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Utils.SExpr
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -11,17 +11,21 @@
 
 {-# LANGUAGE BangPatterns #-}
 
-module Data.SBV.Utils.SExpr (SExpr(..), parenDeficit, parseSExpr) where
+module Data.SBV.Utils.SExpr (SExpr(..), parenDeficit, parseSExpr, parseSExprFunction) where
 
-import Data.Bits  (setBit, testBit)
-import Data.Word  (Word32, Word64)
-import Data.Char  (isDigit, ord, isSpace)
-import Data.List  (isPrefixOf)
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Bits   (setBit, testBit)
+import Data.Char   (isDigit, ord, isSpace)
+import Data.Either (partitionEithers)
+import Data.List   (isPrefixOf)
+import Data.Maybe  (fromMaybe, listToMaybe)
+import Data.Word   (Word32, Word64)
+
 import Numeric    (readInt, readDec, readHex, fromRat)
 
 import Data.SBV.Core.AlgReals
 import Data.SBV.Core.Data (nan, infinity, RoundingMode(..))
+
+import Data.SBV.Utils.Numeric (fpIsEqualObjectH)
 
 import Data.Numbers.CrackNum (wordToFloat, wordToDouble)
 
@@ -236,3 +240,146 @@ constantMap n = fromMaybe n (listToMaybe [to | (from, to) <- special, n `elem` f
                  , (["RTN", "roundTowardNegative"],    show RoundTowardNegative)
                  , (["RTZ", "roundTowardZero"],        show RoundTowardZero)
                  ]
+
+-- | Parse a function like value. These come in two flavors: Either in the form of
+-- a store-expression or a lambda-expression. So we handle both here.
+parseSExprFunction :: SExpr -> Maybe (Either String ([([SExpr], SExpr)], SExpr))
+parseSExprFunction e
+  | Just r <- parseLambdaExpression  e = Just (Right r)
+  | Just r <- parseStoreAssociations e = Just r
+  | True                               = Nothing         -- out-of luck. NB. This is where we would add support for other solvers!
+
+-- | Parse a lambda expression, most likely z3 specific. There's some guess work
+-- involved here regarding how z3 produces lambda-expressions; while we try to
+-- be flexible, this is certainly not a full fledged parser. But hopefully it'll
+-- cover everything z3 will throw at it.
+parseLambdaExpression :: SExpr -> Maybe ([([SExpr], SExpr)], SExpr)
+parseLambdaExpression funExpr = case funExpr of
+                                  EApp [ECon "lambda", EApp params, body] -> mapM getParam params >>= flip lambda body >>= chainAssigns
+                                  _                                       -> Nothing
+  where getParam (EApp [ECon v, _]) = Just v
+        getParam _                  = Nothing
+
+        lambda :: [String] -> SExpr -> Maybe [Either ([SExpr], SExpr) SExpr]
+        lambda params body = reverse <$> go [] body
+          where true  = ENum (1, Nothing)
+                false = ENum (0, Nothing)
+
+                go :: [Either ([SExpr], SExpr) SExpr] -> SExpr -> Maybe [Either ([SExpr], SExpr) SExpr]
+                go sofar (EApp [ECon "ite", selector, thenBranch, elseBranch])
+                  = do s  <- select selector
+                       tB <- go [] thenBranch
+                       case cond s tB of
+                          Just sv -> go (Left sv : sofar) elseBranch
+                          _       -> Nothing
+
+                -- z3 sometimes puts together a bunch of booleans as final expression,
+                -- see if we can catch that.
+                go sofar e
+                 | Just s <- select e
+                 = go (Left (s, true) : sofar) false
+
+                -- Otherwise, just treat it as an "unknown" arbitrary expression
+                -- as the default. It could be something arbitrary of course, but it's
+                -- too complicated to parse; and hopefully this is good enogh.
+                go sofar e = Just $ Right e : sofar
+
+                cond :: [SExpr] -> [Either ([SExpr], SExpr) SExpr] -> Maybe ([SExpr], SExpr)
+                cond s [Right v] = Just (s, v)
+                cond _ _         = Nothing
+
+                -- select takes the condition of an ite, and returns precisely what match is done to the parameters
+                select :: SExpr -> Maybe [SExpr]
+                select e
+                   | Just dict <- build e [] = mapM (`lookup` dict) params
+                   | True                    = Nothing
+                  where -- build a dictionary of assignments from the scrutinee
+                        build :: SExpr -> [(String, SExpr)] -> Maybe [(String, SExpr)]
+                        build (EApp (ECon "and" : rest)) sofar = let next _ Nothing  = Nothing
+                                                                     next c (Just x) = build c x
+                                                                 in foldr next (Just sofar) rest
+
+                        build expr sofar | Just (v, r) <- grok expr, v `elem` params = Just $ (v, r) : sofar
+                                         | True                                      = Nothing
+
+                        -- See if we can figure out what z3 is telling us; hopefully this
+                        -- mapping covers everything we can see:
+                        grok (EApp [ECon "=", ECon v, r]) = Just (v, r)
+                        grok (EApp [ECon "=", r, ECon v]) = Just (v, r)
+                        grok (EApp [ECon "not", ECon v])  = Just (v, false) -- boolean negation, require it to be false
+                        grok (ECon v)                     = Just (v, true)  -- boolean identity, require it to be true
+
+                        -- Tough luck, we couldn't understand:
+                        grok _ = Nothing
+
+-- | Parse a series of associations in the array notation, things that look like:
+--
+--     (store (store ((as const Array) 12) 3 5 9) 5 6 75)
+--
+-- This is (most likely) entirely Z3 specific. So, we might have to tweak it for other
+-- solvers; though it isn't entirely clear how to do that as we do not know what solver
+-- we're using here. The trick is to handle all of possible SExpr's we see.
+-- We'll cross that bridge when we get to it.
+--
+-- NB. In case there's no "constraint" on the UI, Z3 produces the self-referential model:
+--
+--    (x (_ as-array x))
+--
+-- So, we specifically handle that here, by returning a Left of that name.
+parseStoreAssociations :: SExpr -> Maybe (Either String ([([SExpr], SExpr)], SExpr))
+parseStoreAssociations (EApp [ECon "_", ECon "as-array", ECon nm]) = Just $ Left nm
+parseStoreAssociations e                                           = Right <$> (chainAssigns =<< vals e)
+    where vals :: SExpr -> Maybe [Either ([SExpr], SExpr) SExpr]
+          vals (EApp [EApp [ECon "as", ECon "const", ECon "Array"],            defVal]) = return [Right defVal]
+          vals (EApp [EApp [ECon "as", ECon "const", EApp (ECon "Array" : _)], defVal]) = return [Right defVal]
+          vals (EApp (ECon "store" : prev : argsVal)) | length argsVal >= 2             = do rest <- vals prev
+                                                                                             return $ Left (init argsVal, last argsVal) : rest
+          vals _                                                                        = Nothing
+
+-- | Turn a sequence of left-right chain assignments (condition + free) into a single chain
+chainAssigns :: [Either ([SExpr], SExpr) SExpr] -> Maybe ([([SExpr], SExpr)], SExpr)
+chainAssigns chain = regroup $ partitionEithers chain
+  where regroup (vs, [d]) = Just (checkDup vs, d)
+        regroup _         = Nothing
+
+        -- If we get into a case like this:
+        --
+        --     (store (store a 1 2) 1 3)
+        --
+        -- then we need to drop the 1->2 assignment!
+        --
+        -- The way we parse these, the first assignment wins.
+        checkDup :: [([SExpr], SExpr)] -> [([SExpr], SExpr)]
+        checkDup []              = []
+        checkDup (a@(key, _):as) = a : checkDup [r | r@(key', _) <- as, not (key `sameKey` key')]
+
+        sameKey :: [SExpr] -> [SExpr] -> Bool
+        sameKey as bs
+          | length as == length bs = and $ zipWith same as bs
+          | True                   = error $ "Data.SBV: Differing length of key received in chainAssigns: " ++ show (as, bs)
+
+        -- We don't want to derive Eq; as this is more careful on floats and such
+        same :: SExpr -> SExpr -> Bool
+        same x y = case (x, y) of
+                     (ECon a,      ECon b)       -> a == b
+                     (ENum (i, _), ENum (j, _))  -> i == j
+                     (EReal a,     EReal b)      -> algRealStructuralEqual a b
+                     (EFloat  f1,  EFloat  f2)   -> fpIsEqualObjectH f1 f2
+                     (EDouble d1,  EDouble d2)   -> fpIsEqualObjectH d1 d2
+                     (EApp as,     EApp bs)      -> length as == length bs && and (zipWith same as bs)
+                     (e1,          e2)           -> if eRank e1 == eRank e2
+                                                    then error $ "Data.SBV: You've found a bug in SBV! Please report: SExpr(same): " ++ show (e1, e2)
+                                                    else False
+        -- Defensive programming: It's too long to list all pair up, so we use this function and
+        -- GHC's pattern-match completion warning to catch cases we might've forgotten. If
+        -- you ever get the error line above fire, because you must've disabled the pattern-match
+        -- completion check warning! Shame on you.
+        eRank :: SExpr -> Int
+        eRank ECon{}    = 0
+        eRank ENum{}    = 1
+        eRank EReal{}   = 2
+        eRank EFloat{}  = 3
+        eRank EDouble{} = 4
+        eRank EApp{}    = 5
+
+{-# ANN chainAssigns ("HLint: ignore Redundant if" :: String) #-}

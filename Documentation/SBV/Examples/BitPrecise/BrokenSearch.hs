@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Documentation.SBV.Examples.BitPrecise.BrokenSearch
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -20,13 +20,13 @@ import Data.SBV.Tools.Overflow
 --
 -- >>> checkArithOverflow midPointBroken
 -- Documentation/SBV/Examples/BitPrecise/BrokenSearch.hs:33:28:+!: SInt32 addition overflows: Violated. Model:
---   low  = 1073741824 :: Int32
---   high = 1073742336 :: Int32
+--   low  = 2147483583 :: Int32
+--   high = 2147483647 :: Int32
 --
 -- Indeed:
 --
--- >>> (1073741824 + 1073742336) `div` (2::Int32)
--- -1073741568
+-- >>> (2147483583 + 2147483647) `div` (2::Int32)
+-- -33
 --
 -- giving us a negative mid-point value!
 midPointBroken :: SInt32 -> SInt32 -> SInt32
@@ -101,3 +101,5 @@ checkCorrectMidValue f = prove $ do low  <- sInt32 "low"
                                         mid   = f low high
 
                                     return $ sFromIntegral mid .== mid'
+
+{-# ANN module ("HLint: ignore Reduce duplication" :: String) #-}

@@ -1,7 +1,8 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.List
--- Author    : Joel Burget, Levent Erkok
+-- Copyright : (c) Joel Burget
+--                 Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -22,14 +23,14 @@ module Data.SBV.List (
         -- * Length, emptiness
           length, null
         -- * Deconstructing/Reconstructing
-        , head, tail, uncons, init, singleton, listToListAt, elemAt, (.!!), implode, concat, (.:), nil, (.++)
+        , head, tail, uncons, init, singleton, listToListAt, elemAt, (.!!), implode, concat, (.:), snoc, nil, (.++)
         -- * Containment
-        , isInfixOf, isSuffixOf, isPrefixOf
+        , elem, notElem, isInfixOf, isSuffixOf, isPrefixOf
         -- * Sublists
         , take, drop, subList, replace, indexOf, offsetIndexOf
         ) where
 
-import Prelude hiding (head, tail, init, length, take, drop, concat, null)
+import Prelude hiding (head, tail, init, length, take, drop, concat, null, elem, notElem)
 import qualified Prelude as P
 
 import Data.SBV.Core.Data hiding (StrOp(..))
@@ -72,7 +73,7 @@ null l
   | Just cs <- unliteral l
   = literal (P.null cs)
   | True
-  = l .== literal []
+  = length l .== 0
 
 -- | @`head`@ returns the first element of a list. Unspecified if the list is empty.
 --
@@ -127,7 +128,7 @@ singleton = lift1 SeqUnit (Just (: []))
 -- Q.E.D.
 -- >>> sat $ \(l :: SList Word16) -> length l .>= 2 .&& listToListAt l 0 ./= listToListAt l (length l - 1)
 -- Satisfiable. Model:
---   s0 = [0,0,32] :: [Word16]
+--   s0 = [0,0,8192] :: [Word16]
 listToListAt :: SymVal a => SList a -> SInteger -> SList a
 listToListAt s offset = subList s offset 1
 
@@ -146,14 +147,27 @@ elemAt l i
   = SBV (SVal kElem (Right (cache (y (l `listToListAt` i)))))
   where kElem = kindOf (Proxy @a)
         kSeq  = KList kElem
+
         -- This is trickier than it needs to be, but necessary since there's
         -- no SMTLib function to extract the element from a list. Instead,
         -- we form a singleton list, and assert that it is equivalent to
         -- the extracted value. See <http://github.com/Z3Prover/z3/issues/1302>
-        y si st = do e <- internalVariable st kElem
+        y si st = do -- grab an internal variable and make a unit list out of it
+                     e <- internalVariable st kElem
                      es <- newExpr st kSeq (SBVApp (SeqOp SeqUnit) [e])
-                     let esSBV = SBV (SVal kSeq (Right (cache (\_ -> return es))))
-                     internalConstraint st False [] $ unSBV $ length l .> i .=> esSBV .== si
+
+                     -- Create the condition that it is equal to si
+                     li <- sbvToSV st si
+                     eq <- newExpr st KBool (SBVApp Equal [es, li])
+
+                     -- Gotta make sure we do this only when length is at least > i
+                     caseTooShort <- sbvToSV st (length l .<= i)
+                     require      <- newExpr st KBool (SBVApp Or [caseTooShort, eq])
+
+                     -- register the constraint:
+                     internalConstraint st False [] $ SVal KBool $ Right $ cache $ \_ -> return require
+
+                     -- We're good to go:
                      return e
 
 -- | Short cut for 'elemAt'
@@ -182,6 +196,10 @@ infixr 5 .:
 (.:) :: SymVal a => SBV a -> SList a -> SList a
 a .: as = singleton a .++ as
 
+-- | Append an element
+snoc :: SymVal a => SList a -> SBV a -> SList a
+as `snoc` a = as .++ singleton a
+
 -- | Empty list. This value has the property that it's the only list with length 0:
 --
 -- >>> prove $ \(l :: SList Integer) -> length l .== 0 .<=> l .== nil
@@ -200,13 +218,21 @@ infixr 5 .++
 (.++) :: SymVal a => SList a -> SList a -> SList a
 (.++) = concat
 
+-- | @`elem` e l@. Does @l@ contain the element @e@?
+elem :: (Eq a, SymVal a) => SBV a -> SList a -> SBool
+e `elem` l = singleton e `isInfixOf` l
+
+-- | @`notElem` e l@. Does @l@ not contain the element @e@?
+notElem :: (Eq a, SymVal a) => SBV a -> SList a -> SBool
+e `notElem` l = sNot (e `elem` l)
+
 -- | @`isInfixOf` sub l@. Does @l@ contain the subsequence @sub@?
 --
 -- >>> prove $ \(l1 :: SList Integer) l2 l3 -> l2 `isInfixOf` (l1 .++ l2 .++ l3)
 -- Q.E.D.
 -- >>> prove $ \(l1 :: SList Integer) l2 -> l1 `isInfixOf` l2 .&& l2 `isInfixOf` l1 .<=> l1 .== l2
 -- Q.E.D.
-isInfixOf :: SymVal a => SList a -> SList a -> SBool
+isInfixOf :: (Eq a, SymVal a) => SList a -> SList a -> SBool
 sub `isInfixOf` l
   | isConcretelyEmpty sub
   = literal True
@@ -219,7 +245,7 @@ sub `isInfixOf` l
 -- Q.E.D.
 -- >>> prove $ \(l1 :: SList Integer) l2 -> l1 `isPrefixOf` l2 .=> subList l2 0 (length l1) .== l1
 -- Q.E.D.
-isPrefixOf :: SymVal a => SList a -> SList a -> SBool
+isPrefixOf :: (Eq a, SymVal a) => SList a -> SList a -> SBool
 pre `isPrefixOf` l
   | isConcretelyEmpty pre
   = literal True
@@ -232,7 +258,7 @@ pre `isPrefixOf` l
 -- Q.E.D.
 -- >>> prove $ \(l1 :: SList Word16) l2 -> l1 `isSuffixOf` l2 .=> subList l2 (length l2 - length l1) (length l1) .== l1
 -- Q.E.D.
-isSuffixOf :: SymVal a => SList a -> SList a -> SBool
+isSuffixOf :: (Eq a, SymVal a) => SList a -> SList a -> SBool
 suf `isSuffixOf` l
   | isConcretelyEmpty suf
   = literal True
@@ -292,7 +318,7 @@ subList l offset len
 -- Q.E.D.
 -- >>> prove $ \(l1 :: SList Integer) l2 l3 -> length l2 .> length l1 .=> replace l1 l2 l3 .== l1
 -- Q.E.D.
-replace :: SymVal a => SList a -> SList a -> SList a -> SList a
+replace :: (Eq a, SymVal a) => SList a -> SList a -> SList a -> SList a
 replace l src dst
   | Just b <- unliteral src, P.null b   -- If src is null, simply prepend
   = dst .++ l
@@ -315,11 +341,11 @@ replace l src dst
 -- Q.E.D.
 -- >>> prove $ \(l :: SList Word16) i -> i .> 0 .&& i .< length l .=> indexOf l (subList l i 1) .== i
 -- Falsifiable. Counter-example:
---   s0 = [32,0,0] :: [Word16]
---   s1 =        2 :: Integer
+--   s0 = [2048,0,0,0,0,0] :: [Word16]
+--   s1 =                3 :: Integer
 -- >>> prove $ \(l1 :: SList Word16) l2 -> length l2 .> length l1 .=> indexOf l1 l2 .== -1
 -- Q.E.D.
-indexOf :: SymVal a => SList a -> SList a -> SInteger
+indexOf :: (Eq a, SymVal a) => SList a -> SList a -> SInteger
 indexOf s sub = offsetIndexOf s sub 0
 
 -- | @`offsetIndexOf` l sub offset@. Retrieves first position of @sub@ at or
@@ -331,7 +357,7 @@ indexOf s sub = offsetIndexOf s sub 0
 -- Q.E.D.
 -- >>> prove $ \(l :: SList Int8) sub i -> i .> length l .=> offsetIndexOf l sub i .== -1
 -- Q.E.D.
-offsetIndexOf :: SymVal a => SList a -> SList a -> SInteger -> SInteger
+offsetIndexOf :: (Eq a, SymVal a) => SList a -> SList a -> SInteger -> SInteger
 offsetIndexOf s sub offset
   | Just c <- unliteral s        -- a constant list
   , Just n <- unliteral sub      -- a constant search pattern

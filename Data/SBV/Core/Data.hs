@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Core.Data
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -23,17 +23,18 @@
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
-{-# LANGUAGE TypeSynonymInstances  #-}
 
 module Data.SBV.Core.Data
  ( SBool, SWord8, SWord16, SWord32, SWord64
  , SInt8, SInt16, SInt32, SInt64, SInteger, SReal, SFloat, SDouble, SChar, SString, SList
- , STuple2, STuple3, STuple4, STuple5, STuple6, STuple7, STuple8
+ , SEither, SMaybe
+ , STuple, STuple2, STuple3, STuple4, STuple5, STuple6, STuple7, STuple8
+ , RCSet(..), SSet
  , nan, infinity, sNaN, sInfinity, RoundingMode(..), SRoundingMode
  , sRoundNearestTiesToEven, sRoundNearestTiesToAway, sRoundTowardPositive, sRoundTowardNegative, sRoundTowardZero
  , sRNE, sRNA, sRTP, sRTN, sRTZ
  , SymVal(..)
- , CV(..), CVal(..), AlgReal(..), AlgRealPoly, ExtCV(..), GeneralizedCV(..), isRegularCV, cvSameType, cvToBool
+ , CV(..), CVal(..), AlgReal(..), AlgRealPoly(..), ExtCV(..), GeneralizedCV(..), isRegularCV, cvSameType, cvToBool
  , mkConstCV ,liftCV2, mapCV, mapCV2
  , SV(..), trueSV, falseSV, trueCV, falseCV, normCV
  , SVal(..)
@@ -161,7 +162,21 @@ type SString = SBV String
 -- Note that lists can be nested, i.e., we do allow lists of lists of ... items.
 type SList a = SBV [a]
 
--- | Symbolic 2-tuple.
+-- | Symbolic 'Either'
+type SEither a b = SBV (Either a b)
+
+-- | Symbolic 'Maybe'
+type SMaybe a = SBV (Maybe a)
+
+-- | Symbolic 'Data.Set'. Note that we use 'RCSet', which supports
+-- both regular sets and complements, i.e., those obtained from the
+-- universal set (of the right type) by removing elements.
+type SSet a = SBV (RCSet a)
+
+-- | Symbolic 2-tuple. NB. 'STuple' and 'STuple2' are equivalent.
+type STuple a b = SBV (a, b)
+
+-- | Symbolic 2-tuple. NB. 'STuple' and 'STuple2' are equivalent.
 type STuple2 a b = SBV (a, b)
 
 -- | Symbolic 3-tuple.
@@ -252,6 +267,9 @@ x .~| y = sNot (x .|| y)
 infixr 1 .=>
 (.=>) :: SBool -> SBool -> SBool
 x .=> y = sNot x .|| y
+-- NB. Do *not* try to optimize @x .=> x = True@ here! If constants go through, it'll get simplified.
+-- The case "x .=> x" can hit is extremely rare, and the getAllSatResult function relies on this
+-- trick to generate constraints in the unlucky case of ui-function models.
 
 -- | Symbolic boolean equivalence
 infixr 1 .<=>
@@ -364,10 +382,10 @@ sbvToSymSV sbv = do
 -- two instances of this class. Note that we use this mechanism
 -- internally and do not export it from SBV.
 class SolverContext m where
-   -- | Add a constraint, any satisfying instance must satisfy this condition
-   constrain       :: SBool -> m ()
-   -- | Add a soft constraint. The solver will try to satisfy this condition if possible, but won't if it cannot
-   softConstrain   :: SBool -> m ()
+   -- | Add a constraint, any satisfying instance must satisfy this condition.
+   constrain :: SBool -> m ()
+   -- | Add a soft constraint. The solver will try to satisfy this condition if possible, but won't if it cannot.
+   softConstrain :: SBool -> m ()
    -- | Add a named constraint. The name is used in unsat-core extraction.
    namedConstraint :: String -> SBool -> m ()
    -- | Add a constraint, with arbitrary attributes. Used in interpolant generation.
@@ -384,6 +402,10 @@ class SolverContext m where
    -- is in milliseconds. Also see the function 'Data.SBV.Control.timeOut' for finer level
    -- control of time-outs, directly from SBV.
    setTimeOut :: Integer -> m ()
+   -- | Get the state associated with this context
+   contextState :: m State
+
+   {-# MINIMAL constrain, softConstrain, namedConstraint, constrainWithAttribute, setOption, contextState #-}
 
    -- time-out, logic, and info are  simply options in our implementation, so default implementation suffices
    setTimeOut t = setOption $ OptionKeyword ":timeout" [show t]
@@ -431,7 +453,7 @@ instance (Outputtable a, Outputtable b, Outputtable c, Outputtable d, Outputtabl
 -- * Symbolic Values
 -------------------------------------------------------------------------------
 -- | A 'SymVal' is a potential symbolic value that can be created instances of to be fed to a symbolic program.
-class (HasKind a, Ord a, Typeable a) => SymVal a where
+class (HasKind a, Typeable a) => SymVal a where
   -- | Generalization of 'Data.SBV.mkSymVal'
   mkSymVal :: MonadSymbolic m => Maybe Quantifier -> Maybe String -> m (SBV a)
   -- | Turn a literal constant to symbolic

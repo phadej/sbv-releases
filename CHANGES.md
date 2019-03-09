@@ -1,7 +1,193 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 8.0, 2019-01-14
+* Latest Hackage released version: 8.1, 2019-03-09
+
+### Version 8.1, 2019-03-09
+
+  * Added support for `SEither` and `SMaybe` types: symbolic sums and symbolic
+    optional values. These can be accessed by importing `Data.SBV.Either` and
+    `Data.SBV.Maybe` respectively. They translate to SMTLib's data-type syntax,
+    and thus require a solver capable of handling datatypes. (Currently z3 and
+    cvc4 are the only solvers that do.) All the typical introduction and
+    elimination functions are provided, and these types integrate with all
+    other symbolic types. (So you can have a list of SMaybe of SEither
+    values, or at any nesting level.) Thanks to Joel Burget for the initial
+    implementation of this idea and his contributions.
+
+  * Added support for symbolic sets. The API closely follows that of `Data.Set`
+    of Haskell, with some major differences: Symbolic sets can be co-finite.
+    (That is, we can represent not only finite sets, but also sets whose complements
+    are finite.) The distinction shows up in the `complement` operation, which
+    is not supported in Haskell. All SBV sets can be complemented. On the flip
+    side, SBV sets do not support a size operation (as they can be infinite),
+    nor they can be converted to lists. See 'Data.SBV.Set' for the API documentation
+    and "Documentation/SBV/Examples/Misc/SetAlgebra.hs" for an example that proves
+    many familiar set properties.
+
+  * SBV models now contain values for uninterpreted functions. This was a long
+    requested feature, but there was no previous support since SMTLib does not
+    have a standard way of querying such values. We now support this for z3 and
+    cvc4: Note that SBV tries its best to interpret the output from these
+    solvers, but it may give up if the response is too complicated (or something
+    I haven't seen before!) due to non-standard format. Barring these details,
+    the calls to `sat` now include function models, and you can also get them
+    via `getFunction` in a query.
+
+    For an example use case demonstrating how to use UF-models to synthesize a
+    simple multiplier, see "Documentation/SBV/Examples/Uninterpreted/Multiply.hs".
+
+  * SBV now comes with a model validator. In a 'sat', 'prove', or 'allSat' call,
+    you can pass the configuration parameter 'z3{validateModel = True}' (or whichever
+    solver you're using), and z3 will attempt to validate the returned model
+    from the solver. Note that validation only works if there are no uninterpreted
+    kinds of functions, and also in quantifier-free problems only. Please report
+    your experiences, as there's room for improvement in validation, always!
+
+  * [BACKWARDS COMPATIBILITY] The `allSat` function is similarly modified to
+    return uninterpreted-function models. There are a few technical restrictions,
+    however: Only the values of uninterpreted functions without any uninterpreted
+    arguments will participate in `allSat` computation. (For instance,
+    `uninterpret "f" :: SInteger -> SInteger` is OK, but
+    `uninterpret "f" :: MyType -> SInteger` is not, where `MyType` itself
+    is uninterpreted.) The reason for this is again there is no SMTLib way of
+    reflecting uninterpreted model values back into the solver. This restriction
+    should not cause much trouble in practice, but do get in touch if it is a
+    use-case for you.
+
+  * Added configuration option `allSatPrintAlong`. If set to True, calls to
+    allSat will print their models as they are found. The default is False.
+
+  * Added configuration parameter `satTrackUFs` (defaulting to True) to control
+    if SBV should try to extract models for uninterpreted functions. In theory,
+    this should always be True, but for most practical problems we typically
+    don't care about the function values itself but that it exists. Set to 'False'
+    if this is the case for your problem. Note that this setting is also respected
+    in 'allSat' calls.
+
+  * Added function `registerUISMTFunction`, which can be used to directly register uninterpreted
+    functions. This is typically not necessary as uses of UI-functions do register them
+    automatically, but it can come in handy in certain scenarios where there are no
+    constraints on a UI-function other than its existence.
+
+  * Added `Data.SBV.Tools.WeakestPreconditions` module, which provides a toy imperative
+    language and an engine for checking partial and total correctness of imperative programs.
+    It uses Dijkstra's weakest preconditions methodology to establish correctness claims.
+    Loop invariants are required and must be supplied by the user. For total correctness,
+    user must also provide termination measure functions. However, if desired, these can
+    be skipped (by passing 'Nothing'), in which case partial correctness will be proven.
+    Checking input parameters for no-change is supported via stability checks. For example
+    use cases, see the `Documentation.SBV.Examples.WeakestPreconditions` directory.
+
+  * Added functions `elem`/`notElem` to `Data.SBV.List`.
+
+  * Added `snoc` (appending a single element at the end) to `Data.SBV.List` and `Data.SBV.String`.
+
+  * Rework the 'Queriable' class to allow projection/embedding pairs. Also
+    added a new 'Fresh' class, which is more usable in simpler scenarios
+    where the default projection/embedding definitions are suitable.
+
+  * Added strong-equality (.===) and inequality (./==) to the 'EqSymbolic' class. This
+    method is equivalent to the usual (.==) and (./=) for all types except 'SFloat' and
+    'SDouble'. For the floating types, it is object equality, that is 'NaN .=== Nan'
+    and '0 ./== -0'. Use the regular equality for float/double's as they follow the
+    IEEE754 rules, but occasionally we need to express object equality in a polymorphic
+    way. Essentially this method is the polymorphic equaivalent of 'fpIsEqualObject'
+    except it works on all types.
+
+  * Removed the redundant 'SDivisible' constraint on rotate-left and rotate-right operations.
+
+  * Added unnamed equivalents of 'sBool', 'sWord8' etc; with a following underscore, i.e.,
+    'sBool_', 'sWord8_'. The new functions are supported for all base types, chars,
+    strings, lists, and tuples.
+
+  * SBV now supports implicit constraints in the query mode, which were previously only
+    available before user queries started.
+
+  * Fixed a bug where hash-consing might reuse an expression even though the request might
+    have been made at a different type. This is a rare case in SBV to happen due to types,
+    but it was possible to exploit it in the Dynamic interface. Thanks to Brian Huffman
+    for reporting and diagnosing the issue.
+
+  * Fixed a bug where SBV was reporting incorrect "elapsed" time values, which are
+    printed when the 'timing' configuration parameter is specified.
+
+  * Documentation: Jan Path kindly fixed module headers of all the files to produce
+    much better looking Haddock documents. Thanks Jan!
+
+  * Added barrel-rotations (sBarrelRotateLeft-Right, svBarrelRotateLeft-Right) which
+    can produce better code for verification by bit-blasting the rotation amount.
+    It accepts bit-vectors as arguments and an unsigned rotation quantity to keep
+    things simple.
+
+  * Added new configuration option 'allowQueryQuantifers', default is set to False.
+    SBV normally doesn't allow quantifiers in a query context, because there are
+    issues surrounding 'getValue'. However, Joel Burget pointed out this check
+    is too strict for certain scenarios. So, as an escape hatch, you can define
+    'allowQueryQuantifers' to be 'True' and SBV will bypass this check. Of course,
+    if you do this, then you are on your own regarding calls to `getValue` with
+    quantified parameters! See http://github.com/LeventErkok/sbv/issues/459
+    for details.
+
+  * [BACKWARDS COMPATIBILITY] Renamed the class `IEEEFloatConvertable` to
+    `IEEEFloatConvertible`. (Typo in name!) Matt Peddie pointed out issues
+    regarding conversion of out-of-bounds float and double values to integral
+    types. Unfortunately SMTLib does not support these conversions, and we
+    had issues in getting Haskell, SMTLib, and C to agree. Summary: These conversions
+    are only guaranteed to work if they are done on numbers that lie within the
+    representable range of the target type. Thanks to Matt Peddie for pointing out
+    the out-of-bounds problem, his help in figuring out the issues.
+
+  * [BACKWARDS COMPATIBILITY] The 'AllSat' result now tracks if search has stopped
+    because the solver returned 'Unknown'. Previously this information was not
+    displayed.
+
+  * [BACKWARDS COMPATIBILITY, Internal] Several constraints on internal
+    classes (such as SymVal, EqSymbolic, OrdSymbolic) were reworked to
+    reflect the dependencies better. Strictly speaking this is a backwards
+    compatibility breaking change, but I doubt it'll impact any user
+    code; though you might have to add some extra constraints if you were
+    writing sufficiently polymorphic SBV code. Yell if you find otherwise!
+
+  * [BACKWARDS COMPATIBILITY] SBV now allows user-given names to be duplicated.
+    It will implicitly add a suffix to them to distinguish without complaining. (In
+    previous versions, we would error out.) The reason for this change is that
+    sometimes it's nice to be able to simply give a prefix for a class of names
+    and not worry about the actual name itself. (Note that this will cause issues
+    if you use model-extraction-via-maps method if we ever make a name unique
+    and store it under a different name, but that's hardly ever used feature and
+    arguably the right thing to do anyway.) Thanks to Joel Burget for suggesting
+    the idea.
+
+  * [BACKWARDS COMPATIBILITY, Internal] SBV is now more strict in how user-queries
+    are used, performing certain extra-checks that were not done before. (For instance,
+    previously it was possible to mix prove-sat with a query call, which should
+    not have been allowed.) If you have any code that breaks for this reason, you
+    probably should've written it in some other way to start with. Please get
+    in touch if that is the case.
+
+  * [BACKWARDS COMPATIBILITY] You need at least GHC 8.4.1 to compile SBV.
+    If you're stuck with an older version, let me know and we'll see if
+    we can create a custom version for you; though I'd much rather avoid this
+    if at all possible.
+
+  * SBV now supports optimization of goals of SDouble and SFloat types. This is
+    done using the lexicographic ordering on floats, and adds on the additional
+    constraint that the resulting float is not a NaN. If you use this feature,
+    then your float value will be minimized as the corresponding 32 (or 64 for
+    doubles) bit word. Note that this methods supports infinities properly, and
+    does not distinguish between -0 and +0.
+    
+  * Optimization routines have been generalized to work over arbitrary metric-spaces,
+    with user-definable mappings. The simplest instance we have added is optimization
+    over booleans, by the obvious numeric mapping. Tuples are also supported with
+    the usual lexicographic ordering. In addition, SBV can now optimize over
+    user-defined enumerations. See "Documentation.SBV.Examples.Optimization.Enumerate" for
+    an example.
+
+  * Improved the internal representation of constraints to address performance
+    issues See http://github.com/LeventErkok/sbv/issues/460 for details. Thanks to
+    Thanks Jeffrey Young for reporting.
 
 ### Version 8.0, 2019-01-14
 
@@ -32,12 +218,12 @@
     8-tuples), and allows mixing and matching of lists and tuples arbitrarily
     as symbolic values. For instance `SBV [(Integer, String)]` is a valid type as
     is `SBV [(Integer, [(Char, (Float, String))])]`, with each component symbolically
-    represented. There are new type synonyms for `STupleN` for `N` between 2 to 8,
-    along with `untuple` destructor, and field accessors similar to lens: For instance
-    `p^._4` would project the 4th element of a tuple that has at least 4 fields.
-    The mixing and matching of field types and nesting allows for very rich
-    symbolic value representations. See `Documentation.SBV.Examples.Misc.Tuple` for
-    an example.
+    represented. Along with `STuple` for regular 2-tuples, there are new types
+    for `STupleN` for `N` between 2 to 8, along with `untuple` destructor, and field
+    accessors similar to lens: For instance `p^._4` would project the 4th element of
+    a tuple that has at least 4 fields. The mixing and matching of field types and
+    nesting allows for very rich symbolic value representations. See
+    `Documentation.SBV.Examples.Misc.Tuple` for an example.
 
   * [BACKWARDS COMPATIBILITY] The `Boolean` class is removed, which used to abstract
     over logical connectives. Previously, this class handled 'SBool' and 'Bool', but
@@ -181,7 +367,7 @@
 ### Version 7.10, 2018-07-20
   * [BACKWARDS COMPATIBILITY] '==' and '/=' now always throw an error instead of
     only throwing an error for non-concrete values.
-    https://github.com/LeventErkok/sbv/issues/301
+    http://github.com/LeventErkok/sbv/issues/301
 
   * [BACKWARDS COMPATIBILITY] Array declarations are reworked to take
     an initial value. The call 'newArray' now accepts an optional default
@@ -328,7 +514,7 @@
     handles this corner case properly, by using tracker assertions
     to keep track of what array values must be restored at each pop.
     Thanks to Martin Brain on the SMTLib mailing list for the
-    suggestion. (See https://github.com/LeventErkok/sbv/issues/374
+    suggestion. (See http://github.com/LeventErkok/sbv/issues/374
     for details.)
 
   * Fix corner case in ite branch equality with float/double arguments,
@@ -432,7 +618,7 @@
     backend solver is no longer alive: You should either just throw it,
     or perform proper clean-up on your user code as required to set up
     a new context. The provided show instance formats the exception nicely
-    for display purposes. See https://github.com/LeventErkok/sbv/issues/335
+    for display purposes. See http://github.com/LeventErkok/sbv/issues/335
     for details and thanks to Brian Huffman for reporting.
 
   * SIntegral class now has Integral as a super-class, which ensures the
@@ -493,7 +679,7 @@
   * Fix optimization routines when applied to signed-bitvector goals. Thanks
     to Anders Kaseorg for reporting. Since SMT-Lib does not distinguish between
     signed and unsigned bit-vectors, we have to be careful when expressing goals
-    that are over signed values. See https://github.com/LeventErkok/sbv/issues/333
+    that are over signed values. See http://github.com/LeventErkok/sbv/issues/333
     for details.
 
 ### Version 7.3, 2017-09-06
@@ -748,7 +934,7 @@
     capability optimize objectives, and solve MaxSAT problems; by appropriately
     employing the corresponding capabilities in z3. A good review of these features
     as implemented by Z3, and thus what is available in SBV is given in this
-    paper: http://www.easychair.org/publications/download/Z_-_Maximal_Satisfaction_with_Z3
+    paper: http://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/nbjorner-scss2014.pdf
 
   * SBV now allows for  real or integral valued metrics. Goals can be lexicographically
     (default), independently, or pareto-front optimized. Currently, only the z3 backend
@@ -919,7 +1105,7 @@
     perspective. This comes handy in doing an `allSat` calls where
     there might be witness variables that we do not care the uniqueness
     for. See `Data/SBV/Examples/Misc/Auxiliary.hs` for an example, and
-    the discussion in https://github.com/LeventErkok/sbv/issues/208 for
+    the discussion in http://github.com/LeventErkok/sbv/issues/208 for
     motivation.
 
   * Yices interface: If Reals are used, then pick the logic QF_UFLRA, instead
@@ -1394,7 +1580,7 @@ uninterpreted.
 
 ### Version 3.1, 2014-07-12
 
- NB: GHC 7.8.1 and 7.8.2 has a serious bug <https://ghc.haskell.org/trac/ghc/ticket/9078>
+ NB: GHC 7.8.1 and 7.8.2 has a serious bug <http://ghc.haskell.org/trac/ghc/ticket/9078>
      that causes SBV to crash under heavy/repeated calls. The bug is addressed
      in GHC 7.8.3; so upgrading to GHC 7.8.3 is essential for using SBV!
 

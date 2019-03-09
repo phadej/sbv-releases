@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Documentation.SBV.Examples.Uninterpreted.Sort
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -34,6 +34,9 @@ f = uninterpret "f"
 -- >>> t1
 -- Satisfiable. Model:
 --   x = Q!val!0 :: Q
+-- <BLANKLINE>
+--   f :: Q -> Q
+--   f _ = Q!val!1
 t1 :: IO SatResult
 t1 = sat $ do x <- free "x"
               return $ f x ./= x

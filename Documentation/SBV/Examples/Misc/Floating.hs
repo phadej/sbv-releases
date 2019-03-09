@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Documentation.SBV.Examples.Misc.Floating
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -56,19 +56,19 @@ assocPlus x y z = x + (y + z) .== (x + y) + z
 --
 -- >>> assocPlusRegular
 -- Falsifiable. Counter-example:
---   x =  3.7634227e-37 :: Float
---   y = -3.7612938e-37 :: Float
---   z = -1.1036833e-38 :: Float
+--   x =  4.4272186e20 :: Float
+--   y =  1.6717353e20 :: Float
+--   z = -1.2626838e19 :: Float
 --
 -- Indeed, we have:
 --
--- >>> let  x =  3.7634227e-37 :: Float
--- >>> let  y = -3.7612938e-37 :: Float
--- >>> let  z = -1.1036833e-38 :: Float
+-- >>> let x =  4.4272186e20 :: Float
+-- >>> let y =  1.6717353e20 :: Float
+-- >>> let z = -1.2626838e19 :: Float
 -- >>> x + (y + z)
--- -1.0823943e-38
+-- 5.972685e20
 -- >>> (x + y) + z
--- -1.0823947e-38
+-- 5.972686e20
 --
 -- Note the difference between two additions!
 assocPlusRegular :: IO ThmResult
@@ -90,17 +90,17 @@ assocPlusRegular = prove $ do [x, y, z] <- sFloats ["x", "y", "z"]
 --
 -- >>> nonZeroAddition
 -- Falsifiable. Counter-example:
---   a =  -4.611686e18 :: Float
---   b = 1.3552526e-20 :: Float
+--   a =  1.8446744e19 :: Float
+--   b = -3.786532e-28 :: Float
 --
 -- Indeed, we have:
 --
--- >>> (-4.611686e18 + 1.3552526e-20) == (-4.611686e18 :: Float)
+-- >>> (1.8446744e19 - 3.786532e-28) == (1.8446744e19 :: Float)
 -- True
 --
 -- But:
 --
--- >>> 1.3552526e-20 == (0 :: Float)
+-- >>> -3.786532e-28 == (0 :: Float)
 -- False
 --
 nonZeroAddition :: IO ThmResult
@@ -121,13 +121,13 @@ nonZeroAddition = prove $ do [a, b] <- sFloats ["a", "b"]
 --
 -- >>> multInverse
 -- Falsifiable. Counter-example:
---   a = 8.988465676670122e307 :: Double
+--   a = 1.271703601976025e-308 :: Double
 --
 -- Indeed, we have:
 --
--- >>> let a = 8.988465676670122e307 :: Double
+-- >>> let a = 1.271703601976025e-308 :: Double
 -- >>> a * (1/a)
--- 1.0000000000000002
+-- 0.9999999999999999
 multInverse :: IO ThmResult
 multInverse = prove $ do a <- sDouble "a"
                          constrain $ fpIsPoint a

@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.SMT.SMTLib2
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -15,7 +15,7 @@ module Data.SBV.SMT.SMTLib2(cvt, cvtInc) where
 
 import Data.Bits  (bit)
 import Data.List  (intercalate, partition, unzip3, nub, sort)
-import Data.Maybe (listToMaybe, fromMaybe)
+import Data.Maybe (listToMaybe, fromMaybe, catMaybes)
 
 import qualified Data.Foldable as F (toList)
 import qualified Data.Map.Strict      as M
@@ -24,8 +24,8 @@ import           Data.Set             (Set)
 import qualified Data.Set             as Set
 
 import Data.SBV.Core.Data
-import Data.SBV.Core.Symbolic (QueryContext(..))
-import Data.SBV.Core.Kind (smtType)
+import Data.SBV.Core.Symbolic (QueryContext(..), SetOp(..))
+import Data.SBV.Core.Kind (smtType, needsFlattening)
 import Data.SBV.SMT.Utils
 import Data.SBV.Control.Types
 
@@ -49,9 +49,23 @@ cvt ctx kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arr
         hasNonBVArrays = (not . null) [() | (_, (_, (k1, k2), _)) <- arrs, not (isBounded k1 && isBounded k2)]
         hasArrayInits  = (not . null) [() | (_, (_, _, ArrayFree (Just _))) <- arrs]
         hasList        = any isList kindInfo
+        hasSets        = any isSet kindInfo
         hasTuples      = not . null $ tupleArities
+        hasEither      = any isEither kindInfo
+        hasMaybe       = any isMaybe  kindInfo
         rm             = roundingMode cfg
         solverCaps     = capabilities (solver cfg)
+
+        -- Is there a reason why we can't handle this problem?
+        -- NB. There's probably a lot more checking we can do here, but this is a start:
+        doesntHandle = listToMaybe [nope w | (w, have, need) <- checks, need && not have]
+           where checks = [ ("data types",     supportsDataTypes solverCaps, hasTuples || hasEither || hasMaybe)
+                          , ("set operations", supportsSets      solverCaps, hasSets)
+                          ]
+
+                 nope w = [ "***     Given problem requires support for " ++ w
+                          , "***     But the chosen solver (" ++ show (name (solver cfg)) ++ ") doesn't support this feature."
+                          ]
 
         -- Determining the logic is surprisingly tricky!
         logic
@@ -66,6 +80,17 @@ cvt ctx kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arr
            = case l of
                Logic_NONE -> ["; NB. Not setting the logic per user request of Logic_NONE"]
                _          -> ["(set-logic " ++ show l ++ ") ; NB. User specified."]
+
+           -- There's a reason why we can't handle this problem:
+           | Just cantDo <- doesntHandle
+           = error $ unlines $   [ ""
+                                 , "*** SBV is unable to choose a proper solver configuration:"
+                                 , "***"
+                                 ]
+                             ++ cantDo
+                             ++ [ "***"
+                                , "*** Please report this as a feature request, either for SBV or the backend solver."
+                                ]
 
            -- Otherwise, we try to determine the most suitable logic.
            -- NB. This isn't really fool proof!
@@ -84,12 +109,15 @@ cvt ctx kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arr
              else if hasBVs
                   then ["(set-logic QF_FPBV)"]
                   else ["(set-logic QF_FP)"]
-           | hasInteger || hasReal || not (null usorts) || hasNonBVArrays || hasTuples
+           | hasInteger || hasReal || not (null usorts) || hasNonBVArrays || hasTuples || hasEither || hasMaybe || hasSets
            = let why | hasInteger        = "has unbounded values"
                      | hasReal           = "has algebraic reals"
                      | not (null usorts) = "has user-defined sorts"
                      | hasNonBVArrays    = "has non-bitvector arrays"
                      | hasTuples         = "has tuples"
+                     | hasEither         = "has either type"
+                     | hasMaybe          = "has maybe type"
+                     | hasSets           = "has sets"
                      | True              = "cannot determine the SMTLib-logic to use"
              in ["(set-logic ALL) ; "  ++ why ++ ", using catch-all."]
 
@@ -109,7 +137,7 @@ cvt ctx kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arr
 
         -- SBV always requires the production of models!
         getModels   = "(set-option :produce-models true)"
-                    : concat [flattenConfig | hasList, Just flattenConfig <- [supportsFlattenedSequences solverCaps]]
+                    : concat [flattenConfig | any needsFlattening kindInfo, Just flattenConfig <- [supportsFlattenedModels solverCaps]]
 
         -- process all other settings we're given
         userSettings = concatMap opts $ solverSetOptions cfg
@@ -126,6 +154,9 @@ cvt ctx kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arr
              ++ concatMap declSort usorts
              ++ [ "; --- tuples ---" ]
              ++ concatMap declTuple tupleArities
+             ++ [ "; --- sums ---" ]
+             ++ (if containsSum   kindInfo then declSum   else [])
+             ++ (if containsMaybe kindInfo then declMaybe else [])
              ++ [ "; --- literal constants ---" ]
              ++ concatMap (declConst cfg) consts
              ++ [ "; --- skolem constants ---" ]
@@ -243,7 +274,7 @@ cvt ctx kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arr
 
            where finals  = cstrs' ++ maybe [] (\r -> [(False, [], r)]) mbO
 
-                 cstrs' =  [(isSoft, attrs, c') | (isSoft, attrs, c) <- cstrs, Just c' <- [pos c]]
+                 cstrs' =  [(isSoft, attrs, c') | (isSoft, attrs, c) <- F.toList cstrs, Just c' <- [pos c]]
 
                  mbO | isSat = pos out
                      | True  = neg out
@@ -281,7 +312,7 @@ declSort (s, _)
   | s == "RoundingMode" -- built-in-sort; so don't declare.
   = []
 declSort (s, Left  r ) = ["(declare-sort " ++ s ++ " 0)  ; N.B. Uninterpreted: " ++ r]
-declSort (s, Right fs) = [ "(declare-datatypes () ((" ++ s ++ " " ++ unwords (map (\c -> "(" ++ c ++ ")") fs) ++ ")))"
+declSort (s, Right fs) = [ "(declare-datatypes ((" ++ s ++ " 0)) ((" ++ unwords (map (\c -> "(" ++ c ++ ")") fs) ++ ")))"
                          , "(define-fun " ++ s ++ "_constrIndex ((x " ++ s ++ ")) Int"
                          ] ++ ["   " ++ body fs (0::Int)] ++ [")"]
         where body []     _ = ""
@@ -299,7 +330,7 @@ declSort (s, Right fs) = [ "(declare-datatypes () ((" ++ s ++ " " ++ unwords (ma
 -- @
 declTuple :: Int -> [String]
 declTuple arity
-  | arity == 0 = ["(declare-datatypes () ((SBVTuple0 SBVTuple0)))"]
+  | arity == 0 = ["(declare-datatypes ((SBVTuple0 0)) (((mkSBVTuple0))))"]
   | arity == 1 = error "Data.SBV.declTuple: Unexpected one-tuple"
   | True       =    (l1 ++ "(par (" ++ unwords [param i | i <- [1..arity]] ++ ")")
                  :  [pre i ++ proj i ++ post i    | i <- [1..arity]]
@@ -325,13 +356,42 @@ findTupleArities ks = Set.toAscList
                     $ Set.map length
                     $ Set.fromList [ tupKs | KTuple tupKs <- Set.toList ks ]
 
--- | Convert in a query context
+-- | Is @Either@ being used?
+containsSum :: Set Kind -> Bool
+containsSum = not . Set.null . Set.filter isEither
+
+-- | Is @Maybe@ being used?
+containsMaybe :: Set Kind -> Bool
+containsMaybe = not . Set.null . Set.filter isMaybe
+
+declSum :: [String]
+declSum = [ "(declare-datatypes ((SBVEither 2)) ((par (T1 T2)"
+          , "                                    ((left_SBVEither  (get_left_SBVEither  T1))"
+          , "                                     (right_SBVEither (get_right_SBVEither T2))))))"
+          ]
+
+declMaybe :: [String]
+declMaybe = [ "(declare-datatypes ((SBVMaybe 1)) ((par (T)"
+            , "                                    ((nothing_SBVMaybe)"
+            , "                                     (just_SBVMaybe (get_just_SBVMaybe T))))))"
+            ]
+
+-- | Convert in a query context.
+-- NB. We do not store everything in @newKs@ below, but only what we need
+-- to do as an extra in the incremental context. See `Data.SBV.Core.Symbolic.registerKind`
+-- for a list of what we include, in case something doesn't show up
+-- and you need it!
 cvtInc :: Bool -> SMTLibIncConverter [String]
-cvtInc afterAPush inps newKs consts arrs tbls uis (SBVPgm asgnsSeq) cfg =
+cvtInc afterAPush inps newKs consts arrs tbls uis (SBVPgm asgnsSeq) cstrs cfg =
+            -- any new settings?
+               settings
             -- sorts
-               concatMap declSort [(s, dt) | KUninterpreted s dt <- Set.toList newKs]
+            ++ concatMap declSort [(s, dt) | KUninterpreted s dt <- newKinds]
             -- tuples. NB. Only declare the new sizes, old sizes persist.
             ++ concatMap declTuple (findTupleArities newKs)
+            -- sums
+            ++ (if containsSum   newKs then declSum   else [])
+            ++ (if containsMaybe newKs then declMaybe else [])
             -- constants
             ++ concatMap (declConst cfg) consts
             -- inputs
@@ -348,11 +408,15 @@ cvtInc afterAPush inps newKs consts arrs tbls uis (SBVPgm asgnsSeq) cfg =
             ++ concat arrayDelayeds
             -- array setups
             ++ concat arraySetups
+            -- extra constraints
+            ++ map (\(isSoft, attr, v) -> "(assert" ++ (if isSoft then "-soft " else " ") ++ addAnnotations attr (cvtSV skolemMap v) ++ ")") (F.toList cstrs)
   where -- NB. The below setting of skolemMap to empty is OK, since we do
         -- not support queries in the context of skolemized variables
         skolemMap = M.empty
 
         rm = roundingMode cfg
+
+        newKinds = Set.toList newKs
 
         declInp (s, _) = "(declare-fun " ++ show s ++ " () " ++ svType s ++ ")"
 
@@ -361,6 +425,14 @@ cvtInc afterAPush inps newKs consts arrs tbls uis (SBVPgm asgnsSeq) cfg =
         allTables = [(t, either id id (genTableData rm skolemMap (False, []) (map fst consts) t)) | t <- tbls]
         tableMap  = IM.fromList $ map mkTable allTables
           where mkTable (((t, _, _), _), _) = (t, "table" ++ show t)
+
+        -- If we need flattening in models, do emit the required lines if preset
+        settings
+          | any needsFlattening newKinds
+          = concat (catMaybes [supportsFlattenedModels solverCaps])
+          | True
+          = []
+          where solverCaps = capabilities (solver cfg)
 
 declDef :: SMTConfig -> SkolemMap -> TableMap -> (SV, SBVExpr) -> String
 declDef cfg skolemMap tableMap (s, expr) =
@@ -537,15 +609,15 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
 
         supportsPB = supportsPseudoBooleans caps
 
-        bvOp     = all isBounded arguments
-        intOp    = any isInteger arguments
-        realOp   = any isReal    arguments
-        doubleOp = any isDouble  arguments
-        floatOp  = any isFloat   arguments
-        boolOp   = all isBoolean arguments
-        charOp   = any isChar    arguments
-        stringOp = any isString  arguments
-        listOp   = any isList    arguments
+        bvOp     = all isBounded   arguments
+        intOp    = any isUnbounded arguments
+        realOp   = any isReal      arguments
+        doubleOp = any isDouble    arguments
+        floatOp  = any isFloat     arguments
+        boolOp   = all isBoolean   arguments
+        charOp   = any isChar      arguments
+        stringOp = any isString    arguments
+        listOp   = any isList      arguments
 
         bad | intOp = error $ "SBV.SMTLib2: Unsupported operation on unbounded integers: " ++ show expr
             | True  = error $ "SBV.SMTLib2: Unsupported operation on real values: " ++ show expr
@@ -637,6 +709,30 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         lift1  o _ [x]    = "(" ++ o ++ " " ++ x ++ ")"
         lift1  o _ sbvs   = error $ "SBV.SMT.SMTLib2.sh.lift1: Unexpected arguments: "   ++ show (o, sbvs)
 
+        -- We fully qualify the constructor with their types to work around type checking issues
+        -- if the solver requires it, as specified by the 'supportsDTConstructorSigs' capability.
+        dtConstructor fld args res = result
+          where body = parIfArgs (unwords (fld : map ssv args))
+                parIfArgs r | null args = r
+                            | True      = "(" ++ r ++ ")"
+
+                constructor = body
+                withSig     = "(as " ++ constructor ++ " " ++ smtType res ++ ")"
+
+                result | supportsDTConstructorSigs caps = withSig
+                       | True                           = constructor
+
+        -- We fully qualify the accessors with their types to work around type checking issues
+        -- if the solver requires it, as specified by the 'supportsDTAccessorSigs' capability.
+        dtAccessor fld params res = result
+          where accessor = "(_ is " ++ fld ++ ")"
+
+                ps       = " (" ++ unwords (map smtType params) ++ ") "
+                withSig  = "(_ is (" ++ fld ++ ps ++ smtType res ++ "))"
+
+                result | supportsDTAccessorSigs caps = withSig
+                       | True                        = accessor
+
         sh (SBVApp Ite [a, b, c]) = "(ite " ++ ssv a ++ " " ++ ssv b ++ " " ++ ssv c ++ ")"
 
         sh (SBVApp (LkUp (t, aKnd, _, l) i e) [])
@@ -652,7 +748,10 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                               KChar              -> error "SBV.SMT.SMTLib2.cvtExp: unexpected char valued index"
                               KString            -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
                               KList k            -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected list valued: " ++ show k
+                              KSet  k            -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected set valued: " ++ show k
                               KTuple k           -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected tuple valued: " ++ show k
+                              KMaybe k           -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected maybe valued: " ++ show k
+                              KEither k1 k2      -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected sum valued: " ++ show (k1, k2)
                               KUninterpreted s _ -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected uninterpreted valued index: " ++ s
 
                 lkUp = "(" ++ getTable tableMap t ++ " " ++ ssv i ++ ")"
@@ -671,7 +770,10 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                 KChar              -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
                                 KString            -> error "SBV.SMT.SMTLib2.cvtExp: unexpected string valued index"
                                 KList k            -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected sequence valued index: " ++ show k
+                                KSet  k            -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected set valued index: " ++ show k
                                 KTuple k           -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected tuple valued index: " ++ show k
+                                KMaybe k           -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected maybe valued index: " ++ show k
+                                KEither k1 k2      -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected sum valued index: " ++ show (k1, k2)
                                 KUninterpreted s _ -> error $ "SBV.SMT.SMTLib2.cvtExp: unexpected uninterpreted valued index: " ++ s
 
                 mkCnst = cvtCV rm . mkConstCV (kindOf i)
@@ -736,9 +838,32 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
 
         sh (SBVApp (SeqOp op) args) = "(" ++ show op ++ " " ++ unwords (map ssv args) ++ ")"
 
-        sh (SBVApp (TupleConstructor 0)   [])    = "SBVTuple0"
+        sh (SBVApp (SetOp SetEqual)      args)   = "(= "      ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetMember)     [e, s]) = "(select " ++ ssv s ++ " " ++ ssv e ++ ")"
+        sh (SBVApp (SetOp SetInsert)     [e, s]) = "(store "  ++ ssv s ++ " " ++ ssv e ++ " true)"
+        sh (SBVApp (SetOp SetDelete)     [e, s]) = "(store "  ++ ssv s ++ " " ++ ssv e ++ " false)"
+        sh (SBVApp (SetOp SetIntersect)  args)   = "((_ map and) " ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetUnion)      args)   = "((_ map or) "  ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetSubset)     args)   = "(subset "      ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetDifference) args)   = "(difference "  ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetComplement) args)   = "((_ map not) " ++ unwords (map ssv args) ++ ")"
+
+        sh (SBVApp (TupleConstructor 0)   [])    = "mkSBVTuple0"
         sh (SBVApp (TupleConstructor n)   args)  = "(mkSBVTuple" ++ show n ++ " " ++ unwords (map ssv args) ++ ")"
         sh (SBVApp (TupleAccess      i n) [tup]) = "(proj_" ++ show i ++ "_SBVTuple" ++ show n ++ " " ++ ssv tup ++ ")"
+
+        sh (SBVApp (EitherConstructor k1 k2 False) [arg]) =       dtConstructor "left_SBVEither"  [arg] (KEither k1 k2)
+        sh (SBVApp (EitherConstructor k1 k2 True ) [arg]) =       dtConstructor "right_SBVEither" [arg] (KEither k1 k2)
+        sh (SBVApp (EitherIs          k1 k2 False) [arg]) = '(' : dtAccessor    "left_SBVEither"  [k1]  (KEither k1 k2) ++ " " ++ ssv arg ++ ")"
+        sh (SBVApp (EitherIs          k1 k2 True ) [arg]) = '(' : dtAccessor    "right_SBVEither" [k2]  (KEither k1 k2) ++ " " ++ ssv arg ++ ")"
+        sh (SBVApp (EitherAccess            False) [arg]) = "(get_left_SBVEither "  ++ ssv arg ++ ")"
+        sh (SBVApp (EitherAccess            True ) [arg]) = "(get_right_SBVEither " ++ ssv arg ++ ")"
+
+        sh (SBVApp (MaybeConstructor k False) [])    =       dtConstructor "nothing_SBVMaybe" []    (KMaybe k)
+        sh (SBVApp (MaybeConstructor k True)  [arg]) =       dtConstructor "just_SBVMaybe"    [arg] (KMaybe k)
+        sh (SBVApp (MaybeIs          k False) [arg]) = '(' : dtAccessor    "nothing_SBVMaybe" []    (KMaybe k) ++ " " ++ ssv arg ++ ")"
+        sh (SBVApp (MaybeIs          k True ) [arg]) = '(' : dtAccessor    "just_SBVMaybe"    [k]   (KMaybe k) ++ " " ++ ssv arg ++ ")"
+        sh (SBVApp MaybeAccess                [arg]) = "(get_just_SBVMaybe " ++ ssv arg ++ ")"
 
         sh inp@(SBVApp op args)
           | intOp, Just f <- lookup op smtOpIntTable
@@ -885,10 +1010,6 @@ handleFPCast kFrom kTo rm input
   = "(" ++ cast kFrom kTo input ++ ")"
   where addRM a s = s ++ " " ++ rm ++ " " ++ a
 
-        absRM a s = "ite (fp.isNegative " ++ a ++ ") (" ++ cvt1 ++ ") (" ++ cvt2 ++ ")"
-          where cvt1 = "bvneg (" ++ s ++ " " ++ rm ++ " (fp.abs " ++ a ++ "))"
-                cvt2 =              s ++ " " ++ rm ++ " "         ++ a
-
         -- To go and back from Ints, we detour through reals
         cast KUnbounded         KFloat             a = "(_ to_fp 8 24) "  ++ rm ++ " (to_real " ++ a ++ ")"
         cast KUnbounded         KDouble            a = "(_ to_fp 11 53) " ++ rm ++ " (to_real " ++ a ++ ")"
@@ -910,10 +1031,11 @@ handleFPCast kFrom kTo rm input
         cast KDouble            KDouble            a = addRM a "(_ to_fp 11 53)"
 
         -- From float/double
-        cast KFloat             (KBounded False m) a = absRM a $ "(_ fp.to_ubv " ++ show m ++ ")"
-        cast KDouble            (KBounded False m) a = absRM a $ "(_ fp.to_ubv " ++ show m ++ ")"
+        cast KFloat             (KBounded False m) a = addRM a $ "(_ fp.to_ubv " ++ show m ++ ")"
+        cast KDouble            (KBounded False m) a = addRM a $ "(_ fp.to_ubv " ++ show m ++ ")"
         cast KFloat             (KBounded True  m) a = addRM a $ "(_ fp.to_sbv " ++ show m ++ ")"
         cast KDouble            (KBounded True  m) a = addRM a $ "(_ fp.to_sbv " ++ show m ++ ")"
+
         cast KFloat             KReal              a = "fp.to_real" ++ " " ++ a
         cast KDouble            KReal              a = "fp.to_real" ++ " " ++ a
 

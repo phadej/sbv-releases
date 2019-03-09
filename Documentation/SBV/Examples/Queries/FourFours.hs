@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Documentation.SBV.Examples.Queries.FourFours
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -100,7 +100,7 @@ fill F         = return F
 
 -- | Minor helper for writing "symbolic" case statements. Simply walks down a list
 -- of values to match against a symbolic version of the key.
-sCase :: (SymVal a, Mergeable v) => SBV a -> [(a, v)] -> v
+sCase :: (Eq a, SymVal a, Mergeable v) => SBV a -> [(a, v)] -> v
 sCase k = walk
   where walk []              = error "sCase: Expected a non-empty list of cases!"
         walk [(_, v)]        = v

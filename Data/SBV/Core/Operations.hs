@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Core.Operations
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -21,7 +21,7 @@ module Data.SBV.Core.Operations
   -- ** Basic operations
   , svPlus, svTimes, svMinus, svUNeg, svAbs
   , svDivide, svQuot, svRem, svQuotRem
-  , svEqual, svNotEqual
+  , svEqual, svNotEqual, svStrongEqual, svSetEqual
   , svLessThan, svGreaterThan, svLessEq, svGreaterEq
   , svAnd, svOr, svXOr, svNot
   , svShl, svShr, svRol, svRor
@@ -36,6 +36,7 @@ module Data.SBV.Core.Operations
   , svToWord1, svFromWord1, svTestBit
   , svShiftLeft, svShiftRight
   , svRotateLeft, svRotateRight
+  , svBarrelRotateLeft, svBarrelRotateRight
   , svBlastLE, svBlastBE
   , svAddConstant, svIncrement, svDecrement
   -- ** Basic array operations
@@ -59,6 +60,8 @@ import Data.SBV.Core.Concrete
 import Data.SBV.Core.Symbolic
 
 import Data.Ratio
+
+import Data.SBV.Utils.Numeric (fpIsEqualObjectH)
 
 --------------------------------------------------------------------------------
 -- Basic constructors
@@ -280,39 +283,88 @@ eqOptBool op w x y
 
 -- | Equality.
 svEqual :: SVal -> SVal -> SVal
-svEqual = liftSym2B (mkSymOpSC (eqOptBool Equal trueSV) Equal) rationalCheck (==) (==) (==) (==) (==) (==) (==) (==) (==)
+svEqual a b
+  | isSet a && isSet b
+  = svSetEqual a b
+  | True
+  = liftSym2B (mkSymOpSC (eqOptBool Equal trueSV) Equal) rationalCheck (==) (==) (==) (==) (==) (==) (==) (==) (==) (==) (==) a b
 
 -- | Inequality.
 svNotEqual :: SVal -> SVal -> SVal
-svNotEqual = liftSym2B (mkSymOpSC (eqOptBool NotEqual falseSV) NotEqual) rationalCheck (/=) (/=) (/=) (/=) (/=) (/=) (/=) (/=) (/=)
+svNotEqual a b
+  | isSet a && isSet b
+  = svNot $ svEqual a b
+  | True
+  = liftSym2B (mkSymOpSC (eqOptBool NotEqual falseSV) NotEqual) rationalCheck (/=) (/=) (/=) (/=) (/=) (/=) (/=) (/=) (/=) (/=) (/=) a b
+
+-- | Set equality. Note that we only do constant folding if we get both a regular or both a
+-- complement set. Otherwise we get a symbolic value even if they might be completely concrete.
+svSetEqual :: SVal -> SVal -> SVal
+svSetEqual sa sb
+  | not (isSet sa && isSet sb && kindOf sa == kindOf sb)
+  = error $ "Data.SBV.svSetEqual: Called on ill-typed args: " ++ show (kindOf sa, kindOf sb)
+  | Just (RegularSet a)    <- getSet sa, Just (RegularSet b)    <- getSet sb
+  = svBool (a == b)
+  | Just (ComplementSet a) <- getSet sa, Just (ComplementSet b) <- getSet sb
+  = svBool (a == b)
+  | True
+  = SVal KBool $ Right $ cache r
+  where getSet (SVal _ (Left (CV _ (CSet s)))) = Just s
+        getSet _                               = Nothing
+
+        r st = do sva <- svToSV st sa
+                  svb <- svToSV st sb
+                  newExpr st KBool $ SBVApp (SetOp SetEqual) [sva, svb]
+
+-- | Strong equality. Only matters on floats, where it says @NaN@ equals @NaN@ and @+0@ and @-0@ are different.
+-- Otherwise equivalent to `svEqual`.
+svStrongEqual :: SVal -> SVal -> SVal
+svStrongEqual x y
+  | isFloat x, Just f1 <- getF x, Just f2 <- getF y
+  = svBool $ f1 `fpIsEqualObjectH` f2
+  | isDouble x, Just f1 <- getD x, Just f2 <- getD y
+  = svBool $ f1 `fpIsEqualObjectH` f2
+  | isFloat x || isDouble x
+  = SVal KBool $ Right $ cache r
+  | True
+  = svEqual x y
+  where getF (SVal _ (Left (CV _ (CFloat f)))) = Just f
+        getF _                                 = Nothing
+
+        getD (SVal _ (Left (CV _ (CDouble d)))) = Just d
+        getD _                                  = Nothing
+
+        r st = do sx <- svToSV st x
+                  sy <- svToSV st y
+                  newExpr st KBool (SBVApp (IEEEFP FP_ObjEqual) [sx, sy])
 
 -- | Less than.
 svLessThan :: SVal -> SVal -> SVal
 svLessThan x y
   | isConcreteMax x = svFalse
   | isConcreteMin y = svFalse
-  | True            = liftSym2B (mkSymOpSC (eqOpt falseSV) LessThan) rationalCheck (<) (<) (<) (<) (<) (<) (<) (<) (uiLift "<" (<)) x y
+  | True            = liftSym2B (mkSymOpSC (eqOpt falseSV) LessThan) rationalCheck (<) (<) (<) (<) (<) (<) (<) (<) (<) (<) (uiLift "<" (<)) x y
 
 -- | Greater than.
 svGreaterThan :: SVal -> SVal -> SVal
 svGreaterThan x y
   | isConcreteMin x = svFalse
   | isConcreteMax y = svFalse
-  | True            = liftSym2B (mkSymOpSC (eqOpt falseSV) GreaterThan) rationalCheck (>) (>) (>) (>) (>) (>) (>) (>) (uiLift ">"  (>)) x y
+  | True            = liftSym2B (mkSymOpSC (eqOpt falseSV) GreaterThan) rationalCheck (>) (>) (>) (>) (>) (>) (>) (>) (>) (>) (uiLift ">"  (>)) x y
 
 -- | Less than or equal to.
 svLessEq :: SVal -> SVal -> SVal
 svLessEq x y
   | isConcreteMin x = svTrue
   | isConcreteMax y = svTrue
-  | True            = liftSym2B (mkSymOpSC (eqOpt trueSV) LessEq) rationalCheck (<=) (<=) (<=) (<=) (<=) (<=) (<=) (<=) (uiLift "<=" (<=)) x y
+  | True            = liftSym2B (mkSymOpSC (eqOpt trueSV) LessEq) rationalCheck (<=) (<=) (<=) (<=) (<=) (<=) (<=) (<=) (<=) (<=) (uiLift "<=" (<=)) x y
 
 -- | Greater than or equal to.
 svGreaterEq :: SVal -> SVal -> SVal
 svGreaterEq x y
   | isConcreteMax x = svTrue
   | isConcreteMin y = svTrue
-  | True            = liftSym2B (mkSymOpSC (eqOpt trueSV) GreaterEq) rationalCheck (>=) (>=) (>=) (>=) (>=) (>=) (>=) (>=) (uiLift ">=" (>=)) x y
+  | True            = liftSym2B (mkSymOpSC (eqOpt trueSV) GreaterEq) rationalCheck (>=) (>=) (>=) (>=) (>=) (>=) (>=) (>=) (>=) (>=) (uiLift ">=" (>=)) x y
 
 -- | Bitwise and.
 svAnd :: SVal -> SVal -> SVal
@@ -370,6 +422,9 @@ svNot = liftSym1 (mkSymOp1SC opt Not)
 
 -- | Shift left by a constant amount. Translates to the "bvshl"
 -- operation in SMT-Lib.
+--
+-- NB. Haskell spec says the behavior is undefined if the shift amount
+-- is negative. We arbitrarily return the value unchanged if this is the case.
 svShl :: SVal -> Int -> SVal
 svShl x i
   | i <= 0
@@ -383,6 +438,9 @@ svShl x i
 -- | Shift right by a constant amount. Translates to either "bvlshr"
 -- (logical shift right) or "bvashr" (arithmetic shift right) in
 -- SMT-Lib, depending on whether @x@ is a signed bitvector.
+--
+-- NB. Haskell spec says the behavior is undefined if the shift amount
+-- is negative. We arbitrarily return the value unchanged if this is the case.
 svShr :: SVal -> Int -> SVal
 svShr x i
   | i <= 0
@@ -397,7 +455,10 @@ svShr x i
         z    = svInteger k 0
         neg1 = svInteger k (-1)
 
--- | Rotate-left, by a constant
+-- | Rotate-left, by a constant.
+--
+-- NB. Haskell spec says the behavior is undefined if the shift amount
+-- is negative. We arbitrarily return the value unchanged if this is the case.
 svRol :: SVal -> Int -> SVal
 svRol x i
   | i <= 0
@@ -409,7 +470,10 @@ svRol x i
                                      (noFloatUnary "rotateL") (noDoubleUnary "rotateL") x
            _ -> svShl x i   -- for unbounded Integers, rotateL is the same as shiftL in Haskell
 
--- | Rotate-right, by a constant
+-- | Rotate-right, by a constant.
+--
+-- NB. Haskell spec says the behavior is undefined if the shift amount
+-- is negative. We arbitrarily return the value unchanged if this is the case.
 svRor :: SVal -> Int -> SVal
 svRor x i
   | i <= 0
@@ -594,11 +658,15 @@ svSelect xsOrig err ind = xs `seq` SVal kElt (Right (cache r))
                          -- takes care of that automatically
                          newExpr st kElt (SBVApp (LkUp (idx, kInd, kElt, len) swi swe) [])
 
+-- Change the sign of a bit-vector quantity. Fails if passed a non-bv
 svChangeSign :: Bool -> SVal -> SVal
 svChangeSign s x
+  | not (isBounded x)       = error $ "Data.SBV." ++ nm ++ ": Received non bit-vector kind: " ++ show (kindOf x)
   | Just n <- svAsInteger x = svInteger k n
   | True                    = SVal k (Right (cache y))
   where
+    nm = if s then "svSign" else "svUnsign"
+
     k = KBounded s (intSizeOf x)
     y st = do xsw <- svToSV st x
               newExpr st k (SBVApp (Extract (intSizeOf x - 1) 0) [xsw])
@@ -692,7 +760,7 @@ svShift toLeft x i
           | Just xv <- getConst x, Just iv <- getConst i
           = Just $ SVal kx . Left $! normCV $ CV kx (CInteger (xv `opC` shiftAmount iv))
 
-          | isInteger x || isInteger i
+          | isUnbounded x || isUnbounded i
           = bailOut $ "Not yet implemented unbounded/non-constants shifts for " ++ show (kx, ki) ++ ", please file a request!"
 
           | not (isBounded x && isBounded i)
@@ -712,12 +780,12 @@ svShift toLeft x i
                 -- like fromIntegral, but more paranoid
                 shiftAmount :: Integer -> Int
                 shiftAmount iv
-                  | iv <= 0                                          = 0
-                  | isInteger i, iv > fromIntegral (maxBound :: Int) = bailOut $ "Unsupported constant unbounded shift with amount: " ++ show iv
-                  | isInteger x                                      = fromIntegral iv
-                  | iv >= fromIntegral ub                            = ub
-                  | not (isBounded x && isBounded i)                 = bailOut $ "Unsupported kinds: " ++ show (kx, ki)
-                  | True                                             = fromIntegral iv
+                  | iv <= 0                                            = 0
+                  | isUnbounded i, iv > fromIntegral (maxBound :: Int) = bailOut $ "Unsupported constant unbounded shift with amount: " ++ show iv
+                  | isUnbounded x                                      = fromIntegral iv
+                  | iv >= fromIntegral ub                              = ub
+                  | not (isBounded x && isBounded i)                   = bailOut $ "Unsupported kinds: " ++ show (kx, ki)
+                  | True                                               = fromIntegral iv
                  where ub = intSizeOf x
 
         -- Overshift is not possible if the bit-size of x won't even fit into the bit-vector size
@@ -777,6 +845,54 @@ svRotateLeft x i
           z  = svInteger (kindOf x) 0
           zi = svInteger (kindOf i) 0
           n  = svInteger (kindOf i) (toInteger sx)
+
+-- | A variant of 'svRotateLeft' that uses a barrel-rotate design, which can lead to
+-- better verification code. Only works when both arguments are finite and the second
+-- argument is unsigned.
+svBarrelRotateLeft :: SVal -> SVal -> SVal
+svBarrelRotateLeft x i
+  | not (isBounded x && isBounded i && not (hasSign i))
+  = error $ "Data.SBV.Dynamic.svBarrelRotateLeft: Arguments must be bounded with second argument unsigned. Received: " ++ show (x, i)
+  | Just iv <- svAsInteger i
+  = svRol x $ fromIntegral (iv `rem` fromIntegral (intSizeOf x))
+  | True
+  = barrelRotate svRol x i
+
+-- | A variant of 'svRotateLeft' that uses a barrel-rotate design, which can lead to
+-- better verification code. Only works when both arguments are finite and the second
+-- argument is unsigned.
+svBarrelRotateRight :: SVal -> SVal -> SVal
+svBarrelRotateRight x i
+  | not (isBounded x && isBounded i && not (hasSign i))
+  = error $ "Data.SBV.Dynamic.svBarrelRotateRight: Arguments must be bounded with second argument unsigned. Received: " ++ show (x, i)
+  | Just iv <- svAsInteger i
+  = svRor x $ fromIntegral (iv `rem` fromIntegral (intSizeOf x))
+  | True
+  = barrelRotate svRor x i
+
+-- Barrel rotation, by bit-blasting the argument:
+barrelRotate :: (SVal -> Int -> SVal) -> SVal -> SVal -> SVal
+barrelRotate f a c = loop blasted a
+  where loop :: [(SVal, Integer)] -> SVal -> SVal
+        loop []              acc = acc
+        loop ((b, v) : rest) acc = loop rest (svIte b (f acc (fromInteger v)) acc)
+
+        sa = toInteger $ intSizeOf a
+        n  = svInteger (kindOf c) sa
+
+        -- Reduce by the modulus amount, we need not care about the
+        -- any part larger than the value of the bit-size of the
+        -- argument as it is identity for rotations
+        reducedC = c `svRem` n
+
+        -- blast little-endian, and zip with bit-position
+        blasted = takeWhile significant $ zip (svBlastLE reducedC) [2^i | i <- [(0::Integer)..]]
+
+        -- Any term whose bit-position is larger than our input size
+        -- is insignificant, since the reduction would've put 0's in those
+        -- bits. For instance, if a is 32 bits, and c is 5 bits, then we
+        -- need not look at any position i s.t. 2^i > 32
+        significant (_, pos) = pos < sa
 
 -- | Generalization of 'svRor', where the rotation amount is symbolic.
 -- If the first argument is not bounded, then the this is the same as shift.
@@ -1202,13 +1318,32 @@ liftSV2 opS k a b = cache c
                   sw2 <- svToSV st b
                   opS st k sw1 sw2
 
-liftSym2 :: (State -> Kind -> SV -> SV -> IO SV) -> (CV -> CV -> Bool) -> (AlgReal -> AlgReal -> AlgReal) -> (Integer -> Integer -> Integer) -> (Float -> Float -> Float) -> (Double -> Double -> Double) -> SVal -> SVal -> SVal
+liftSym2 :: (State -> Kind -> SV -> SV -> IO SV)
+         -> (CV      -> CV      -> Bool)
+         -> (AlgReal -> AlgReal -> AlgReal)
+         -> (Integer -> Integer -> Integer)
+         -> (Float   -> Float   -> Float)
+         -> (Double  -> Double  -> Double)
+         -> SVal     -> SVal    -> SVal
 liftSym2 _   okCV opCR opCI opCF opCD   (SVal k (Left a)) (SVal _ (Left b)) | okCV a b = SVal k . Left  $! mapCV2 opCR opCI opCF opCD noCharLift2 noStringLift2 noUnint2 a b
 liftSym2 opS _    _    _    _    _    a@(SVal k _)        b                            = SVal k $ Right $  liftSV2 opS k a b
 
-liftSym2B :: (State -> Kind -> SV -> SV -> IO SV) -> (CV -> CV -> Bool) -> (AlgReal -> AlgReal -> Bool) -> (Integer -> Integer -> Bool) -> (Float -> Float -> Bool) -> (Double -> Double -> Bool) -> (Char -> Char -> Bool) -> (String -> String -> Bool) -> ([CVal] -> [CVal] -> Bool) -> ([CVal] -> [CVal] -> Bool) -> ((Maybe Int, String) -> (Maybe Int, String) -> Bool) -> SVal -> SVal -> SVal
-liftSym2B _   okCV opCR opCI opCF opCD opCC opCS opCSeq opCTup opUI (SVal _ (Left a)) (SVal _ (Left b)) | okCV a b = svBool (liftCV2 opCR opCI opCF opCD opCC opCS opCSeq opCTup opUI a b)
-liftSym2B opS _    _    _    _    _    _    _    _      _      _    a                 b                            = SVal KBool $ Right $ liftSV2 opS KBool a b
+liftSym2B :: (State -> Kind -> SV -> SV -> IO SV)
+          -> (CV                  -> CV                  -> Bool)
+          -> (AlgReal             -> AlgReal             -> Bool)
+          -> (Integer             -> Integer             -> Bool)
+          -> (Float               -> Float               -> Bool)
+          -> (Double              -> Double              -> Bool)
+          -> (Char                -> Char                -> Bool)
+          -> (String              -> String              -> Bool)
+          -> ([CVal]              -> [CVal]              -> Bool)
+          -> ([CVal]              -> [CVal]              -> Bool)
+          -> (Maybe  CVal         -> Maybe  CVal         -> Bool)
+          -> (Either CVal CVal    -> Either CVal CVal    -> Bool)
+          -> ((Maybe Int, String) -> (Maybe Int, String) -> Bool)
+          -> SVal                 -> SVal                -> SVal
+liftSym2B _   okCV opCR opCI opCF opCD opCC opCS opCSeq opCTup opCMaybe opCEither opUI (SVal _ (Left a)) (SVal _ (Left b)) | okCV a b = svBool (liftCV2 opCR opCI opCF opCD opCC opCS opCSeq opCTup opCMaybe opCEither opUI a b)
+liftSym2B opS _    _    _    _    _    _    _    _      _      _        _         _    a                 b                            = SVal KBool $ Right $ liftSV2 opS KBool a b
 
 -- | Create a symbolic two argument operation; with shortcut optimizations
 mkSymOpSC :: (SV -> SV -> Maybe SV) -> Op -> State -> Kind -> SV -> SV -> IO SV

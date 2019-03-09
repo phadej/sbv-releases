@@ -314,14 +314,9 @@ SDouble toFP_Real_ToDouble(const SReal a)
 SInt8 fromFP_Float_ToInt8(const SFloat a)
 {
   const SFloat s0 = a;
-  const SBool  s1 = isnan(s0);
-  const SBool  s2 = isinf(s0);
-  const SBool  s3 = s1 || s2;
-  const SBool  s4 = !s3;
-  const SInt8  s6 = (SInt8) s0;
-  const SInt8  s8 = s4 ? s6 : 0;
+  const SInt8  s2 = (SInt8) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToInt8.c" ==================
 == BEGIN: "fromFP_Float_ToInt16.c" ================
@@ -332,14 +327,9 @@ SInt8 fromFP_Float_ToInt8(const SFloat a)
 SInt16 fromFP_Float_ToInt16(const SFloat a)
 {
   const SFloat s0 = a;
-  const SBool  s1 = isnan(s0);
-  const SBool  s2 = isinf(s0);
-  const SBool  s3 = s1 || s2;
-  const SBool  s4 = !s3;
-  const SInt16 s6 = (SInt16) s0;
-  const SInt16 s8 = s4 ? s6 : 0x0000;
+  const SInt16 s2 = (SInt16) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToInt16.c" ==================
 == BEGIN: "fromFP_Float_ToInt32.c" ================
@@ -350,14 +340,9 @@ SInt16 fromFP_Float_ToInt16(const SFloat a)
 SInt32 fromFP_Float_ToInt32(const SFloat a)
 {
   const SFloat s0 = a;
-  const SBool  s1 = isnan(s0);
-  const SBool  s2 = isinf(s0);
-  const SBool  s3 = s1 || s2;
-  const SBool  s4 = !s3;
-  const SInt32 s6 = (SInt32) s0;
-  const SInt32 s8 = s4 ? s6 : 0x00000000L;
+  const SInt32 s2 = (SInt32) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToInt32.c" ==================
 == BEGIN: "fromFP_Float_ToInt64.c" ================
@@ -368,14 +353,9 @@ SInt32 fromFP_Float_ToInt32(const SFloat a)
 SInt64 fromFP_Float_ToInt64(const SFloat a)
 {
   const SFloat s0 = a;
-  const SBool  s1 = isnan(s0);
-  const SBool  s2 = isinf(s0);
-  const SBool  s3 = s1 || s2;
-  const SBool  s4 = !s3;
-  const SInt64 s6 = (SInt64) s0;
-  const SInt64 s8 = s4 ? s6 : 0x0000000000000000LL;
+  const SInt64 s2 = (SInt64) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToInt64.c" ==================
 == BEGIN: "fromFP_Float_ToWord8.c" ================
@@ -386,14 +366,9 @@ SInt64 fromFP_Float_ToInt64(const SFloat a)
 SWord8 fromFP_Float_ToWord8(const SFloat a)
 {
   const SFloat s0 = a;
-  const SBool  s1 = isnan(s0);
-  const SBool  s2 = isinf(s0);
-  const SBool  s3 = s1 || s2;
-  const SBool  s4 = !s3;
-  const SWord8 s6 = (!isnan(s0) && signbit(s0)) ? (- ((SWord8) fabsf(s0))) : ((SWord8) s0);
-  const SWord8 s8 = s4 ? s6 : 0;
+  const SWord8 s2 = (SWord8) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToWord8.c" ==================
 == BEGIN: "fromFP_Float_ToWord16.c" ================
@@ -404,14 +379,9 @@ SWord8 fromFP_Float_ToWord8(const SFloat a)
 SWord16 fromFP_Float_ToWord16(const SFloat a)
 {
   const SFloat  s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SWord16 s6 = (!isnan(s0) && signbit(s0)) ? (- ((SWord16) fabsf(s0))) : ((SWord16) s0);
-  const SWord16 s8 = s4 ? s6 : 0x0000U;
+  const SWord16 s2 = (SWord16) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToWord16.c" ==================
 == BEGIN: "fromFP_Float_ToWord32.c" ================
@@ -422,14 +392,9 @@ SWord16 fromFP_Float_ToWord16(const SFloat a)
 SWord32 fromFP_Float_ToWord32(const SFloat a)
 {
   const SFloat  s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SWord32 s6 = (!isnan(s0) && signbit(s0)) ? (- ((SWord32) fabsf(s0))) : ((SWord32) s0);
-  const SWord32 s8 = s4 ? s6 : 0x00000000UL;
+  const SWord32 s2 = (SWord32) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToWord32.c" ==================
 == BEGIN: "fromFP_Float_ToWord64.c" ================
@@ -440,14 +405,9 @@ SWord32 fromFP_Float_ToWord32(const SFloat a)
 SWord64 fromFP_Float_ToWord64(const SFloat a)
 {
   const SFloat  s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SWord64 s6 = (!isnan(s0) && signbit(s0)) ? (- ((SWord64) fabsf(s0))) : ((SWord64) s0);
-  const SWord64 s8 = s4 ? s6 : 0x0000000000000000ULL;
+  const SWord64 s2 = (SWord64) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToWord64.c" ==================
 == BEGIN: "fromFP_Float_ToFloat.c" ================
@@ -482,14 +442,9 @@ SDouble fromFP_Float_ToDouble(const SFloat a)
 SInteger fromFP_Float_ToInteger(const SFloat a)
 {
   const SFloat   s0 = a;
-  const SBool    s1 = isnan(s0);
-  const SBool    s2 = isinf(s0);
-  const SBool    s3 = s1 || s2;
-  const SBool    s4 = !s3;
-  const SInteger s6 = (SInteger) s0;
-  const SInteger s8 = s4 ? s6 : 0x0000000000000000LL;
+  const SInteger s2 = (SInteger) rintf(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToInteger.c" ==================
 == BEGIN: "fromFP_Float_ToReal.c" ================
@@ -500,14 +455,9 @@ SInteger fromFP_Float_ToInteger(const SFloat a)
 SReal fromFP_Float_ToReal(const SFloat a)
 {
   const SFloat s0 = a;
-  const SBool  s1 = isnan(s0);
-  const SBool  s2 = isinf(s0);
-  const SBool  s3 = s1 || s2;
-  const SBool  s4 = !s3;
-  const SReal  s6 = (SReal) s0;
-  const SReal  s8 = s4 ? s6 : 0.0L;
+  const SReal  s2 = (SReal) s0;
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_Float_ToReal.c" ==================
 == BEGIN: "fromFP_DoubleTo_Int8.c" ================
@@ -518,14 +468,9 @@ SReal fromFP_Float_ToReal(const SFloat a)
 SInt8 fromFP_DoubleTo_Int8(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SInt8   s6 = (SInt8) s0;
-  const SInt8   s8 = s4 ? s6 : 0;
+  const SInt8   s2 = (SInt8) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Int8.c" ==================
 == BEGIN: "fromFP_DoubleTo_Int16.c" ================
@@ -536,14 +481,9 @@ SInt8 fromFP_DoubleTo_Int8(const SDouble a)
 SInt16 fromFP_DoubleTo_Int16(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SInt16  s6 = (SInt16) s0;
-  const SInt16  s8 = s4 ? s6 : 0x0000;
+  const SInt16  s2 = (SInt16) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Int16.c" ==================
 == BEGIN: "fromFP_DoubleTo_Int32.c" ================
@@ -554,14 +494,9 @@ SInt16 fromFP_DoubleTo_Int16(const SDouble a)
 SInt32 fromFP_DoubleTo_Int32(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SInt32  s6 = (SInt32) s0;
-  const SInt32  s8 = s4 ? s6 : 0x00000000L;
+  const SInt32  s2 = (SInt32) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Int32.c" ==================
 == BEGIN: "fromFP_DoubleTo_Int64.c" ================
@@ -572,14 +507,9 @@ SInt32 fromFP_DoubleTo_Int32(const SDouble a)
 SInt64 fromFP_DoubleTo_Int64(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SInt64  s6 = (SInt64) s0;
-  const SInt64  s8 = s4 ? s6 : 0x0000000000000000LL;
+  const SInt64  s2 = (SInt64) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Int64.c" ==================
 == BEGIN: "fromFP_DoubleTo_Word8.c" ================
@@ -590,14 +520,9 @@ SInt64 fromFP_DoubleTo_Int64(const SDouble a)
 SWord8 fromFP_DoubleTo_Word8(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SWord8  s6 = (!isnan(s0) && signbit(s0)) ? (- ((SWord8) fabs(s0))) : ((SWord8) s0);
-  const SWord8  s8 = s4 ? s6 : 0;
+  const SWord8  s2 = (SWord8) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Word8.c" ==================
 == BEGIN: "fromFP_DoubleTo_Word16.c" ================
@@ -608,14 +533,9 @@ SWord8 fromFP_DoubleTo_Word8(const SDouble a)
 SWord16 fromFP_DoubleTo_Word16(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SWord16 s6 = (!isnan(s0) && signbit(s0)) ? (- ((SWord16) fabs(s0))) : ((SWord16) s0);
-  const SWord16 s8 = s4 ? s6 : 0x0000U;
+  const SWord16 s2 = (SWord16) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Word16.c" ==================
 == BEGIN: "fromFP_DoubleTo_Word32.c" ================
@@ -626,14 +546,9 @@ SWord16 fromFP_DoubleTo_Word16(const SDouble a)
 SWord32 fromFP_DoubleTo_Word32(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SWord32 s6 = (!isnan(s0) && signbit(s0)) ? (- ((SWord32) fabs(s0))) : ((SWord32) s0);
-  const SWord32 s8 = s4 ? s6 : 0x00000000UL;
+  const SWord32 s2 = (SWord32) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Word32.c" ==================
 == BEGIN: "fromFP_DoubleTo_Word64.c" ================
@@ -644,14 +559,9 @@ SWord32 fromFP_DoubleTo_Word32(const SDouble a)
 SWord64 fromFP_DoubleTo_Word64(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SWord64 s6 = (!isnan(s0) && signbit(s0)) ? (- ((SWord64) fabs(s0))) : ((SWord64) s0);
-  const SWord64 s8 = s4 ? s6 : 0x0000000000000000ULL;
+  const SWord64 s2 = (SWord64) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Word64.c" ==================
 == BEGIN: "fromFP_DoubleTo_Float.c" ================
@@ -686,14 +596,9 @@ SDouble fromFP_DoubleTo_Double(const SDouble a)
 SInteger fromFP_DoubleTo_Integer(const SDouble a)
 {
   const SDouble  s0 = a;
-  const SBool    s1 = isnan(s0);
-  const SBool    s2 = isinf(s0);
-  const SBool    s3 = s1 || s2;
-  const SBool    s4 = !s3;
-  const SInteger s6 = (SInteger) s0;
-  const SInteger s8 = s4 ? s6 : 0x0000000000000000LL;
+  const SInteger s2 = (SInteger) rint(s0);
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Integer.c" ==================
 == BEGIN: "fromFP_DoubleTo_Real.c" ================
@@ -704,14 +609,9 @@ SInteger fromFP_DoubleTo_Integer(const SDouble a)
 SReal fromFP_DoubleTo_Real(const SDouble a)
 {
   const SDouble s0 = a;
-  const SBool   s1 = isnan(s0);
-  const SBool   s2 = isinf(s0);
-  const SBool   s3 = s1 || s2;
-  const SBool   s4 = !s3;
-  const SReal   s6 = (SReal) s0;
-  const SReal   s8 = s4 ? s6 : 0.0L;
+  const SReal   s2 = (SReal) s0;
 
-  return s8;
+  return s2;
 }
 == END: "fromFP_DoubleTo_Real.c" ==================
 == BEGIN: "fromFP_SWord32_SFloat.c" ================
@@ -1049,8 +949,8 @@ SFloat f_FP_Min(const SFloat a, const SFloat b)
 {
   const SFloat s0 = a;
   const SFloat s1 = b;
-  const SFloat s2 = ((FP_ZERO == fpclassify(s0)) && (FP_ZERO == fpclassify(s1)) && (signbit(s0) != signbit(s1))) ? 0.0F : fminf(s0,
-                                                                                                                                s1);
+  const SFloat s2 = ((FP_ZERO == fpclassify(s0)) && (FP_ZERO == fpclassify(s1)) && (signbit(s0) != signbit(s1))) ? 0x0p+0F /* 0.0F */ : fminf(s0,
+                                                                                                                                              s1);
 
   return s2;
 }
@@ -1064,8 +964,8 @@ SDouble d_FP_Min(const SDouble a, const SDouble b)
 {
   const SDouble s0 = a;
   const SDouble s1 = b;
-  const SDouble s2 = ((FP_ZERO == fpclassify(s0)) && (FP_ZERO == fpclassify(s1)) && (signbit(s0) != signbit(s1))) ? 0.0 : fmin(s0,
-                                                                                                                               s1);
+  const SDouble s2 = ((FP_ZERO == fpclassify(s0)) && (FP_ZERO == fpclassify(s1)) && (signbit(s0) != signbit(s1))) ? 0x0p+0 /* 0.0 */ : fmin(s0,
+                                                                                                                                            s1);
 
   return s2;
 }
@@ -1079,8 +979,8 @@ SFloat f_FP_Max(const SFloat a, const SFloat b)
 {
   const SFloat s0 = a;
   const SFloat s1 = b;
-  const SFloat s2 = ((FP_ZERO == fpclassify(s0)) && (FP_ZERO == fpclassify(s1)) && (signbit(s0) != signbit(s1))) ? 0.0F : fmaxf(s0,
-                                                                                                                                s1);
+  const SFloat s2 = ((FP_ZERO == fpclassify(s0)) && (FP_ZERO == fpclassify(s1)) && (signbit(s0) != signbit(s1))) ? 0x0p+0F /* 0.0F */ : fmaxf(s0,
+                                                                                                                                              s1);
 
   return s2;
 }
@@ -1094,8 +994,8 @@ SDouble d_FP_Max(const SDouble a, const SDouble b)
 {
   const SDouble s0 = a;
   const SDouble s1 = b;
-  const SDouble s2 = ((FP_ZERO == fpclassify(s0)) && (FP_ZERO == fpclassify(s1)) && (signbit(s0) != signbit(s1))) ? 0.0 : fmax(s0,
-                                                                                                                               s1);
+  const SDouble s2 = ((FP_ZERO == fpclassify(s0)) && (FP_ZERO == fpclassify(s1)) && (signbit(s0) != signbit(s1))) ? 0x0p+0 /* 0.0 */ : fmax(s0,
+                                                                                                                                            s1);
 
   return s2;
 }
@@ -1461,644 +1361,662 @@ void toFP_Int8_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Int8_ToFloat(42);
 
-  printf("toFP_Int8_ToFloat(42) = %.6g\n", __result);
+  printf("toFP_Int8_ToFloat(42) = %a\n", __result);
 }
 
 void toFP_Int16_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Int16_ToFloat(0x002a);
 
-  printf("toFP_Int16_ToFloat(0x002a) = %.6g\n", __result);
+  printf("toFP_Int16_ToFloat(0x002a) = %a\n", __result);
 }
 
 void toFP_Int32_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Int32_ToFloat(0x0000002aL);
 
-  printf("toFP_Int32_ToFloat(0x0000002aL) = %.6g\n", __result);
+  printf("toFP_Int32_ToFloat(0x0000002aL) = %a\n", __result);
 }
 
 void toFP_Int64_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Int64_ToFloat(0x000000000000002aLL);
 
-  printf("toFP_Int64_ToFloat(0x000000000000002aLL) = %.6g\n", __result);
+  printf("toFP_Int64_ToFloat(0x000000000000002aLL) = %a\n", __result);
 }
 
 void toFP_Word8_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Word8_ToFloat(42);
 
-  printf("toFP_Word8_ToFloat(42) = %.6g\n", __result);
+  printf("toFP_Word8_ToFloat(42) = %a\n", __result);
 }
 
 void toFP_Word16_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Word16_ToFloat(0x002aU);
 
-  printf("toFP_Word16_ToFloat(0x002aU) = %.6g\n", __result);
+  printf("toFP_Word16_ToFloat(0x002aU) = %a\n", __result);
 }
 
 void toFP_Word32_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Word32_ToFloat(0x0000002aUL);
 
-  printf("toFP_Word32_ToFloat(0x0000002aUL) = %.6g\n", __result);
+  printf("toFP_Word32_ToFloat(0x0000002aUL) = %a\n", __result);
 }
 
 void toFP_Word64_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Word64_ToFloat(0x000000000000002aULL);
 
-  printf("toFP_Word64_ToFloat(0x000000000000002aULL) = %.6g\n", __result);
+  printf("toFP_Word64_ToFloat(0x000000000000002aULL) = %a\n", __result);
 }
 
 void toFP_Float_ToFloat_driver(void)
 {
-  const SFloat __result = toFP_Float_ToFloat(42.0F);
+  const SFloat __result = toFP_Float_ToFloat(0x1.5p5F /* 42.0F */);
 
-  printf("toFP_Float_ToFloat(42.0F) = %.6g\n", __result);
+  printf("toFP_Float_ToFloat(0x1.5p5F /* 42.0F */) = %a\n", __result);
 }
 
 void toFP_Double_ToFloat_driver(void)
 {
-  const SFloat __result = toFP_Double_ToFloat(42.0);
+  const SFloat __result = toFP_Double_ToFloat(0x1.5p5 /* 42.0 */);
 
-  printf("toFP_Double_ToFloat(42.0) = %.6g\n", __result);
+  printf("toFP_Double_ToFloat(0x1.5p5 /* 42.0 */) = %a\n", __result);
 }
 
 void toFP_Integer_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Integer_ToFloat(0x000000000000002aLL);
 
-  printf("toFP_Integer_ToFloat(0x000000000000002aLL) = %.6g\n", __result);
+  printf("toFP_Integer_ToFloat(0x000000000000002aLL) = %a\n", __result);
 }
 
 void toFP_Real_ToFloat_driver(void)
 {
   const SFloat __result = toFP_Real_ToFloat(42.0L);
 
-  printf("toFP_Real_ToFloat(42.0L) = %.6g\n", __result);
+  printf("toFP_Real_ToFloat(42.0L) = %a\n", __result);
 }
 
 void toFP_Int8_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Int8_ToDouble(42);
 
-  printf("toFP_Int8_ToDouble(42) = %.15g\n", __result);
+  printf("toFP_Int8_ToDouble(42) = %a\n", __result);
 }
 
 void toFP_Int16_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Int16_ToDouble(0x002a);
 
-  printf("toFP_Int16_ToDouble(0x002a) = %.15g\n", __result);
+  printf("toFP_Int16_ToDouble(0x002a) = %a\n", __result);
 }
 
 void toFP_Int32_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Int32_ToDouble(0x0000002aL);
 
-  printf("toFP_Int32_ToDouble(0x0000002aL) = %.15g\n", __result);
+  printf("toFP_Int32_ToDouble(0x0000002aL) = %a\n", __result);
 }
 
 void toFP_Int64_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Int64_ToDouble(0x000000000000002aLL);
 
-  printf("toFP_Int64_ToDouble(0x000000000000002aLL) = %.15g\n", __result);
+  printf("toFP_Int64_ToDouble(0x000000000000002aLL) = %a\n", __result);
 }
 
 void toFP_Word8_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Word8_ToDouble(42);
 
-  printf("toFP_Word8_ToDouble(42) = %.15g\n", __result);
+  printf("toFP_Word8_ToDouble(42) = %a\n", __result);
 }
 
 void toFP_Word16_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Word16_ToDouble(0x002aU);
 
-  printf("toFP_Word16_ToDouble(0x002aU) = %.15g\n", __result);
+  printf("toFP_Word16_ToDouble(0x002aU) = %a\n", __result);
 }
 
 void toFP_Word32_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Word32_ToDouble(0x0000002aUL);
 
-  printf("toFP_Word32_ToDouble(0x0000002aUL) = %.15g\n", __result);
+  printf("toFP_Word32_ToDouble(0x0000002aUL) = %a\n", __result);
 }
 
 void toFP_Word64_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Word64_ToDouble(0x000000000000002aULL);
 
-  printf("toFP_Word64_ToDouble(0x000000000000002aULL) = %.15g\n", __result);
+  printf("toFP_Word64_ToDouble(0x000000000000002aULL) = %a\n", __result);
 }
 
 void toFP_Float_ToDouble_driver(void)
 {
-  const SDouble __result = toFP_Float_ToDouble(42.0F);
+  const SDouble __result = toFP_Float_ToDouble(0x1.5p5F /* 42.0F */);
 
-  printf("toFP_Float_ToDouble(42.0F) = %.15g\n", __result);
+  printf("toFP_Float_ToDouble(0x1.5p5F /* 42.0F */) = %a\n", __result);
 }
 
 void toFP_Double_ToDouble_driver(void)
 {
-  const SDouble __result = toFP_Double_ToDouble(42.0);
+  const SDouble __result = toFP_Double_ToDouble(0x1.5p5 /* 42.0 */);
 
-  printf("toFP_Double_ToDouble(42.0) = %.15g\n", __result);
+  printf("toFP_Double_ToDouble(0x1.5p5 /* 42.0 */) = %a\n", __result);
 }
 
 void toFP_Integer_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Integer_ToDouble(0x000000000000002aLL);
 
-  printf("toFP_Integer_ToDouble(0x000000000000002aLL) = %.15g\n", __result);
+  printf("toFP_Integer_ToDouble(0x000000000000002aLL) = %a\n", __result);
 }
 
 void toFP_Real_ToDouble_driver(void)
 {
   const SDouble __result = toFP_Real_ToDouble(42.0L);
 
-  printf("toFP_Real_ToDouble(42.0L) = %.15g\n", __result);
+  printf("toFP_Real_ToDouble(42.0L) = %a\n", __result);
 }
 
 void fromFP_Float_ToInt8_driver(void)
 {
-  const SInt8 __result = fromFP_Float_ToInt8(42.0F);
+  const SInt8 __result = fromFP_Float_ToInt8(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToInt8(42.0F) = %"PRId8"\n", __result);
+  printf("fromFP_Float_ToInt8(0x1.5p5F /* 42.0F */) = %"PRId8"\n", __result);
 }
 
 void fromFP_Float_ToInt16_driver(void)
 {
-  const SInt16 __result = fromFP_Float_ToInt16(42.0F);
+  const SInt16 __result = fromFP_Float_ToInt16(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToInt16(42.0F) = %"PRId16"\n", __result);
+  printf("fromFP_Float_ToInt16(0x1.5p5F /* 42.0F */) = %"PRId16"\n", __result);
 }
 
 void fromFP_Float_ToInt32_driver(void)
 {
-  const SInt32 __result = fromFP_Float_ToInt32(42.0F);
+  const SInt32 __result = fromFP_Float_ToInt32(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToInt32(42.0F) = %"PRId32"L\n", __result);
+  printf("fromFP_Float_ToInt32(0x1.5p5F /* 42.0F */) = %"PRId32"L\n", __result);
 }
 
 void fromFP_Float_ToInt64_driver(void)
 {
-  const SInt64 __result = fromFP_Float_ToInt64(42.0F);
+  const SInt64 __result = fromFP_Float_ToInt64(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToInt64(42.0F) = %"PRId64"LL\n", __result);
+  printf("fromFP_Float_ToInt64(0x1.5p5F /* 42.0F */) = %"PRId64"LL\n", __result);
 }
 
 void fromFP_Float_ToWord8_driver(void)
 {
-  const SWord8 __result = fromFP_Float_ToWord8(42.0F);
+  const SWord8 __result = fromFP_Float_ToWord8(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToWord8(42.0F) = %"PRIu8"\n", __result);
+  printf("fromFP_Float_ToWord8(0x1.5p5F /* 42.0F */) = %"PRIu8"\n", __result);
 }
 
 void fromFP_Float_ToWord16_driver(void)
 {
-  const SWord16 __result = fromFP_Float_ToWord16(42.0F);
+  const SWord16 __result = fromFP_Float_ToWord16(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToWord16(42.0F) = 0x%04"PRIx16"U\n", __result);
+  printf("fromFP_Float_ToWord16(0x1.5p5F /* 42.0F */) = 0x%04"PRIx16"U\n", __result);
 }
 
 void fromFP_Float_ToWord32_driver(void)
 {
-  const SWord32 __result = fromFP_Float_ToWord32(42.0F);
+  const SWord32 __result = fromFP_Float_ToWord32(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToWord32(42.0F) = 0x%08"PRIx32"UL\n", __result);
+  printf("fromFP_Float_ToWord32(0x1.5p5F /* 42.0F */) = 0x%08"PRIx32"UL\n", __result);
 }
 
 void fromFP_Float_ToWord64_driver(void)
 {
-  const SWord64 __result = fromFP_Float_ToWord64(42.0F);
+  const SWord64 __result = fromFP_Float_ToWord64(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToWord64(42.0F) = 0x%016"PRIx64"ULL\n", __result);
+  printf("fromFP_Float_ToWord64(0x1.5p5F /* 42.0F */) = 0x%016"PRIx64"ULL\n", __result);
 }
 
 void fromFP_Float_ToFloat_driver(void)
 {
-  const SFloat __result = fromFP_Float_ToFloat(42.0F);
+  const SFloat __result = fromFP_Float_ToFloat(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToFloat(42.0F) = %.6g\n", __result);
+  printf("fromFP_Float_ToFloat(0x1.5p5F /* 42.0F */) = %a\n", __result);
 }
 
 void fromFP_Float_ToDouble_driver(void)
 {
-  const SDouble __result = fromFP_Float_ToDouble(42.0F);
+  const SDouble __result = fromFP_Float_ToDouble(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToDouble(42.0F) = %.15g\n", __result);
+  printf("fromFP_Float_ToDouble(0x1.5p5F /* 42.0F */) = %a\n", __result);
 }
 
 void fromFP_Float_ToInteger_driver(void)
 {
-  const SInteger __result = fromFP_Float_ToInteger(42.0F);
+  const SInteger __result = fromFP_Float_ToInteger(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToInteger(42.0F) = %"PRId64"LL\n", __result);
+  printf("fromFP_Float_ToInteger(0x1.5p5F /* 42.0F */) = %"PRId64"LL\n", __result);
 }
 
 void fromFP_Float_ToReal_driver(void)
 {
-  const SReal __result = fromFP_Float_ToReal(42.0F);
+  const SReal __result = fromFP_Float_ToReal(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_Float_ToReal(42.0F) = %Lf\n", __result);
+  printf("fromFP_Float_ToReal(0x1.5p5F /* 42.0F */) = %Lf\n", __result);
 }
 
 void fromFP_DoubleTo_Int8_driver(void)
 {
-  const SInt8 __result = fromFP_DoubleTo_Int8(42.0);
+  const SInt8 __result = fromFP_DoubleTo_Int8(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Int8(42.0) = %"PRId8"\n", __result);
+  printf("fromFP_DoubleTo_Int8(0x1.5p5 /* 42.0 */) = %"PRId8"\n", __result);
 }
 
 void fromFP_DoubleTo_Int16_driver(void)
 {
-  const SInt16 __result = fromFP_DoubleTo_Int16(42.0);
+  const SInt16 __result = fromFP_DoubleTo_Int16(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Int16(42.0) = %"PRId16"\n", __result);
+  printf("fromFP_DoubleTo_Int16(0x1.5p5 /* 42.0 */) = %"PRId16"\n", __result);
 }
 
 void fromFP_DoubleTo_Int32_driver(void)
 {
-  const SInt32 __result = fromFP_DoubleTo_Int32(42.0);
+  const SInt32 __result = fromFP_DoubleTo_Int32(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Int32(42.0) = %"PRId32"L\n", __result);
+  printf("fromFP_DoubleTo_Int32(0x1.5p5 /* 42.0 */) = %"PRId32"L\n", __result);
 }
 
 void fromFP_DoubleTo_Int64_driver(void)
 {
-  const SInt64 __result = fromFP_DoubleTo_Int64(42.0);
+  const SInt64 __result = fromFP_DoubleTo_Int64(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Int64(42.0) = %"PRId64"LL\n", __result);
+  printf("fromFP_DoubleTo_Int64(0x1.5p5 /* 42.0 */) = %"PRId64"LL\n", __result);
 }
 
 void fromFP_DoubleTo_Word8_driver(void)
 {
-  const SWord8 __result = fromFP_DoubleTo_Word8(42.0);
+  const SWord8 __result = fromFP_DoubleTo_Word8(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Word8(42.0) = %"PRIu8"\n", __result);
+  printf("fromFP_DoubleTo_Word8(0x1.5p5 /* 42.0 */) = %"PRIu8"\n", __result);
 }
 
 void fromFP_DoubleTo_Word16_driver(void)
 {
-  const SWord16 __result = fromFP_DoubleTo_Word16(42.0);
+  const SWord16 __result = fromFP_DoubleTo_Word16(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Word16(42.0) = 0x%04"PRIx16"U\n", __result);
+  printf("fromFP_DoubleTo_Word16(0x1.5p5 /* 42.0 */) = 0x%04"PRIx16"U\n", __result);
 }
 
 void fromFP_DoubleTo_Word32_driver(void)
 {
-  const SWord32 __result = fromFP_DoubleTo_Word32(42.0);
+  const SWord32 __result = fromFP_DoubleTo_Word32(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Word32(42.0) = 0x%08"PRIx32"UL\n", __result);
+  printf("fromFP_DoubleTo_Word32(0x1.5p5 /* 42.0 */) = 0x%08"PRIx32"UL\n", __result);
 }
 
 void fromFP_DoubleTo_Word64_driver(void)
 {
-  const SWord64 __result = fromFP_DoubleTo_Word64(42.0);
+  const SWord64 __result = fromFP_DoubleTo_Word64(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Word64(42.0) = 0x%016"PRIx64"ULL\n", __result);
+  printf("fromFP_DoubleTo_Word64(0x1.5p5 /* 42.0 */) = 0x%016"PRIx64"ULL\n", __result);
 }
 
 void fromFP_DoubleTo_Float_driver(void)
 {
-  const SFloat __result = fromFP_DoubleTo_Float(42.0);
+  const SFloat __result = fromFP_DoubleTo_Float(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Float(42.0) = %.6g\n", __result);
+  printf("fromFP_DoubleTo_Float(0x1.5p5 /* 42.0 */) = %a\n", __result);
 }
 
 void fromFP_DoubleTo_Double_driver(void)
 {
-  const SDouble __result = fromFP_DoubleTo_Double(42.0);
+  const SDouble __result = fromFP_DoubleTo_Double(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Double(42.0) = %.15g\n", __result);
+  printf("fromFP_DoubleTo_Double(0x1.5p5 /* 42.0 */) = %a\n", __result);
 }
 
 void fromFP_DoubleTo_Integer_driver(void)
 {
-  const SInteger __result = fromFP_DoubleTo_Integer(42.0);
+  const SInteger __result = fromFP_DoubleTo_Integer(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Integer(42.0) = %"PRId64"LL\n", __result);
+  printf("fromFP_DoubleTo_Integer(0x1.5p5 /* 42.0 */) = %"PRId64"LL\n", __result);
 }
 
 void fromFP_DoubleTo_Real_driver(void)
 {
-  const SReal __result = fromFP_DoubleTo_Real(42.0);
+  const SReal __result = fromFP_DoubleTo_Real(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_DoubleTo_Real(42.0) = %Lf\n", __result);
+  printf("fromFP_DoubleTo_Real(0x1.5p5 /* 42.0 */) = %Lf\n", __result);
 }
 
 void fromFP_SWord32_SFloat_driver(void)
 {
   const SFloat __result = fromFP_SWord32_SFloat(0x0000002aUL);
 
-  printf("fromFP_SWord32_SFloat(0x0000002aUL) = %.6g\n", __result);
+  printf("fromFP_SWord32_SFloat(0x0000002aUL) = %a\n", __result);
 }
 
 void fromFP_SWord64_SDouble_driver(void)
 {
   const SDouble __result = fromFP_SWord64_SDouble(0x000000000000002aULL);
 
-  printf("fromFP_SWord64_SDouble(0x000000000000002aULL) = %.15g\n", __result);
+  printf("fromFP_SWord64_SDouble(0x000000000000002aULL) = %a\n", __result);
 }
 
 void fromFP_SFloat_SWord32_driver(void)
 {
-  const SWord32 __result = fromFP_SFloat_SWord32(42.0F);
+  const SWord32 __result = fromFP_SFloat_SWord32(0x1.5p5F /* 42.0F */);
 
-  printf("fromFP_SFloat_SWord32(42.0F) = 0x%08"PRIx32"UL\n", __result);
+  printf("fromFP_SFloat_SWord32(0x1.5p5F /* 42.0F */) = 0x%08"PRIx32"UL\n", __result);
 }
 
 void fromFP_SDouble_SWord64_driver(void)
 {
-  const SWord64 __result = fromFP_SDouble_SWord64(42.0);
+  const SWord64 __result = fromFP_SDouble_SWord64(0x1.5p5 /* 42.0 */);
 
-  printf("fromFP_SDouble_SWord64(42.0) = 0x%016"PRIx64"ULL\n", __result);
+  printf("fromFP_SDouble_SWord64(0x1.5p5 /* 42.0 */) = 0x%016"PRIx64"ULL\n", __result);
 }
 
 void f_FP_Abs_driver(void)
 {
-  const SFloat __result = f_FP_Abs(42.0F);
+  const SFloat __result = f_FP_Abs(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_Abs(42.0F) = %.6g\n", __result);
+  printf("f_FP_Abs(0x1.5p5F /* 42.0F */) = %a\n", __result);
 }
 
 void d_FP_Abs_driver(void)
 {
-  const SDouble __result = d_FP_Abs(42.0);
+  const SDouble __result = d_FP_Abs(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_Abs(42.0) = %.15g\n", __result);
+  printf("d_FP_Abs(0x1.5p5 /* 42.0 */) = %a\n", __result);
 }
 
 void f_FP_Neg_driver(void)
 {
-  const SFloat __result = f_FP_Neg(42.0F);
+  const SFloat __result = f_FP_Neg(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_Neg(42.0F) = %.6g\n", __result);
+  printf("f_FP_Neg(0x1.5p5F /* 42.0F */) = %a\n", __result);
 }
 
 void d_FP_Neg_driver(void)
 {
-  const SDouble __result = d_FP_Neg(42.0);
+  const SDouble __result = d_FP_Neg(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_Neg(42.0) = %.15g\n", __result);
+  printf("d_FP_Neg(0x1.5p5 /* 42.0 */) = %a\n", __result);
 }
 
 void f_FP_Add_driver(void)
 {
-  const SFloat __result = f_FP_Add(42.0F, 43.0F);
+  const SFloat __result = f_FP_Add(0x1.5p5F /* 42.0F */,
+                                   0x1.58p5F /* 43.0F */);
 
-  printf("f_FP_Add(42.0F, 43.0F) = %.6g\n", __result);
+  printf("f_FP_Add(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */) = %a\n", __result);
 }
 
 void d_FP_Add_driver(void)
 {
-  const SDouble __result = d_FP_Add(42.0, 43.0);
+  const SDouble __result = d_FP_Add(0x1.5p5 /* 42.0 */,
+                                    0x1.58p5 /* 43.0 */);
 
-  printf("d_FP_Add(42.0, 43.0) = %.15g\n", __result);
+  printf("d_FP_Add(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */) = %a\n", __result);
 }
 
 void f_FP_Sub_driver(void)
 {
-  const SFloat __result = f_FP_Sub(42.0F, 43.0F);
+  const SFloat __result = f_FP_Sub(0x1.5p5F /* 42.0F */,
+                                   0x1.58p5F /* 43.0F */);
 
-  printf("f_FP_Sub(42.0F, 43.0F) = %.6g\n", __result);
+  printf("f_FP_Sub(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */) = %a\n", __result);
 }
 
 void d_FP_Sub_driver(void)
 {
-  const SDouble __result = d_FP_Sub(42.0, 43.0);
+  const SDouble __result = d_FP_Sub(0x1.5p5 /* 42.0 */,
+                                    0x1.58p5 /* 43.0 */);
 
-  printf("d_FP_Sub(42.0, 43.0) = %.15g\n", __result);
+  printf("d_FP_Sub(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */) = %a\n", __result);
 }
 
 void f_FP_Mul_driver(void)
 {
-  const SFloat __result = f_FP_Mul(42.0F, 43.0F);
+  const SFloat __result = f_FP_Mul(0x1.5p5F /* 42.0F */,
+                                   0x1.58p5F /* 43.0F */);
 
-  printf("f_FP_Mul(42.0F, 43.0F) = %.6g\n", __result);
+  printf("f_FP_Mul(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */) = %a\n", __result);
 }
 
 void d_FP_Mul_driver(void)
 {
-  const SDouble __result = d_FP_Mul(42.0, 43.0);
+  const SDouble __result = d_FP_Mul(0x1.5p5 /* 42.0 */,
+                                    0x1.58p5 /* 43.0 */);
 
-  printf("d_FP_Mul(42.0, 43.0) = %.15g\n", __result);
+  printf("d_FP_Mul(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */) = %a\n", __result);
 }
 
 void f_FP_Div_driver(void)
 {
-  const SFloat __result = f_FP_Div(42.0F, 43.0F);
+  const SFloat __result = f_FP_Div(0x1.5p5F /* 42.0F */,
+                                   0x1.58p5F /* 43.0F */);
 
-  printf("f_FP_Div(42.0F, 43.0F) = %.6g\n", __result);
+  printf("f_FP_Div(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */) = %a\n", __result);
 }
 
 void d_FP_Div_driver(void)
 {
-  const SDouble __result = d_FP_Div(42.0, 43.0);
+  const SDouble __result = d_FP_Div(0x1.5p5 /* 42.0 */,
+                                    0x1.58p5 /* 43.0 */);
 
-  printf("d_FP_Div(42.0, 43.0) = %.15g\n", __result);
+  printf("d_FP_Div(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */) = %a\n", __result);
 }
 
 void f_FP_FMA_driver(void)
 {
-  const SFloat __result = f_FP_FMA(42.0F, 43.0F, 44.0F);
+  const SFloat __result = f_FP_FMA(0x1.5p5F /* 42.0F */,
+                                   0x1.58p5F /* 43.0F */, 0x1.6p5F /* 44.0F */);
 
-  printf("f_FP_FMA(42.0F, 43.0F, 44.0F) = %.6g\n", __result);
+  printf("f_FP_FMA(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */, 0x1.6p5F /* 44.0F */) = %a\n", __result);
 }
 
 void d_FP_FMA_driver(void)
 {
-  const SDouble __result = d_FP_FMA(42.0, 43.0, 44.0);
+  const SDouble __result = d_FP_FMA(0x1.5p5 /* 42.0 */,
+                                    0x1.58p5 /* 43.0 */, 0x1.6p5 /* 44.0 */);
 
-  printf("d_FP_FMA(42.0, 43.0, 44.0) = %.15g\n", __result);
+  printf("d_FP_FMA(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */, 0x1.6p5 /* 44.0 */) = %a\n", __result);
 }
 
 void f_FP_Sqrt_driver(void)
 {
-  const SFloat __result = f_FP_Sqrt(42.0F);
+  const SFloat __result = f_FP_Sqrt(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_Sqrt(42.0F) = %.6g\n", __result);
+  printf("f_FP_Sqrt(0x1.5p5F /* 42.0F */) = %a\n", __result);
 }
 
 void d_FP_Sqrt_driver(void)
 {
-  const SDouble __result = d_FP_Sqrt(42.0);
+  const SDouble __result = d_FP_Sqrt(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_Sqrt(42.0) = %.15g\n", __result);
+  printf("d_FP_Sqrt(0x1.5p5 /* 42.0 */) = %a\n", __result);
 }
 
 void f_FP_Rem_driver(void)
 {
-  const SFloat __result = f_FP_Rem(42.0F, 43.0F);
+  const SFloat __result = f_FP_Rem(0x1.5p5F /* 42.0F */,
+                                   0x1.58p5F /* 43.0F */);
 
-  printf("f_FP_Rem(42.0F, 43.0F) = %.6g\n", __result);
+  printf("f_FP_Rem(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */) = %a\n", __result);
 }
 
 void d_FP_Rem_driver(void)
 {
-  const SDouble __result = d_FP_Rem(42.0, 43.0);
+  const SDouble __result = d_FP_Rem(0x1.5p5 /* 42.0 */,
+                                    0x1.58p5 /* 43.0 */);
 
-  printf("d_FP_Rem(42.0, 43.0) = %.15g\n", __result);
+  printf("d_FP_Rem(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */) = %a\n", __result);
 }
 
 void f_FP_RoundToIntegral_driver(void)
 {
-  const SFloat __result = f_FP_RoundToIntegral(42.0F);
+  const SFloat __result = f_FP_RoundToIntegral(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_RoundToIntegral(42.0F) = %.6g\n", __result);
+  printf("f_FP_RoundToIntegral(0x1.5p5F /* 42.0F */) = %a\n", __result);
 }
 
 void d_FP_RoundToIntegral_driver(void)
 {
-  const SDouble __result = d_FP_RoundToIntegral(42.0);
+  const SDouble __result = d_FP_RoundToIntegral(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_RoundToIntegral(42.0) = %.15g\n", __result);
+  printf("d_FP_RoundToIntegral(0x1.5p5 /* 42.0 */) = %a\n", __result);
 }
 
 void f_FP_Min_driver(void)
 {
-  const SFloat __result = f_FP_Min(42.0F, 43.0F);
+  const SFloat __result = f_FP_Min(0x1.5p5F /* 42.0F */,
+                                   0x1.58p5F /* 43.0F */);
 
-  printf("f_FP_Min(42.0F, 43.0F) = %.6g\n", __result);
+  printf("f_FP_Min(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */) = %a\n", __result);
 }
 
 void d_FP_Min_driver(void)
 {
-  const SDouble __result = d_FP_Min(42.0, 43.0);
+  const SDouble __result = d_FP_Min(0x1.5p5 /* 42.0 */,
+                                    0x1.58p5 /* 43.0 */);
 
-  printf("d_FP_Min(42.0, 43.0) = %.15g\n", __result);
+  printf("d_FP_Min(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */) = %a\n", __result);
 }
 
 void f_FP_Max_driver(void)
 {
-  const SFloat __result = f_FP_Max(42.0F, 43.0F);
+  const SFloat __result = f_FP_Max(0x1.5p5F /* 42.0F */,
+                                   0x1.58p5F /* 43.0F */);
 
-  printf("f_FP_Max(42.0F, 43.0F) = %.6g\n", __result);
+  printf("f_FP_Max(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */) = %a\n", __result);
 }
 
 void d_FP_Max_driver(void)
 {
-  const SDouble __result = d_FP_Max(42.0, 43.0);
+  const SDouble __result = d_FP_Max(0x1.5p5 /* 42.0 */,
+                                    0x1.58p5 /* 43.0 */);
 
-  printf("d_FP_Max(42.0, 43.0) = %.15g\n", __result);
+  printf("d_FP_Max(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */) = %a\n", __result);
 }
 
 void f_FP_IsEqualObject_driver(void)
 {
-  const SBool __result = f_FP_IsEqualObject(42.0F, 43.0F);
+  const SBool __result = f_FP_IsEqualObject(0x1.5p5F /* 42.0F */,
+                                            0x1.58p5F /* 43.0F */);
 
-  printf("f_FP_IsEqualObject(42.0F, 43.0F) = %d\n", __result);
+  printf("f_FP_IsEqualObject(0x1.5p5F /* 42.0F */, 0x1.58p5F /* 43.0F */) = %d\n", __result);
 }
 
 void d_FP_IsEqualObject_driver(void)
 {
-  const SBool __result = d_FP_IsEqualObject(42.0, 43.0);
+  const SBool __result = d_FP_IsEqualObject(0x1.5p5 /* 42.0 */,
+                                            0x1.58p5 /* 43.0 */);
 
-  printf("d_FP_IsEqualObject(42.0, 43.0) = %d\n", __result);
+  printf("d_FP_IsEqualObject(0x1.5p5 /* 42.0 */, 0x1.58p5 /* 43.0 */) = %d\n", __result);
 }
 
 void f_FP_IsNormal_driver(void)
 {
-  const SBool __result = f_FP_IsNormal(42.0F);
+  const SBool __result = f_FP_IsNormal(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_IsNormal(42.0F) = %d\n", __result);
+  printf("f_FP_IsNormal(0x1.5p5F /* 42.0F */) = %d\n", __result);
 }
 
 void d_FP_IsNormal_driver(void)
 {
-  const SBool __result = d_FP_IsNormal(42.0);
+  const SBool __result = d_FP_IsNormal(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_IsNormal(42.0) = %d\n", __result);
+  printf("d_FP_IsNormal(0x1.5p5 /* 42.0 */) = %d\n", __result);
 }
 
 void f_FP_IsZero_driver(void)
 {
-  const SBool __result = f_FP_IsZero(42.0F);
+  const SBool __result = f_FP_IsZero(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_IsZero(42.0F) = %d\n", __result);
+  printf("f_FP_IsZero(0x1.5p5F /* 42.0F */) = %d\n", __result);
 }
 
 void d_FP_IsZero_driver(void)
 {
-  const SBool __result = d_FP_IsZero(42.0);
+  const SBool __result = d_FP_IsZero(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_IsZero(42.0) = %d\n", __result);
+  printf("d_FP_IsZero(0x1.5p5 /* 42.0 */) = %d\n", __result);
 }
 
 void f_FP_IsSubnormal_driver(void)
 {
-  const SBool __result = f_FP_IsSubnormal(42.0F);
+  const SBool __result = f_FP_IsSubnormal(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_IsSubnormal(42.0F) = %d\n", __result);
+  printf("f_FP_IsSubnormal(0x1.5p5F /* 42.0F */) = %d\n", __result);
 }
 
 void d_FP_IsSubnormal_driver(void)
 {
-  const SBool __result = d_FP_IsSubnormal(42.0);
+  const SBool __result = d_FP_IsSubnormal(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_IsSubnormal(42.0) = %d\n", __result);
+  printf("d_FP_IsSubnormal(0x1.5p5 /* 42.0 */) = %d\n", __result);
 }
 
 void f_FP_IsInfinite_driver(void)
 {
-  const SBool __result = f_FP_IsInfinite(42.0F);
+  const SBool __result = f_FP_IsInfinite(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_IsInfinite(42.0F) = %d\n", __result);
+  printf("f_FP_IsInfinite(0x1.5p5F /* 42.0F */) = %d\n", __result);
 }
 
 void d_FP_IsInfinite_driver(void)
 {
-  const SBool __result = d_FP_IsInfinite(42.0);
+  const SBool __result = d_FP_IsInfinite(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_IsInfinite(42.0) = %d\n", __result);
+  printf("d_FP_IsInfinite(0x1.5p5 /* 42.0 */) = %d\n", __result);
 }
 
 void f_FP_IsNaN_driver(void)
 {
-  const SBool __result = f_FP_IsNaN(42.0F);
+  const SBool __result = f_FP_IsNaN(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_IsNaN(42.0F) = %d\n", __result);
+  printf("f_FP_IsNaN(0x1.5p5F /* 42.0F */) = %d\n", __result);
 }
 
 void d_FP_IsNaN_driver(void)
 {
-  const SBool __result = d_FP_IsNaN(42.0);
+  const SBool __result = d_FP_IsNaN(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_IsNaN(42.0) = %d\n", __result);
+  printf("d_FP_IsNaN(0x1.5p5 /* 42.0 */) = %d\n", __result);
 }
 
 void f_FP_IsNegative_driver(void)
 {
-  const SBool __result = f_FP_IsNegative(42.0F);
+  const SBool __result = f_FP_IsNegative(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_IsNegative(42.0F) = %d\n", __result);
+  printf("f_FP_IsNegative(0x1.5p5F /* 42.0F */) = %d\n", __result);
 }
 
 void d_FP_IsNegative_driver(void)
 {
-  const SBool __result = d_FP_IsNegative(42.0);
+  const SBool __result = d_FP_IsNegative(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_IsNegative(42.0) = %d\n", __result);
+  printf("d_FP_IsNegative(0x1.5p5 /* 42.0 */) = %d\n", __result);
 }
 
 void f_FP_IsPositive_driver(void)
 {
-  const SBool __result = f_FP_IsPositive(42.0F);
+  const SBool __result = f_FP_IsPositive(0x1.5p5F /* 42.0F */);
 
-  printf("f_FP_IsPositive(42.0F) = %d\n", __result);
+  printf("f_FP_IsPositive(0x1.5p5F /* 42.0F */) = %d\n", __result);
 }
 
 void d_FP_IsPositive_driver(void)
 {
-  const SBool __result = d_FP_IsPositive(42.0);
+  const SBool __result = d_FP_IsPositive(0x1.5p5 /* 42.0 */);
 
-  printf("d_FP_IsPositive(42.0) = %d\n", __result);
+  printf("d_FP_IsPositive(0x1.5p5 /* 42.0 */) = %d\n", __result);
 }
 
 int main(void)

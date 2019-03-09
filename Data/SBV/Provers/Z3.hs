@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Provers.Z3
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -33,11 +33,15 @@ z3 = SMTSolver {
                               , supportsReals              = True
                               , supportsApproxReals        = True
                               , supportsIEEE754            = True
+                              , supportsSets               = True
                               , supportsOptimization       = True
                               , supportsPseudoBooleans     = True
                               , supportsCustomQueries      = True
                               , supportsGlobalDecls        = True
-                              , supportsFlattenedSequences = Just [ "(set-option :pp.max_depth      4294967295)"
+                              , supportsDataTypes          = True
+                              , supportsDTConstructorSigs  = False
+                              , supportsDTAccessorSigs     = True
+                              , supportsFlattenedModels    = Just [ "(set-option :pp.max_depth      4294967295)"
                                                                   , "(set-option :pp.min_alias_size 4294967295)"
                                                                   ]
                               }

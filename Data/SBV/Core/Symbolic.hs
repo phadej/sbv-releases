@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Core.Symbolic
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -17,14 +17,12 @@
 {-# LANGUAGE FunctionalDependencies     #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE NamedFieldPuns             #-}
 {-# LANGUAGE PatternGuards              #-}
 {-# LANGUAGE Rank2Types                 #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeOperators              #-}
-{-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE UndecidableInstances       #-} -- for undetermined s in MonadState
 
 {-# OPTIONS_GHC -fno-warn-orphans #-}
@@ -32,7 +30,7 @@
 module Data.SBV.Core.Symbolic
   ( NodeId(..)
   , SV(..), swKind, trueSV, falseSV
-  , Op(..), PBOp(..), OvOp(..), FPOp(..), StrOp(..), SeqOp(..), RegExp(..)
+  , Op(..), PBOp(..), OvOp(..), FPOp(..), StrOp(..), SeqOp(..), SetOp(..), RegExp(..)
   , Quantifier(..), needsExistentials
   , RoundingMode(..)
   , SBVType(..), svUninterpreted, newUninterpreted, addAxiom
@@ -54,14 +52,14 @@ module Data.SBV.Core.Symbolic
   , SolverCapabilities(..)
   , extractSymbolicSimulationState
   , OptimizeStyle(..), Objective(..), Penalty(..), objectiveName, addSValOptGoal
-  , MonadQuery(..), QueryT(..), Query, Queriable(..), QueryState(..), QueryContext(..)
+  , MonadQuery(..), QueryT(..), Query, Queriable(..), Fresh(..), QueryState(..), QueryContext(..)
   , SMTScript(..), Solver(..), SMTSolver(..), SMTResult(..), SMTModel(..), SMTConfig(..), SMTEngine
   , outputSVal
   ) where
 
 import Control.Arrow               (first, second, (***))
 import Control.DeepSeq             (NFData(..))
-import Control.Monad               (when, unless)
+import Control.Monad               (when)
 import Control.Monad.Except        (MonadError, ExceptT)
 import Control.Monad.Reader        (MonadReader(..), ReaderT, runReaderT,
                                     mapReaderT)
@@ -72,7 +70,7 @@ import Control.Monad.Writer.Strict (MonadWriter)
 import Data.Char                   (isAlpha, isAlphaNum, toLower)
 import Data.IORef                  (IORef, newIORef, readIORef)
 import Data.List                   (intercalate, sortBy)
-import Data.Maybe                  (isJust, fromJust, fromMaybe, listToMaybe)
+import Data.Maybe                  (isJust, fromJust, fromMaybe)
 import Data.String                 (IsString(fromString))
 
 import Data.Time (getCurrentTime, UTCTime)
@@ -174,8 +172,15 @@ data Op = Plus
         | OverflowOp    OvOp                    -- Overflow-ops, categorized separately
         | StrOp StrOp                           -- String ops, categorized separately
         | SeqOp SeqOp                           -- Sequence ops, categorized separately
+        | SetOp SetOp                           -- Set operations, categorized separately
         | TupleConstructor Int                  -- Construct an n-tuple
         | TupleAccess Int Int                   -- Access element i of an n-tuple; second argument is n
+        | EitherConstructor Kind Kind Bool      -- Construct a sum; False: left, True: right
+        | EitherIs Kind Kind Bool               -- Either branch tester; False: left, True: right
+        | EitherAccess Bool                     -- Either branch access; False: left, True: right
+        | MaybeConstructor Kind Bool            -- Construct a maybe value; False: Nothing, True: Just
+        | MaybeIs Kind Bool                     -- Maybe tester; False: nothing, True: just
+        | MaybeAccess                           -- Maybe branch access; grab the contents of the just
         deriving (Eq, Ord)
 
 -- | Floating point operations
@@ -366,7 +371,7 @@ data SeqOp = SeqConcat    -- ^ See StrConcat
            | SeqReplace   -- ^ See StrReplace
   deriving (Eq, Ord)
 
--- | Show instance for @SeqOp@. Again, mapping is important.
+-- | Show instance for SeqOp. Again, mapping is important.
 instance Show SeqOp where
   show SeqConcat   = "seq.++"
   show SeqLen      = "seq.len"
@@ -377,6 +382,31 @@ instance Show SeqOp where
   show SeqPrefixOf = "seq.prefixof"
   show SeqSuffixOf = "seq.suffixof"
   show SeqReplace  = "seq.replace"
+
+-- | Set operations.
+data SetOp = SetEqual
+           | SetMember
+           | SetInsert
+           | SetDelete
+           | SetIntersect
+           | SetUnion
+           | SetSubset
+           | SetDifference
+           | SetComplement
+        deriving (Eq, Ord)
+
+-- The show instance for 'SetOp' is merely for debugging, we map them separately so
+-- the mapped strings are less important here.
+instance Show SetOp where
+  show SetEqual      = "=="
+  show SetMember     = "Set.member"
+  show SetInsert     = "Set.insert"
+  show SetDelete     = "Set.delete"
+  show SetIntersect  = "Set.intersect"
+  show SetUnion      = "Set.union"
+  show SetSubset     = "Set.subset"
+  show SetDifference = "Set.difference"
+  show SetComplement = "Set.complement"
 
 -- Show instance for 'Op'. Note that this is largely for debugging purposes, not used
 -- for being read by any tool.
@@ -409,10 +439,24 @@ instance Show Op where
 
   show (StrOp s)            = show s
   show (SeqOp s)            = show s
+  show (SetOp s)            = show s
 
-  show (TupleConstructor   0) = "SBVTuple0"
+  show (TupleConstructor   0) = "mkSBVTuple0"
   show (TupleConstructor   n) = "mkSBVTuple" ++ show n
   show (TupleAccess      i n) = "proj_" ++ show i ++ "_SBVTuple" ++ show n
+
+  show (EitherConstructor k1 k2  False) = "(_ left_SBVEither "  ++ show (KEither k1 k2) ++ ")"
+  show (EitherConstructor k1 k2  True ) = "(_ right_SBVEither " ++ show (KEither k1 k2) ++ ")"
+  show (EitherIs          k1 k2  False) = "(_ is (left_SBVEither ("  ++ show k1 ++ ") " ++ show (KEither k1 k2) ++ "))"
+  show (EitherIs          k1 k2  True ) = "(_ is (right_SBVEither (" ++ show k2 ++ ") " ++ show (KEither k1 k2) ++ "))"
+  show (EitherAccess             False) = "get_left_SBVEither"
+  show (EitherAccess             True ) = "get_right_SBVEither"
+
+  show (MaybeConstructor k False) = "(_ nothing_SBVMaybe " ++ show (KMaybe k) ++ ")"
+  show (MaybeConstructor k True)  = "(_ just_SBVMaybe "    ++ show (KMaybe k) ++ ")"
+  show (MaybeIs          k False) = "(_ is (nothing_SBVMaybe () "              ++ show (KMaybe k) ++ "))"
+  show (MaybeIs          k True ) = "(_ is (just_SBVMaybe (" ++ show k ++ ") " ++ show (KMaybe k) ++ "))"
+  show MaybeAccess               = "get_just_SBVMaybe"
 
   show op
     | Just s <- op `lookup` syms = s
@@ -430,6 +474,11 @@ instance Show Op where
 -- | Quantifiers: forall or exists. Note that we allow
 -- arbitrary nestings.
 data Quantifier = ALL | EX deriving Eq
+
+-- | Show instance for 'Quantifier'
+instance Show Quantifier where
+  show ALL = "Forall"
+  show EX  = "Exists"
 
 -- | Are there any existential quantifiers?
 needsExistentials :: [Quantifier] -> Bool
@@ -545,12 +594,22 @@ mapQueryT :: (ReaderT State m a -> ReaderT State n b) -> QueryT m a -> QueryT n 
 mapQueryT f = QueryT . f . runQueryT
 {-# INLINE mapQueryT #-}
 
--- | An queriable value.
+-- | Create a fresh variable of some type in the underlying query monad transformer.
+-- For further control on how these variables are projected and embedded, see the
+-- 'Queriable' class.
+class Fresh m a where
+  fresh :: QueryT m a
+
+-- | An queriable value. This is a generalization of the 'Fresh' class, in case one needs
+-- to be more specific about how projections/embeddings are done.
 class Queriable m a b | a -> b where
   -- | ^ Create a new symbolic value of type @a@
-  fresh   :: QueryT m a
+  create  :: QueryT m a
   -- | ^ Extract the current value in a SAT context
-  extract :: a -> QueryT m b
+  project :: a -> QueryT m b
+  -- | ^ Create a literal value. Morally, 'embed' and 'project' are inverses of each other
+  -- via the 'QueryT' monad transformer.
+  embed   :: b -> QueryT m a
 
 -- Have to define this one by hand, because we use ReaderT in the implementation
 instance MonadReader r m => MonadReader r (QueryT m) where
@@ -560,6 +619,9 @@ instance MonadReader r m => MonadReader r (QueryT m) where
 -- | A query is a user-guided mechanism to directly communicate and extract
 -- results from the solver.
 type Query = QueryT IO
+
+instance MonadSymbolic Query where
+   symbolicEnv = queryState
 
 instance NFData OptimizeStyle where
    rnf x = x `seq` ()
@@ -585,7 +647,7 @@ data Result = Result { reskinds       :: Set.Set Kind                           
                      , resUIConsts    :: [(String, SBVType)]                          -- ^ uninterpreted constants
                      , resAxioms      :: [(String, [String])]                         -- ^ axioms
                      , resAsgns       :: SBVPgm                                       -- ^ assignments
-                     , resConstraints :: [(Bool, [(String, String)], SV)]                   -- ^ additional constraints (boolean)
+                     , resConstraints :: S.Seq (Bool, [(String, String)], SV)         -- ^ additional constraints (boolean)
                      , resAssertions  :: [(String, Maybe CallStack, SV)]              -- ^ assertions
                      , resOutputs     :: [SV]                                         -- ^ outputs
                      }
@@ -618,7 +680,7 @@ instance Show Result where
                 ++ ["DEFINE"]
                 ++ map (\(s, e) -> "  " ++ shs s ++ " = " ++ show e) (F.toList (pgmAssignments xs))
                 ++ ["CONSTRAINTS"]
-                ++ map (("  " ++) . shCstr) cstrs
+                ++ map (("  " ++) . shCstr) (F.toList cstrs)
                 ++ ["ASSERTIONS"]
                 ++ map (("  "++) . shAssert) asserts
                 ++ ["OUTPUTS"]
@@ -742,20 +804,22 @@ isRunIStage s = case s of
                   IRun   -> True
 
 -- | Different means of running a symbolic piece of code
-data SBVRunMode = SMTMode  IStage Bool SMTConfig -- ^ In regular mode, with a stage. Bool is True if this is SAT.
-                | CodeGen                        -- ^ Code generation mode.
-                | Concrete                       -- ^ Concrete simulation mode.
+data SBVRunMode = SMTMode QueryContext IStage Bool SMTConfig                        -- ^ In regular mode, with a stage. Bool is True if this is SAT.
+                | CodeGen                                                           -- ^ Code generation mode.
+                | Concrete (Maybe (Bool, [((Quantifier, NamedSymVar), Maybe CV)]))  -- ^ Concrete simulation mode, with given environment if any. If Nothing: Random.
 
 -- Show instance for SBVRunMode; debugging purposes only
 instance Show SBVRunMode where
-   show (SMTMode ISetup True  _) = "Satisfiability setup"
-   show (SMTMode ISafe  True  _) = "Safety setup"
-   show (SMTMode IRun   True  _) = "Satisfiability"
-   show (SMTMode ISetup False _) = "Proof setup"
-   show (SMTMode ISafe  False _) = error "ISafe-False is not an expected/supported combination for SBVRunMode!"
-   show (SMTMode IRun   False _) = "Proof"
-   show CodeGen                  = "Code generation"
-   show Concrete                 = "Concrete evaluation"
+   show (SMTMode qc ISetup True  _)  = "Satisfiability setup (" ++ show qc ++ ")"
+   show (SMTMode qc ISafe  True  _)  = "Safety setup (" ++ show qc ++ ")"
+   show (SMTMode qc IRun   True  _)  = "Satisfiability (" ++ show qc ++ ")"
+   show (SMTMode qc ISetup False _)  = "Proof setup (" ++ show qc ++ ")"
+   show (SMTMode qc ISafe  False _)  = error $ "ISafe-False is not an expected/supported combination for SBVRunMode! (" ++ show qc ++ ")"
+   show (SMTMode qc IRun   False _)  = "Proof (" ++ show qc ++ ")"
+   show CodeGen                      = "Code generation"
+   show (Concrete Nothing)           = "Concrete evaluation with random values"
+   show (Concrete (Just (True, _)))  = "Concrete evaluation during model validation for sat"
+   show (Concrete (Just (False, _))) = "Concrete evaluation during model validation for prove"
 
 -- | Is this a CodeGen run? (i.e., generating code)
 isCodeGenMode :: State -> IO Bool
@@ -766,32 +830,35 @@ isCodeGenMode State{runMode} = do rm <- readIORef runMode
                                              CodeGen    -> True
 
 -- | The state in query mode, i.e., additional context
-data IncState = IncState { rNewInps   :: IORef [NamedSymVar]   -- always existential!
-                         , rNewKinds  :: IORef KindSet
-                         , rNewConsts :: IORef CnstMap
-                         , rNewArrs   :: IORef ArrayMap
-                         , rNewTbls   :: IORef TableMap
-                         , rNewUIs    :: IORef UIMap
-                         , rNewAsgns  :: IORef SBVPgm
+data IncState = IncState { rNewInps        :: IORef [NamedSymVar]   -- always existential!
+                         , rNewKinds       :: IORef KindSet
+                         , rNewConsts      :: IORef CnstMap
+                         , rNewArrs        :: IORef ArrayMap
+                         , rNewTbls        :: IORef TableMap
+                         , rNewUIs         :: IORef UIMap
+                         , rNewAsgns       :: IORef SBVPgm
+                         , rNewConstraints :: IORef (S.Seq (Bool, [(String, String)], SV))
                          }
 
 -- | Get a new IncState
 newIncState :: IO IncState
 newIncState = do
-        is  <- newIORef []
-        ks  <- newIORef Set.empty
-        nc  <- newIORef Map.empty
-        am  <- newIORef IMap.empty
-        tm  <- newIORef Map.empty
-        ui  <- newIORef Map.empty
-        pgm <- newIORef (SBVPgm S.empty)
-        return IncState { rNewInps   = is
-                        , rNewKinds  = ks
-                        , rNewConsts = nc
-                        , rNewArrs   = am
-                        , rNewTbls   = tm
-                        , rNewUIs    = ui
-                        , rNewAsgns  = pgm
+        is    <- newIORef []
+        ks    <- newIORef Set.empty
+        nc    <- newIORef Map.empty
+        am    <- newIORef IMap.empty
+        tm    <- newIORef Map.empty
+        ui    <- newIORef Map.empty
+        pgm   <- newIORef (SBVPgm S.empty)
+        cstrs <- newIORef S.empty
+        return IncState { rNewInps        = is
+                        , rNewKinds       = ks
+                        , rNewConsts      = nc
+                        , rNewArrs        = am
+                        , rNewTbls        = tm
+                        , rNewUIs         = ui
+                        , rNewAsgns       = pgm
+                        , rNewConstraints = cstrs
                         }
 
 -- | Get a new IncState
@@ -814,7 +881,7 @@ data State  = State { pathCond     :: SVal                             -- ^ kind
                     , rUsedKinds   :: IORef KindSet
                     , rUsedLbls    :: IORef (Set.Set String)
                     , rinps        :: IORef ([(Quantifier, NamedSymVar)], [NamedSymVar]) -- User defined, and internal existential
-                    , rConstraints :: IORef [(Bool, [(String, String)], SV)]
+                    , rConstraints :: IORef (S.Seq (Bool, [(String, String)], SV))
                     , routs        :: IORef [SV]
                     , rtblMap      :: IORef TableMap
                     , spgm         :: IORef SBVPgm
@@ -877,8 +944,22 @@ instance Show SVal where
 -- | This instance is only defined so that we can define an instance for
 -- 'Data.Bits.Bits'. '==' and '/=' simply throw an error.
 instance Eq SVal where
-  a == b = error $ "Comparing symbolic bit-vectors; Use (.==) instead. Received: " ++ show (a, b)
-  a /= b = error $ "Comparing symbolic bit-vectors; Use (./=) instead. Received: " ++ show (a, b)
+  a == b = noEquals "==" ".==" (show a, show b)
+  a /= b = noEquals "/=" "./=" (show a, show b)
+
+-- Bail out nicely.
+noEquals :: String -> String -> (String, String) -> a
+noEquals o n (l, r) = error $ unlines [ ""
+                                      , "*** Data.SBV: Comparing symbolic values using Haskell's Eq class!"
+                                      , "***"
+                                      , "*** Received:    " ++ l ++ "  " ++ o ++ " " ++ r
+                                      , "*** Instead use: " ++ l ++ " "  ++ n ++ " " ++ r
+                                      , "***"
+                                      , "*** The Eq instance for symbolic values are necessiated only because"
+                                      , "*** of the Bits class requirement. You must use symbolic equality"
+                                      , "*** operators instead. (And complain to Haskell folks that they"
+                                      , "*** remove the 'Eq' superclass from 'Bits'!.)"
+                                      ]
 
 -- | Things we do not support in interactive mode, at least for now!
 noInteractive :: [String] -> a
@@ -896,8 +977,8 @@ modifyState st@State{runMode} field update interactiveUpdate = do
         R.modifyIORef' (field st) update
         rm <- readIORef runMode
         case rm of
-          SMTMode IRun _ _ -> interactiveUpdate
-          _                -> return ()
+          SMTMode _ IRun _ _ -> interactiveUpdate
+          _                  -> return ()
 
 -- | Modify the incremental state
 modifyIncState  :: State -> (IncState -> IORef a) -> (a -> a) -> IO ()
@@ -970,14 +1051,20 @@ internalVariable :: State -> Kind -> IO SV
 internalVariable st k = do (sv, nm) <- newSV st k
                            rm <- readIORef (runMode st)
                            let q = case rm of
-                                     SMTMode    _ True  _ -> EX
-                                     SMTMode    _ False _ -> ALL
+                                     SMTMode  _ _ True  _ -> EX
+                                     SMTMode  _ _ False _ -> ALL
                                      CodeGen              -> ALL
                                      Concrete{}           -> ALL
-                           modifyState st rinps (first ((:) (q, (sv, "__internal_sbv_" ++ nm))))
-                                     $ noInteractive [ "Internal variable creation:"
-                                                     , "  Named: " ++ nm
-                                                     ]
+                               n = "__internal_sbv_" ++ nm
+                               v = (sv, n)
+                           modifyState st rinps (first ((q, v) :))
+                                     $ modifyIncState st rNewInps (\newInps -> case q of
+                                                                                 EX -> v : newInps
+                                                                                 -- I don't think the following can actually happen
+                                                                                 -- but just be safe:
+                                                                                 ALL  -> noInteractive [ "Internal universally quantified variable creation:"
+                                                                                                       , "  Named: " ++ nm
+                                                                                                       ])
                            return sv
 {-# INLINE internalVariable #-}
 
@@ -1006,31 +1093,41 @@ registerKind st k
   = do -- Adding a kind to the incState is tricky; we only need to add it
        --     *    If it's an uninterpreted sort that's not already in the general state
        --     * OR If it's a tuple-sort whose cardinality isn't already in the general state
+       --     * OR If it's a list that's not already in the general state (so we can send the flatten commands)
 
        existingKinds <- readIORef (rUsedKinds st)
 
        modifyState st rUsedKinds (Set.insert k) $ do
 
+                          -- Why do we discriminate here? Because the incremental context is sensitive to the
+                          -- order: In particular, if an uninterpreted kind is already in there, we don't
+                          -- want to re-add because double-declaration would be wrong. See 'cvtInc' for details.
                           let needsAdding = case k of
                                               KUninterpreted{} -> k `notElem` existingKinds
+                                              KList{}          -> k `notElem` existingKinds
                                               KTuple nks       -> length nks `notElem` [length oks | KTuple oks <- Set.toList existingKinds]
+                                              KMaybe{}         -> k `notElem` existingKinds
+                                              KEither{}        -> k `notElem` existingKinds
                                               _                -> False
 
                           when needsAdding $ modifyIncState st rNewKinds (Set.insert k)
 
        -- Don't forget to register subkinds!
        case k of
-         KBool          {}  -> return ()
-         KBounded       {}  -> return ()
-         KUnbounded     {}  -> return ()
-         KReal          {}  -> return ()
-         KUninterpreted {}  -> return ()
-         KFloat         {}  -> return ()
-         KDouble        {}  -> return ()
-         KChar          {}  -> return ()
-         KString        {}  -> return ()
-         KList          ek  -> registerKind st ek
-         KTuple         eks -> mapM_ (registerKind st) eks
+         KBool          {}    -> return ()
+         KBounded       {}    -> return ()
+         KUnbounded     {}    -> return ()
+         KReal          {}    -> return ()
+         KUninterpreted {}    -> return ()
+         KFloat         {}    -> return ()
+         KDouble        {}    -> return ()
+         KChar          {}    -> return ()
+         KString        {}    -> return ()
+         KList          ek    -> registerKind st ek
+         KSet           ek    -> registerKind st ek
+         KTuple         eks   -> mapM_ (registerKind st) eks
+         KMaybe         ke    -> registerKind st ke
+         KEither        k1 k2 -> mapM_ (registerKind st) [k1, k2]
 
 -- | Register a new label with the system, making sure they are unique and have no '|'s in them
 registerLabel :: String -> State -> String -> IO ()
@@ -1054,9 +1151,11 @@ newConst :: State -> CV -> IO SV
 newConst st c = do
   constMap <- readIORef (rconstMap st)
   case c `Map.lookup` constMap of
+    -- NB. Unlike in 'newExpr', we don't have to make sure the returned sv
+    -- has the kind we asked for, because the constMap stores the full CV
+    -- which already has a kind field in it.
     Just sv -> return sv
-    Nothing -> do let k = kindOf c
-                  (sv, _) <- newSV st k
+    Nothing -> do (sv, _) <- newSV st (kindOf c)
                   let ins = Map.insert c sv
                   modifyState st rconstMap ins $ modifyIncState st rNewConsts ins
                   return sv
@@ -1080,12 +1179,17 @@ newExpr st k app = do
    let e = reorder app
    exprMap <- readIORef (rexprMap st)
    case e `Map.lookup` exprMap of
-     Just sv -> return sv
-     Nothing -> do (sv, _) <- newSV st k
-                   let append (SBVPgm xs) = SBVPgm (xs S.|> (sv, e))
-                   modifyState st spgm append $ modifyIncState st rNewAsgns append
-                   modifyState st rexprMap (Map.insert e sv) (return ())
-                   return sv
+     -- NB. Check to make sure that the kind of the hash-consed value
+     -- is the same kind as we're requesting. This might look unnecessary,
+     -- at first, but `svSign` and `svUnsign` rely on this as we can
+     -- get the same expression but at a different type. See
+     -- <http://github.com/GaloisInc/cryptol/issues/566> as an example.
+     Just sv | kindOf sv == k -> return sv
+     _                        -> do (sv, _) <- newSV st k
+                                    let append (SBVPgm xs) = SBVPgm (xs S.|> (sv, e))
+                                    modifyState st spgm append $ modifyIncState st rNewAsgns append
+                                    modifyState st rexprMap (Map.insert e sv) (return ())
+                                    return sv
 {-# INLINE newExpr #-}
 
 -- | Convert a symbolic value to an internal SV
@@ -1198,44 +1302,80 @@ svMkSymVarGen isTracker mbQ k mbNm st = do
                        let nm = fromMaybe internalName mbNm
                        introduceUserName st isTracker nm k q sv
 
-            mkC   = do cv <- randomCV k
-                       do registerKind st k
-                          modifyState st rCInfo ((fromMaybe "_" mbNm, cv):) (return ())
-                       return $ SVal k (Left cv)
+            mkC cv = do registerKind st k
+                        modifyState st rCInfo ((fromMaybe "_" mbNm, cv):) (return ())
+                        return $ SVal k (Left cv)
 
         case (mbQ, rm) of
-          (Just q,  SMTMode{}        ) -> mkS q
-          (Nothing, SMTMode _ isSAT _) -> mkS (if isSAT then EX else ALL)
+          (Just q,  SMTMode{}          ) -> mkS q
+          (Nothing, SMTMode _ _ isSAT _) -> mkS (if isSAT then EX else ALL)
 
-          (Just EX, CodeGen{})         -> disallow "Existentially quantified variables"
-          (_      , CodeGen)           -> noUI $ mkS ALL  -- code generation, pick universal
+          (Just EX, CodeGen{})           -> disallow "Existentially quantified variables"
+          (_      , CodeGen)             -> noUI $ mkS ALL  -- code generation, pick universal
 
-          (Just EX,  Concrete{})       -> disallow "Existentially quantified variables"
-          (_      ,  Concrete{})       -> noUI mkC
+          (Just EX, Concrete Nothing)    -> disallow "Existentially quantified variables"
+          (_      , Concrete Nothing)    -> noUI (randomCV k >>= mkC)
 
--- | Introduce a new user name. We die if repeated.
+          -- Model validation:
+          (_      , Concrete (Just (_isSat, env))) ->
+                        let bad why conc = error $ unlines [ ""
+                                                           , "*** Data.SBV: " ++ why
+                                                           , "***"
+                                                           , "***   To turn validation off, use `cfg{validateModel = False}`"
+                                                           , "***"
+                                                           , "*** " ++ conc ++ "."
+                                                           ]
+
+                            cant   = "Validation engine is not capable of handling this case. Failed to validate"
+                            report = "Please report this as a bug in SBV!"
+
+                        in if isUninterpreted k
+                           then bad ("Cannot validate models in the presence of uninterpeted kinds, saw: " ++ show k) cant
+                           else do (sv, internalName) <- newSV st k
+
+                                   let nm = fromMaybe internalName mbNm
+                                       nsv = (sv, nm)
+
+                                       cv = case [(q, v) | ((q, nsv'), v) <- env, nsv == nsv'] of
+                                              []              -> bad ("Cannot locate variable: " ++ show nsv) report
+                                              [(ALL, _)]      -> bad ("Cannot validate models in the presence of universally quantified variable " ++ show (snd nsv)) cant
+                                              [(EX, Nothing)] -> bad ("Cannot locate model value of variable: " ++ show (snd nsv)) report
+                                              [(EX, Just c)]  -> c
+                                              r               -> bad (   "Found multiple matching values for variable: " ++ show nsv
+                                                                      ++ "\n*** " ++ show r) report
+
+                                   mkC cv
+
+-- | Introduce a new user name. We simply append a suffix if we have seen this variable before.
 introduceUserName :: State -> Bool -> String -> Kind -> Quantifier -> SV -> IO SVal
-introduceUserName st isTracker nm k q sv = do
+introduceUserName st isTracker nmOrig k q sv = do
         (is, ints) <- readIORef (rinps st)
-        if nm `elem` [n | (_, (_, n)) <- is] ++ [n | (_, n) <- ints]
-           then error $ "SBV: Repeated user given name: " ++ show nm ++ ". Please use unique names."
-           else if isTracker && q == ALL
-                then error $ "SBV: Impossible happened! A universally quantified tracker variable is being introduced: " ++ show nm
-                else do let newInp olds = case q of
-                                           EX  -> (sv, nm) : olds
-                                           ALL -> noInteractive [ "Adding a new universally quantified variable: "
-                                                                , "  Name      : " ++ show nm
-                                                                , "  Kind      : " ++ show k
-                                                                , "  Quantifier: Universal"
-                                                                , "  Node      : " ++ show sv
-                                                                , "Only existential variables are supported in query mode."
-                                                                ]
-                        if isTracker
-                           then modifyState st rinps (second ((:) (sv, nm)))
-                                          $ noInteractive ["Adding a new tracker variable in interactive mode: " ++ show nm]
-                           else modifyState st rinps (first ((:) (q, (sv, nm))))
-                                          $ modifyIncState st rNewInps newInp
-                        return $ SVal k $ Right $ cache (const (return sv))
+
+        let old = [n | (_, (_, n)) <- is] ++ [n | (_, n) <- ints]
+            nm  = mkUnique nmOrig old
+
+        if isTracker && q == ALL
+           then error $ "SBV: Impossible happened! A universally quantified tracker variable is being introduced: " ++ show nm
+           else do let newInp olds = case q of
+                                      EX  -> (sv, nm) : olds
+                                      ALL -> noInteractive [ "Adding a new universally quantified variable: "
+                                                           , "  Name      : " ++ show nm
+                                                           , "  Kind      : " ++ show k
+                                                           , "  Quantifier: Universal"
+                                                           , "  Node      : " ++ show sv
+                                                           , "Only existential variables are supported in query mode."
+                                                           ]
+                   if isTracker
+                      then modifyState st rinps (second ((:) (sv, nm)))
+                                     $ noInteractive ["Adding a new tracker variable in interactive mode: " ++ show nm]
+                      else modifyState st rinps (first ((:) (q, (sv, nm))))
+                                     $ modifyIncState st rNewInps newInp
+                   return $ SVal k $ Right $ cache (const (return sv))
+
+   where -- The following can be rather slow if we keep reusing the same prefix, but I doubt it'll be a problem in practice
+         -- Also, the following will fail if we span the range of integers without finding a match, but your computer would
+         -- die way ahead of that happening if that's the case!
+         mkUnique prefix names = head $ dropWhile (`elem` names) (prefix : [prefix ++ "_" ++ show i | i <- [(0::Int)..]])
 
 -- | Generalization of 'Data.SBV.addAxiom'
 addAxiom :: MonadSymbolic m => String -> [String] -> m ()
@@ -1272,7 +1412,7 @@ runSymbolic currentRunMode (SymbolicT c) = do
      faiCache  <- newIORef IMap.empty
      usedKinds <- newIORef Set.empty
      usedLbls  <- newIORef Set.empty
-     cstrs     <- newIORef []
+     cstrs     <- newIORef S.empty
      smtOpts   <- newIORef []
      optGoals  <- newIORef []
      asserts   <- newIORef []
@@ -1344,20 +1484,21 @@ extractSymbolicSimulationState st@State{ spgm=pgm, rinps=inps, routs=outs, rtblM
 
    traceVals   <- reverse <$> readIORef cInfo
    observables <- reverse <$> readIORef observes
-   extraCstrs  <- reverse <$> readIORef cstrs
+   extraCstrs  <- readIORef cstrs
    assertions  <- reverse <$> readIORef asserts
 
    return $ Result knds traceVals observables cgMap inpsO cnsts tbls arrs unint axs (SBVPgm rpgm) extraCstrs assertions outsO
 
 -- | Generalization of 'Data.SBV.addNewSMTOption'
 addNewSMTOption :: MonadSymbolic m => SMTOption -> m ()
-addNewSMTOption o =  do st <- symbolicEnv
-                        liftIO $ modifyState st rSMTOptions (o:) (return ())
+addNewSMTOption o = do st <- symbolicEnv
+                       liftIO $ modifyState st rSMTOptions (o:) (return ())
 
 -- | Generalization of 'Data.SBV.imposeConstraint'
 imposeConstraint :: MonadSymbolic m => Bool -> [(String, String)] -> SVal -> m ()
 imposeConstraint isSoft attrs c = do st <- symbolicEnv
                                      rm <- liftIO $ readIORef (runMode st)
+
                                      case rm of
                                        CodeGen -> error "SBV: constraints are not allowed in code-generation"
                                        _       -> liftIO $ do mapM_ (registerLabel "Constraint" st) [nm | (":named",  nm) <- attrs]
@@ -1366,13 +1507,25 @@ imposeConstraint isSoft attrs c = do st <- symbolicEnv
 -- | Require a boolean condition to be true in the state. Only used for internal purposes.
 internalConstraint :: State -> Bool -> [(String, String)] -> SVal -> IO ()
 internalConstraint st isSoft attrs b = do v <- svToSV st b
-                                          unless (null attrs && v == trueSV) $
-                                                 modifyState st rConstraints ((isSoft, attrs, v):)
-                                                              $ noInteractive [ "Adding an internal " ++ soft ++ "constraint:"
-                                                                              , "  Named: " ++ fromMaybe "<unnamed>" (listToMaybe [nm | (":named", nm) <- attrs])
-                                                                              ]
-    where soft | isSoft = "soft-"
-               | True   = ""
+
+                                          rm <- liftIO $ readIORef (runMode st)
+
+                                          -- Are we running validation? If so, we always want to
+                                          -- add the constraint for debug purposes. Otherwie
+                                          -- we only add it if it's interesting; i.e., not directly
+                                          -- true or has some attributes.
+                                          let isValidating = case rm of
+                                                               SMTMode _ _ _ cfg -> validateModel cfg
+                                                               CodeGen           -> False
+                                                               Concrete Nothing  -> False
+                                                               Concrete (Just _) -> True   -- The case when we *are* running the validation
+
+                                          let c           = (isSoft, attrs, v)
+                                              interesting = v /= trueSV || not (null attrs)
+
+                                          when (isValidating || interesting) $
+                                               modifyState st rConstraints (S.|> c)
+                                                            $ modifyIncState st rNewConstraints (S.|> c)
 
 -- | Generalization of 'Data.SBV.addSValOptGoal'
 addSValOptGoal :: MonadSymbolic m => Objective SVal -> m ()
@@ -1518,31 +1671,35 @@ instance NFData (Cached a)   where rnf (Cached f) = f `seq` ()
 instance NFData SVal         where rnf (SVal x y) = rnf x `seq` rnf y `seq` ()
 
 instance NFData SMTResult where
-  rnf Unsatisfiable{}      = ()
-  rnf (Satisfiable _   xs) = rnf xs `seq` ()
-  rnf (SatExtField _   xs) = rnf xs `seq` ()
-  rnf (Unknown _       xs) = rnf xs `seq` ()
-  rnf (ProofError _    xs) = rnf xs `seq` ()
+  rnf (Unsatisfiable _ xs   ) = rnf xs
+  rnf (Satisfiable _   xs   ) = rnf xs `seq` ()
+  rnf (SatExtField _   xs   ) = rnf xs `seq` ()
+  rnf (Unknown _       xs   ) = rnf xs `seq` ()
+  rnf (ProofError _    xs mr) = rnf xs `seq` rnf mr `seq` ()
 
 instance NFData SMTModel where
-  rnf (SMTModel objs assocs) = rnf objs `seq` rnf assocs `seq` ()
+  rnf (SMTModel objs bndgs assocs uifuns) = rnf objs `seq` rnf bndgs `seq` rnf assocs `seq` rnf uifuns `seq` ()
 
 instance NFData SMTScript where
   rnf (SMTScript b m) = rnf b `seq` rnf m `seq` ()
 
 -- | Translation tricks needed for specific capabilities afforded by each solver
 data SolverCapabilities = SolverCapabilities {
-         supportsQuantifiers        :: Bool           -- ^ Support for SMT-Lib2 style quantifiers?
-       , supportsUninterpretedSorts :: Bool           -- ^ Support for SMT-Lib2 style uninterpreted-sorts
-       , supportsUnboundedInts      :: Bool           -- ^ Support for unbounded integers?
-       , supportsReals              :: Bool           -- ^ Support for reals?
+         supportsQuantifiers        :: Bool           -- ^ Supports SMT-Lib2 style quantifiers?
+       , supportsUninterpretedSorts :: Bool           -- ^ Supports SMT-Lib2 style uninterpreted-sorts
+       , supportsUnboundedInts      :: Bool           -- ^ Supports unbounded integers?
+       , supportsReals              :: Bool           -- ^ Supports reals?
        , supportsApproxReals        :: Bool           -- ^ Supports printing of approximations of reals?
-       , supportsIEEE754            :: Bool           -- ^ Support for floating point numbers?
-       , supportsOptimization       :: Bool           -- ^ Support for optimization routines?
-       , supportsPseudoBooleans     :: Bool           -- ^ Support for pseudo-boolean operations?
-       , supportsCustomQueries      :: Bool           -- ^ Support for interactive queries per SMT-Lib?
-       , supportsGlobalDecls        :: Bool           -- ^ Support for global decls, needed for push-pop.
-       , supportsFlattenedSequences :: Maybe [String] -- ^ Supports flattened sequence output, with given config lines
+       , supportsIEEE754            :: Bool           -- ^ Supports floating point numbers?
+       , supportsSets               :: Bool           -- ^ Supports set operations?
+       , supportsOptimization       :: Bool           -- ^ Supports optimization routines?
+       , supportsPseudoBooleans     :: Bool           -- ^ Supports pseudo-boolean operations?
+       , supportsCustomQueries      :: Bool           -- ^ Supports interactive queries per SMT-Lib?
+       , supportsGlobalDecls        :: Bool           -- ^ Supports global declarations? (Needed for push-pop.)
+       , supportsDataTypes          :: Bool           -- ^ Supports datatypes?
+       , supportsDTConstructorSigs  :: Bool           -- ^ Supports full ascription on data-type constructors? (CVC4 and z3 differ!)
+       , supportsDTAccessorSigs     :: Bool           -- ^ Supports full ascription on data-type accessor?     (CVC4 and z3 differ!)
+       , supportsFlattenedModels    :: Maybe [String] -- ^ Supports flattened model output? (With given config lines.)
        }
 
 -- | Rounding mode to be used for the IEEE floating-point operations.
@@ -1581,20 +1738,24 @@ instance HasKind RoundingMode
 -- The 'printBase' field can be used to print numbers in base 2, 10, or 16. If base 2 or 16 is used, then floating-point values will
 -- be printed in their internal memory-layout format as well, which can come in handy for bit-precise analysis.
 data SMTConfig = SMTConfig {
-         verbose             :: Bool           -- ^ Debug mode
-       , timing              :: Timing         -- ^ Print timing information on how long different phases took (construction, solving, etc.)
-       , printBase           :: Int            -- ^ Print integral literals in this base (2, 10, and 16 are supported.)
-       , printRealPrec       :: Int            -- ^ Print algebraic real values with this precision. (SReal, default: 16)
-       , satCmd              :: String         -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
-       , allSatMaxModelCount :: Maybe Int      -- ^ In an allSat call, return at most this many models. If nothing, return all.
-       , isNonModelVar       :: String -> Bool -- ^ When constructing a model, ignore variables whose name satisfy this predicate. (Default: (const False), i.e., don't ignore anything)
-       , transcript          :: Maybe FilePath -- ^ If Just, the entire interaction will be recorded as a playable file (for debugging purposes mostly)
-       , smtLibVersion       :: SMTLibVersion  -- ^ What version of SMT-lib we use for the tool
-       , solver              :: SMTSolver      -- ^ The actual SMT solver.
-       , roundingMode        :: RoundingMode   -- ^ Rounding mode to use for floating-point conversions
-       , solverSetOptions    :: [SMTOption]    -- ^ Options to set as we start the solver
-       , ignoreExitCode      :: Bool           -- ^ If true, we shall ignore the exit code upon exit. Otherwise we require ExitSuccess.
-       , redirectVerbose     :: Maybe FilePath -- ^ Redirect the verbose output to this file if given. If Nothing, stdout is implied.
+         verbose                :: Bool           -- ^ Debug mode
+       , timing                 :: Timing         -- ^ Print timing information on how long different phases took (construction, solving, etc.)
+       , printBase              :: Int            -- ^ Print integral literals in this base (2, 10, and 16 are supported.)
+       , printRealPrec          :: Int            -- ^ Print algebraic real values with this precision. (SReal, default: 16)
+       , satCmd                 :: String         -- ^ Usually "(check-sat)". However, users might tweak it based on solver characteristics.
+       , allSatMaxModelCount    :: Maybe Int      -- ^ In a 'Data.SBV.allSat' call, return at most this many models. If nothing, return all.
+       , allSatPrintAlong       :: Bool           -- ^ In a 'Data.SBV.allSat' call, print models as they are found.
+       , satTrackUFs            :: Bool           -- ^ In a 'Data.SBV.sat' call, should we try to extract values of uninterpreted functions?
+       , isNonModelVar          :: String -> Bool -- ^ When constructing a model, ignore variables whose name satisfy this predicate. (Default: (const False), i.e., don't ignore anything)
+       , validateModel          :: Bool           -- ^ If set, SBV will attempt to validate the model it gets back from the solver.
+       , transcript             :: Maybe FilePath -- ^ If Just, the entire interaction will be recorded as a playable file (for debugging purposes mostly)
+       , smtLibVersion          :: SMTLibVersion  -- ^ What version of SMT-lib we use for the tool
+       , solver                 :: SMTSolver      -- ^ The actual SMT solver.
+       , allowQuantifiedQueries :: Bool           -- ^ Should we permit use of quantifiers in the query mode? (Default: False. See <http://github.com/LeventErkok/sbv/issues/459> for why.)
+       , roundingMode           :: RoundingMode   -- ^ Rounding mode to use for floating-point conversions
+       , solverSetOptions       :: [SMTOption]    -- ^ Options to set as we start the solver
+       , ignoreExitCode         :: Bool           -- ^ If true, we shall ignore the exit code upon exit. Otherwise we require ExitSuccess.
+       , redirectVerbose        :: Maybe FilePath -- ^ Redirect the verbose output to this file if given. If Nothing, stdout is implied.
        }
 
 -- We're just seq'ing top-level here, it shouldn't really matter. (i.e., no need to go deeper.)
@@ -1603,8 +1764,12 @@ instance NFData SMTConfig where
 
 -- | A model, as returned by a solver
 data SMTModel = SMTModel {
-        modelObjectives :: [(String, GeneralizedCV)]  -- ^ Mapping of symbolic values to objective values.
-     ,  modelAssocs     :: [(String, CV)]             -- ^ Mapping of symbolic values to constants.
+       modelObjectives :: [(String, GeneralizedCV)]                       -- ^ Mapping of symbolic values to objective values.
+     , modelBindings   :: Maybe [((Quantifier, NamedSymVar), Maybe CV)]   -- ^ Mapping of input variables as reported by the solver. Only collected if model validation is requested.
+     , modelAssocs     :: [(String, CV)]                                  -- ^ Mapping of symbolic values to constants.
+     , modelUIFuns     :: [(String, (SBVType, ([([CV], CV)], CV)))]       -- ^ Mapping of uninterpreted functions to association lists in the model.
+                                                                          -- Note that an uninterpreted constant (function of arity 0) will be stored
+                                                                          -- in the 'modelAssocs' field.
      }
      deriving Show
 
@@ -1613,11 +1778,11 @@ data SMTModel = SMTModel {
 -- and build layers of results, if needed. For ordinary uses of the library,
 -- this type should not be needed, instead use the accessor functions on
 -- it. (Custom Show instances and model extractors.)
-data SMTResult = Unsatisfiable SMTConfig (Maybe [String]) -- ^ Unsatisfiable. If unsat-cores are enabled, they will be returned in the second parameter.
-               | Satisfiable   SMTConfig SMTModel         -- ^ Satisfiable with model
-               | SatExtField   SMTConfig SMTModel         -- ^ Prover returned a model, but in an extension field containing Infinite/epsilon
-               | Unknown       SMTConfig SMTReasonUnknown -- ^ Prover returned unknown, with the given reason
-               | ProofError    SMTConfig [String]         -- ^ Prover errored out
+data SMTResult = Unsatisfiable SMTConfig (Maybe [String])            -- ^ Unsatisfiable. If unsat-cores are enabled, they will be returned in the second parameter.
+               | Satisfiable   SMTConfig SMTModel                    -- ^ Satisfiable with model
+               | SatExtField   SMTConfig SMTModel                    -- ^ Prover returned a model, but in an extension field containing Infinite/epsilon
+               | Unknown       SMTConfig SMTReasonUnknown            -- ^ Prover returned unknown, with the given reason
+               | ProofError    SMTConfig [String] (Maybe SMTResult)  -- ^ Prover errored out, with possibly a bogus result
 
 -- | A script, to be passed to the solver.
 data SMTScript = SMTScript {
@@ -1655,6 +1820,11 @@ data SMTSolver = SMTSolver {
 -- | Query execution context
 data QueryContext = QueryInternal       -- ^ Triggered from inside SBV
                   | QueryExternal       -- ^ Triggered from user code
+
+-- | Show instance for 'QueryContext', for debugging purposes
+instance Show QueryContext where
+   show QueryInternal = "Internal Query"
+   show QueryExternal = "User Query"
 
 {-# ANN type FPOp ("HLint: ignore Use camelCase" :: String) #-}
 {-# ANN type PBOp ("HLint: ignore Use camelCase" :: String) #-}

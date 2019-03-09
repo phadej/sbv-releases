@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Data.SBV.Core.Kind
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -9,19 +9,20 @@
 -- Internal data-structures for the sbv library
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE DefaultSignatures    #-}
-{-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE LambdaCase           #-}
-{-# LANGUAGE ScopedTypeVariables  #-}
-{-# LANGUAGE TypeApplications     #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE ViewPatterns         #-}
+{-# LANGUAGE DefaultSignatures   #-}
+{-# LANGUAGE FlexibleInstances   #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE ViewPatterns        #-}
 
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Data.SBV.Core.Kind (Kind(..), HasKind(..), constructUKind, smtType) where
+module Data.SBV.Core.Kind (Kind(..), HasKind(..), constructUKind, smtType, hasUninterpretedSorts, showBaseKind, needsFlattening) where
 
 import qualified Data.Generics as G (Data(..), DataType, dataTypeName, dataTypeOf, tyconUQname, dataTypeConstrs, constrFields)
+
+import Data.Char (isSpace)
 
 import Data.Int
 import Data.Word
@@ -46,7 +47,10 @@ data Kind = KBool
           | KChar
           | KString
           | KList Kind
+          | KSet  Kind
           | KTuple [Kind]
+          | KMaybe  Kind
+          | KEither Kind Kind
           deriving (Eq, Ord)
 
 -- | The interesting about the show instance is that it can tell apart two kinds nicely; since it conveniently
@@ -64,7 +68,39 @@ instance Show Kind where
   show KString              = "SString"
   show KChar                = "SChar"
   show (KList e)            = "[" ++ show e ++ "]"
+  show (KSet  e)            = "{" ++ show e ++ "}"
   show (KTuple m)           = "(" ++ intercalate ", " (show <$> m) ++ ")"
+  show (KMaybe k)           = "SMaybe "  ++ kindParen (showBaseKind k)
+  show (KEither k1 k2)      = "SEither " ++ kindParen (showBaseKind k1) ++ " " ++ kindParen (showBaseKind k2)
+
+-- | A version of show for kinds that says Bool instead of SBool
+showBaseKind :: Kind -> String
+showBaseKind = sh
+  where sh k@KBool             = noS (show k)
+        sh k@KBounded{}        = noS (show k)
+        sh k@KUnbounded        = noS (show k)
+        sh k@KReal             = noS (show k)
+        sh k@KUninterpreted{}  = show k     -- Leave user-sorts untouched!
+        sh k@KFloat            = noS (show k)
+        sh k@KDouble           = noS (show k)
+        sh k@KChar             = noS (show k)
+        sh k@KString           = noS (show k)
+        sh (KList k)           = "[" ++ sh k ++ "]"
+        sh (KSet k)            = "{" ++ sh k ++ "}"
+        sh (KTuple ks)         = "(" ++ intercalate ", " (map sh ks) ++ ")"
+        sh (KMaybe k)          = "Maybe "  ++ kindParen (sh k)
+        sh (KEither k1 k2)     = "Either " ++ kindParen (sh k1) ++ " " ++ kindParen (sh k2)
+
+        -- Drop the initial S if it's there
+        noS ('S':s) = s
+        noS s       = s
+
+-- | Put parens if necessary. This test is rather crummy, but seems to work ok
+kindParen :: String -> String
+kindParen s@('[':_) = s
+kindParen s@('(':_) = s
+kindParen s | any isSpace s = '(' : s ++ ")"
+            | True          = s
 
 -- | How the type maps to SMT land
 smtType :: Kind -> String
@@ -76,10 +112,13 @@ smtType KFloat               = "(_ FloatingPoint  8 24)"
 smtType KDouble              = "(_ FloatingPoint 11 53)"
 smtType KString              = "String"
 smtType KChar                = "(_ BitVec 8)"
-smtType (KList k)            = "(Seq " ++ smtType k ++ ")"
+smtType (KList k)            = "(Seq "   ++ smtType k ++ ")"
+smtType (KSet  k)            = "(Array " ++ smtType k ++ " Bool)"
 smtType (KUninterpreted s _) = s
 smtType (KTuple [])          = "SBVTuple0"
 smtType (KTuple kinds)       = "(SBVTuple" ++ show (length kinds) ++ " " ++ unwords (smtType <$> kinds) ++ ")"
+smtType (KMaybe k)           = "(SBVMaybe " ++ smtType k ++ ")"
+smtType (KEither k1 k2)      = "(SBVEither "  ++ smtType k1 ++ " " ++ smtType k2 ++ ")"
 
 instance Eq  G.DataType where
    a == b = G.tyconUQname (G.dataTypeName a) == G.tyconUQname (G.dataTypeName b)
@@ -99,7 +138,10 @@ kindHasSign = \case KBool            -> False
                     KString          -> False
                     KChar            -> False
                     KList{}          -> False
+                    KSet{}           -> False
                     KTuple{}         -> False
+                    KMaybe{}         -> False
+                    KEither{}        -> False
 
 -- | Construct an uninterpreted/enumerated kind from a piece of data; we distinguish simple enumerations as those
 -- are mapped to proper SMT-Lib2 data-types; while others go completely uninterpreted
@@ -141,12 +183,15 @@ class HasKind a where
   isReal          :: a -> Bool
   isFloat         :: a -> Bool
   isDouble        :: a -> Bool
-  isInteger       :: a -> Bool
+  isUnbounded     :: a -> Bool
   isUninterpreted :: a -> Bool
   isChar          :: a -> Bool
   isString        :: a -> Bool
   isList          :: a -> Bool
+  isSet           :: a -> Bool
   isTuple         :: a -> Bool
+  isMaybe         :: a -> Bool
+  isEither        :: a -> Bool
   showType        :: a -> String
   -- defaults
   hasSign x = kindHasSign (kindOf x)
@@ -162,7 +207,10 @@ class HasKind a where
                   KString            -> error "SBV.HasKind.intSizeOf((S)Double)"
                   KChar              -> error "SBV.HasKind.intSizeOf((S)Char)"
                   KList ek           -> error $ "SBV.HasKind.intSizeOf((S)List)" ++ show ek
+                  KSet  ek           -> error $ "SBV.HasKind.intSizeOf((S)Set)"  ++ show ek
                   KTuple tys         -> error $ "SBV.HasKind.intSizeOf((S)Tuple)" ++ show tys
+                  KMaybe k           -> error $ "SBV.HasKind.intSizeOf((S)Maybe)" ++ show k
+                  KEither k1 k2      -> error $ "SBV.HasKind.intSizeOf((S)Either)" ++ show (k1, k2)
 
   isBoolean       (kindOf -> KBool{})          = True
   isBoolean       _                            = False
@@ -179,8 +227,8 @@ class HasKind a where
   isDouble        (kindOf -> KDouble{})        = True
   isDouble        _                            = False
 
-  isInteger       (kindOf -> KUnbounded{})     = True
-  isInteger       _                            = False
+  isUnbounded     (kindOf -> KUnbounded{})     = True
+  isUnbounded     _                            = False
 
   isUninterpreted (kindOf -> KUninterpreted{}) = True
   isUninterpreted _                            = False
@@ -194,8 +242,17 @@ class HasKind a where
   isList          (kindOf -> KList{})          = True
   isList          _                            = False
 
+  isSet           (kindOf -> KSet{})           = True
+  isSet           _                            = False
+
   isTuple         (kindOf -> KTuple{})         = True
   isTuple         _                            = False
+
+  isMaybe         (kindOf -> KMaybe{})         = True
+  isMaybe         _                            = False
+
+  isEither        (kindOf -> KEither{})        = True
+  isEither        _                            = False
 
   showType = show . kindOf
 
@@ -222,6 +279,24 @@ instance HasKind AlgReal where kindOf _ = KReal
 instance HasKind Float   where kindOf _ = KFloat
 instance HasKind Double  where kindOf _ = KDouble
 instance HasKind Char    where kindOf _ = KChar
+
+-- | Do we have a completely uninterpreted sort lying around anywhere?
+hasUninterpretedSorts :: Kind -> Bool
+hasUninterpretedSorts KBool                        = False
+hasUninterpretedSorts KBounded{}                   = False
+hasUninterpretedSorts KUnbounded                   = False
+hasUninterpretedSorts KReal                        = False
+hasUninterpretedSorts (KUninterpreted _ (Right _)) = False  -- These are the enumerated sorts, and they are perfectly fine
+hasUninterpretedSorts (KUninterpreted _ (Left  _)) = True   -- These are the completely uninterpreted sorts, which we are looking for here
+hasUninterpretedSorts KFloat                       = False
+hasUninterpretedSorts KDouble                      = False
+hasUninterpretedSorts KChar                        = False
+hasUninterpretedSorts KString                      = False
+hasUninterpretedSorts (KList k)                    = hasUninterpretedSorts k
+hasUninterpretedSorts (KSet k)                     = hasUninterpretedSorts k
+hasUninterpretedSorts (KTuple ks)                  = any hasUninterpretedSorts ks
+hasUninterpretedSorts (KMaybe k)                   = hasUninterpretedSorts k
+hasUninterpretedSorts (KEither k1 k2)              = any hasUninterpretedSorts [k1, k2]
 
 instance (Typeable a, HasKind a) => HasKind [a] where
    kindOf x | isKString @[a] x = KString
@@ -253,3 +328,28 @@ instance (HasKind a, HasKind b, HasKind c, HasKind d, HasKind e, HasKind f, HasK
 
 instance (HasKind a, HasKind b, HasKind c, HasKind d, HasKind e, HasKind f, HasKind g, HasKind h) => HasKind (a, b, c, d, e, f, g, h) where
   kindOf _ = KTuple [kindOf (Proxy @a), kindOf (Proxy @b), kindOf (Proxy @c), kindOf (Proxy @d), kindOf (Proxy @e), kindOf (Proxy @f), kindOf (Proxy @g), kindOf (Proxy @h)]
+
+instance (HasKind a, HasKind b) => HasKind (Either a b) where
+  kindOf _ = KEither (kindOf (Proxy @a)) (kindOf (Proxy @b))
+
+instance HasKind a => HasKind (Maybe a) where
+  kindOf _ = KMaybe (kindOf (Proxy @a))
+
+-- | Should we ask the solver to flatten the output? This comes in handy so output is parseable
+-- Essentially, we're being conservative here and simply requesting flattening anything that has
+-- some structure to it.
+needsFlattening :: Kind -> Bool
+needsFlattening KBool            = False
+needsFlattening KBounded{}       = False
+needsFlattening KUnbounded       = False
+needsFlattening KReal            = False
+needsFlattening KUninterpreted{} = False
+needsFlattening KFloat           = False
+needsFlattening KDouble          = False
+needsFlattening KChar            = False
+needsFlattening KString          = False
+needsFlattening KList{}          = True
+needsFlattening KSet{}           = True
+needsFlattening KTuple{}         = True
+needsFlattening KMaybe{}         = True
+needsFlattening KEither{}        = True

@@ -10,6 +10,7 @@
 [GOOD] (set-logic ALL) ; has unbounded values, using catch-all.
 [GOOD] ; --- uninterpreted sorts ---
 [GOOD] ; --- tuples ---
+[GOOD] ; --- sums ---
 [GOOD] ; --- literal constants ---
 [GOOD] (define-fun s1 () Int 0)
 [GOOD] ; --- skolem constants ---
@@ -35,7 +36,7 @@
 [GOOD] (declare-fun s13 () (_ FloatingPoint 11 53))
 [GOOD] (declare-fun s14 () Real)
 [GOOD] (declare-fun s15 () Int)
-[GOOD] (declare-datatypes () ((BinOp (Plus) (Minus) (Times))))
+[GOOD] (declare-datatypes ((BinOp 0)) (((Plus) (Minus) (Times))))
 [GOOD] (define-fun BinOp_constrIndex ((x BinOp)) Int
           (ite (= x Plus) 0 (ite (= x Minus) 1 2))
        )
@@ -109,9 +110,17 @@
 [GOOD] (define-fun s61 () Bool (not s44))
 [GOOD] (assert s61)
 [GOOD] (declare-fun s62 () String)
+[GOOD] (set-option :pp.max_depth      4294967295)
+[GOOD] (set-option :pp.min_alias_size 4294967295)
 [GOOD] (declare-fun s63 () (Seq Int))
+[GOOD] (set-option :pp.max_depth      4294967295)
+[GOOD] (set-option :pp.min_alias_size 4294967295)
 [GOOD] (declare-fun s64 () (Seq (Seq Int)))
+[GOOD] (set-option :pp.max_depth      4294967295)
+[GOOD] (set-option :pp.min_alias_size 4294967295)
 [GOOD] (declare-fun s65 () (Seq (_ BitVec 8)))
+[GOOD] (set-option :pp.max_depth      4294967295)
+[GOOD] (set-option :pp.min_alias_size 4294967295)
 [GOOD] (declare-fun s66 () (Seq (Seq (_ BitVec 16))))
 [GOOD] (define-fun s67 () String "hello")
 [GOOD] (define-fun s68 () Bool (= s62 s67))

@@ -5,6 +5,8 @@
 [GOOD] (set-option :smtlib2_compliant true)
 [GOOD] (set-option :diagnostic-output-channel "stdout")
 [GOOD] (set-option :produce-models true)
+[GOOD] (set-option :pp.max_depth      4294967295)
+[GOOD] (set-option :pp.min_alias_size 4294967295)
 [GOOD] (set-logic ALL) ; has unbounded values, using catch-all.
 [GOOD] ; --- uninterpreted sorts ---
 [GOOD] ; --- tuples ---
@@ -12,6 +14,7 @@
                                            ((mkSBVTuple3 (proj_1_SBVTuple3 T1)
                                                          (proj_2_SBVTuple3 T2)
                                                          (proj_3_SBVTuple3 T3))))))
+[GOOD] ; --- sums ---
 [GOOD] ; --- literal constants ---
 [GOOD] ; --- skolem constants ---
 [GOOD] (declare-fun s0 () (SBVTuple3 Int Int Int)) ; tracks user variable "abx"

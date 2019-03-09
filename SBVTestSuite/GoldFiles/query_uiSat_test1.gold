@@ -5,25 +5,31 @@
 [GOOD] (set-option :smtlib2_compliant true)
 [GOOD] (set-option :diagnostic-output-channel "stdout")
 [GOOD] (set-option :produce-models true)
-[GOOD] (set-logic ALL) ; external query, using all logics.
+[GOOD] (set-logic ALL) ; NB. User specified.
 [GOOD] ; --- uninterpreted sorts ---
 [GOOD] ; --- tuples ---
-[GOOD] (declare-datatypes () ((tup-0 (tup-0))))
+[GOOD] ; --- sums ---
 [GOOD] ; --- literal constants ---
-[GOOD] (define-fun s_2 () Bool false)
-[GOOD] (define-fun s_1 () Bool true)
 [GOOD] ; --- skolem constants ---
-[GOOD] (declare-fun s0 () tup-0) ; tracks user variable "x"
-[GOOD] (declare-fun s1 () tup-0) ; tracks user variable "y"
 [GOOD] ; --- constant tables ---
 [GOOD] ; --- skolemized tables ---
 [GOOD] ; --- arrays ---
 [GOOD] ; --- uninterpreted constants ---
+[GOOD] (declare-fun q1 (Bool) Bool)
 [GOOD] ; --- user given axioms ---
 [GOOD] ; --- formula ---
-[GOOD] (define-fun s2 () Bool (= s0 s1))
+[GOOD] (define-fun s0 () Bool (q1 false))
+[GOOD] (define-fun s1 () Bool (= false s0))
+[GOOD] (define-fun s2 () Bool (q1 true))
+[GOOD] (assert s1)
 [GOOD] (assert s2)
 [SEND] (check-sat)
 [RECV] sat
-*** Solver   : Z3
+[GOOD] (set-option :pp.max_depth      4294967295)
+[GOOD] (set-option :pp.min_alias_size 4294967295)
+[SEND] (get-value (q1))
+[RECV] ((q1 (lambda ((x!1 Bool)) x!1)))
+
+MODEL: SMTModel {modelObjectives = [], modelBindings = Nothing, modelAssocs = [], modelUIFuns = [("q1",(SBool -> SBool,([([True :: Bool],True :: Bool)],False :: Bool)))]}
+DONE.*** Solver   : Z3
 *** Exit code: ExitSuccess

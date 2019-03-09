@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module    : Documentation.SBV.Examples.ProofTools.BMC
--- Author    : Levent Erkok
+-- Copyright : (c) Levent Erkok
 -- License   : BSD3
 -- Maintainer: erkokl@gmail.com
 -- Stability : experimental
@@ -18,6 +18,8 @@
 -- What if @y@ starts at @11@?
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE DeriveFoldable        #-}
+{-# LANGUAGE DeriveTraversable     #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns        #-}
@@ -32,6 +34,7 @@ import Data.SBV.Control
 
 -- | System state, containing the two integers.
 data S a = S { x :: a, y :: a }
+         deriving (Functor, Foldable, Traversable)
 
 -- | Show the state as a pair
 instance Show a => Show (S a) where
@@ -41,10 +44,9 @@ instance Show a => Show (S a) where
 instance EqSymbolic a => EqSymbolic (S a) where
    S {x = x1, y = y1} .== S {x = x2, y = y2} = x1 .== x2 .&& y1 .== y2
 
--- | Queriable instance for our state
-instance Queriable IO (S SInteger) (S Integer) where
-  fresh           = S <$> freshVar_  <*> freshVar_
-  extract S{x, y} = S <$> getValue x <*> getValue y
+-- | 'Fresh' instance for our state
+instance Fresh IO (S SInteger) where
+  fresh = S <$> freshVar_ <*> freshVar_
 
 -- * Encoding the problem
 
