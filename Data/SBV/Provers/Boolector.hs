@@ -37,8 +37,6 @@ boolector = SMTSolver {
                               , supportsCustomQueries      = True
                               , supportsGlobalDecls        = False
                               , supportsDataTypes          = False
-                              , supportsDTConstructorSigs  = False
-                              , supportsDTAccessorSigs     = False
                               , supportsFlattenedModels    = Nothing
                               }
          }

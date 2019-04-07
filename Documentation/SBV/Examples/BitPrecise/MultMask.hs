@@ -43,6 +43,9 @@ import Data.SBV.Control
 -- value above will have its bits at positions @[7,15,23,31,39,47,55,63]@ moved
 -- to positions @[56,57,58,59,60,61,62,63]@ respectively.
 --
+-- NB. Depending on your z3 version, you might also get the following
+-- multiplier as the result: 0x8202040810204081. That value works just fine as well!
+--
 -- Note that we have to send z3 custom configuration for this problem as
 -- otherwise it takes too long. See <http://github.com/Z3Prover/z3/issues/2075>
 -- for details.
