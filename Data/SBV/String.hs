@@ -140,24 +140,14 @@ strToStrAt s offset = subStr s offset 1
 --
 -- >>> prove $ \i -> i .>= 0 .&& i .<= 4 .=> "AAAAA" `strToCharAt` i .== literal 'A'
 -- Q.E.D.
--- >>> prove $ \s i c -> s `strToCharAt` i .== c .=> indexOf s (singleton c) .<= i
+-- >>> prove $ \s i c -> i `inRange` (0, length s - 1) .&& s `strToCharAt` i .== c .=> indexOf s (singleton c) .<= i
 -- Q.E.D.
 strToCharAt :: SString -> SInteger -> SChar
 strToCharAt s i
   | Just cs <- unliteral s, Just ci <- unliteral i, ci >= 0, ci < genericLength cs, let c = C.ord (cs `genericIndex` ci)
   = literal (C.chr c)
   | True
-  = SBV (SVal w8 (Right (cache (y (s `strToStrAt` i)))))
-  where w8      = KBounded False 8
-        -- This is trickier than it needs to be, but necessary since there's
-        -- no SMTLib function to extract the character from a string. Instead,
-        -- we form a singleton string, and assert that it is equivalent to
-        -- the extracted value. See <http://github.com/Z3Prover/z3/issues/1302>
-        y si st = do c <- internalVariable st w8
-                     cs <- newExpr st KString (SBVApp (StrOp StrUnit) [c])
-                     let csSBV = SBV (SVal KString (Right (cache (\_ -> return cs))))
-                     internalConstraint st False [] $ unSBV $ length s .> i .=> csSBV .== si
-                     return c
+  = lift2 StrNth Nothing s i
 
 -- | Short cut for 'strToCharAt'
 (.!!) :: SString -> SInteger -> SChar
@@ -320,10 +310,6 @@ replace s src dst
 --
 -- >>> prove $ \s i -> i .> 0 .&& i .< length s .=> indexOf s (subStr s i 1) .<= i
 -- Q.E.D.
--- >>> prove $ \s i -> i .> 0 .&& i .< length s .=> indexOf s (subStr s i 1) .== i
--- Falsifiable. Counter-example:
---   s0 = "\128\NUL\NUL" :: String
---   s1 =              2 :: Integer
 -- >>> prove $ \s1 s2 -> length s2 .> length s1 .=> indexOf s1 s2 .== -1
 -- Q.E.D.
 indexOf :: SString -> SString -> SInteger
@@ -355,7 +341,7 @@ offsetIndexOf s sub offset
 -- that is, if it encodes a natural number. Otherwise, it returns '-1'.
 -- See <http://cvc4.cs.stanford.edu/wiki/Strings> for details.
 --
--- >>> prove $ \s -> let n = strToNat s in n .>= 0 .&& n .< 10 .=> length s .== 1
+-- >>> prove $ \s -> let n = strToNat s in length s .== 1 .=> (-1) .<= n .&& n .<= 9
 -- Q.E.D.
 strToNat :: SString -> SInteger
 strToNat s

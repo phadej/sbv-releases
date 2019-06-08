@@ -1,7 +1,22 @@
 * Hackage: <http://hackage.haskell.org/package/sbv>
 * GitHub:  <http://leventerkok.github.com/sbv/>
 
-* Latest Hackage released version: 8.2, 2019-04-07
+* Latest Hackage released version: 8.3, 2019-06-08
+
+### Version 8.3, 2019-06-08
+
+  * Increment base dependency to 4.11.
+
+  * Add support for `Data.Set.hasSize`.
+
+  * Add `supportsFP` to CVC4 capabilities list. (#469)
+
+  * Fix a glitch in allSat computations that incorrectly
+    used values of internal variables in model construction.
+
+  * SBV now directly uses the new `seq.nth` function from z3
+    for sequence element access, instead of implementing it
+    internally.
 
 ### Version 8.2, 2019-04-07
 

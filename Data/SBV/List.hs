@@ -135,40 +135,16 @@ listToListAt s offset = subList s offset 1
 -- | @`elemAt` l i@ is the value stored at location @i@. Unspecified if
 -- index is out of bounds.
 --
--- >>> prove $ \i -> i .>= 0 .&& i .<= 4 .=> [1,1,1,1,1] `elemAt` i .== (1::SInteger)
+-- >>> prove $ \i -> i `inRange` (0, 4) .=> [1,1,1,1,1] `elemAt` i .== (1::SInteger)
 -- Q.E.D.
--- >>> prove $ \(l :: SList Integer) i e -> l `elemAt` i .== e .=> indexOf l (singleton e) .<= i
+-- >>> prove $ \(l :: SList Integer) i e -> i `inRange` (0, length l - 1) .&& l `elemAt` i .== e .=> indexOf l (singleton e) .<= i
 -- Q.E.D.
 elemAt :: forall a. SymVal a => SList a -> SInteger -> SBV a
 elemAt l i
   | Just xs <- unliteral l, Just ci <- unliteral i, ci >= 0, ci < genericLength xs, let x = xs `genericIndex` ci
   = literal x
   | True
-  = SBV (SVal kElem (Right (cache (y (l `listToListAt` i)))))
-  where kElem = kindOf (Proxy @a)
-        kSeq  = KList kElem
-
-        -- This is trickier than it needs to be, but necessary since there's
-        -- no SMTLib function to extract the element from a list. Instead,
-        -- we form a singleton list, and assert that it is equivalent to
-        -- the extracted value. See <http://github.com/Z3Prover/z3/issues/1302>
-        y si st = do -- grab an internal variable and make a unit list out of it
-                     e <- internalVariable st kElem
-                     es <- newExpr st kSeq (SBVApp (SeqOp SeqUnit) [e])
-
-                     -- Create the condition that it is equal to si
-                     li <- sbvToSV st si
-                     eq <- newExpr st KBool (SBVApp Equal [es, li])
-
-                     -- Gotta make sure we do this only when length is at least > i
-                     caseTooShort <- sbvToSV st (length l .<= i)
-                     require      <- newExpr st KBool (SBVApp Or [caseTooShort, eq])
-
-                     -- register the constraint:
-                     internalConstraint st False [] $ SVal KBool $ Right $ cache $ \_ -> return require
-
-                     -- We're good to go:
-                     return e
+  = lift2 SeqNth Nothing l i
 
 -- | Short cut for 'elemAt'
 (.!!) :: SymVal a => SList a -> SInteger -> SBV a
@@ -339,10 +315,6 @@ replace l src dst
 --
 -- >>> prove $ \(l :: SList Int8) i -> i .> 0 .&& i .< length l .=> indexOf l (subList l i 1) .<= i
 -- Q.E.D.
--- >>> prove $ \(l :: SList Word16) i -> i .> 0 .&& i .< length l .=> indexOf l (subList l i 1) .== i
--- Falsifiable. Counter-example:
---   s0 = [2048,0,0,0,0,0] :: [Word16]
---   s1 =                3 :: Integer
 -- >>> prove $ \(l1 :: SList Word16) l2 -> length l2 .> length l1 .=> indexOf l1 l2 .== -1
 -- Q.E.D.
 indexOf :: (Eq a, SymVal a) => SList a -> SList a -> SInteger

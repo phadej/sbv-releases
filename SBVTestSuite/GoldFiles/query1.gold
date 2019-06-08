@@ -14,7 +14,7 @@
 [GOOD] (set-info :status sat)
 [GOOD] (set-info :bad what)
 [GOOD] (set-option :produce-models true)
-[GOOD] (set-logic ALL)
+[GOOD] (set-logic ALL) ; has unbounded values, using catch-all.
 [GOOD] ; --- uninterpreted sorts ---
 [GOOD] ; --- tuples ---
 [GOOD] ; --- sums ---
@@ -73,7 +73,7 @@
 [SEND] (get-info :reason-unknown)
 [RECV] (:reason-unknown "state of the most recent check-sat command is not known")
 [SEND] (get-info :version)
-[RECV] (:version "4.8.5")
+[RECV] (:version "4.8.6")
 [SEND] (get-info :status)
 [RECV] (:status sat)
 [GOOD] (define-fun s16 () Int 4)
@@ -104,7 +104,7 @@
 [SEND] (get-info :reason-unknown)
 [RECV] (:reason-unknown "unknown")
 [SEND] (get-info :version)
-[RECV] (:version "4.8.5")
+[RECV] (:version "4.8.6")
 [SEND] (get-info :memory)
 [RECV] unsupported
 [SEND] (get-info :time)

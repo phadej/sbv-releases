@@ -45,6 +45,7 @@ cvt ctx kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arr
         hasDouble      = KDouble    `Set.member` kindInfo
         hasBVs         = hasChar || not (null [() | KBounded{} <- Set.toList kindInfo])   -- Remember, characters map to Word8
         usorts         = [(s, dt) | KUninterpreted s dt <- Set.toList kindInfo]
+        trueUSorts     = [s | (s, _) <- usorts, s /= "RoundingMode"]
         tupleArities   = findTupleArities kindInfo
         hasNonBVArrays = (not . null) [() | (_, (_, (k1, k2), _)) <- arrs, not (isBounded k1 && isBounded k2)]
         hasArrayInits  = (not . null) [() | (_, (_, _, ArrayFree (Just _))) <- arrs]
@@ -97,29 +98,27 @@ cvt ctx kindInfo isSat comments (inputs, trackerVars) skolemInps consts tbls arr
 
            -- we never set QF_S (ALL seems to work better in all cases)
 
-           | hasArrayInits
-           = ["(set-logic ALL)"]
-
-           | hasString || hasList
-           = ["(set-logic ALL)"]
+           | hasInteger || hasReal || not (null trueUSorts) || hasNonBVArrays || hasTuples || hasEither || hasMaybe || hasSets || hasList || hasString || hasArrayInits
+           = let why | hasInteger            = "has unbounded values"
+                     | hasReal               = "has algebraic reals"
+                     | not (null trueUSorts) = "has user-defined sorts"
+                     | hasNonBVArrays        = "has non-bitvector arrays"
+                     | hasTuples             = "has tuples"
+                     | hasEither             = "has either type"
+                     | hasMaybe              = "has maybe type"
+                     | hasSets               = "has sets"
+                     | hasList               = "has lists"
+                     | hasString             = "has strings"
+                     | hasArrayInits         = "has array initializers"
+                     | True                  = "cannot determine the SMTLib-logic to use"
+             in ["(set-logic ALL) ; "  ++ why ++ ", using catch-all."]
 
            | hasDouble || hasFloat
-           = if hasInteger || not (null foralls)
+           = if not (null foralls)
              then ["(set-logic ALL)"]
              else if hasBVs
                   then ["(set-logic QF_FPBV)"]
                   else ["(set-logic QF_FP)"]
-           | hasInteger || hasReal || not (null usorts) || hasNonBVArrays || hasTuples || hasEither || hasMaybe || hasSets
-           = let why | hasInteger        = "has unbounded values"
-                     | hasReal           = "has algebraic reals"
-                     | not (null usorts) = "has user-defined sorts"
-                     | hasNonBVArrays    = "has non-bitvector arrays"
-                     | hasTuples         = "has tuples"
-                     | hasEither         = "has either type"
-                     | hasMaybe          = "has maybe type"
-                     | hasSets           = "has sets"
-                     | True              = "cannot determine the SMTLib-logic to use"
-             in ["(set-logic ALL) ; "  ++ why ++ ", using catch-all."]
 
            -- If we're in a user query context, we'll pick ALL, otherwise
            -- we'll stick to some bit-vector logic based on what we see in the problem.
@@ -834,11 +833,12 @@ cvtExp caps rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
         sh (SBVApp (SetOp SetMember)     [e, s]) = "(select " ++ ssv s ++ " " ++ ssv e ++ ")"
         sh (SBVApp (SetOp SetInsert)     [e, s]) = "(store "  ++ ssv s ++ " " ++ ssv e ++ " true)"
         sh (SBVApp (SetOp SetDelete)     [e, s]) = "(store "  ++ ssv s ++ " " ++ ssv e ++ " false)"
-        sh (SBVApp (SetOp SetIntersect)  args)   = "((_ map and) " ++ unwords (map ssv args) ++ ")"
-        sh (SBVApp (SetOp SetUnion)      args)   = "((_ map or) "  ++ unwords (map ssv args) ++ ")"
-        sh (SBVApp (SetOp SetSubset)     args)   = "(subset "      ++ unwords (map ssv args) ++ ")"
-        sh (SBVApp (SetOp SetDifference) args)   = "(difference "  ++ unwords (map ssv args) ++ ")"
-        sh (SBVApp (SetOp SetComplement) args)   = "((_ map not) " ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetIntersect)  args)   = "(intersection " ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetUnion)      args)   = "(union "        ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetSubset)     args)   = "(subset "       ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetDifference) args)   = "(setminus "     ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetComplement) args)   = "(complement "   ++ unwords (map ssv args) ++ ")"
+        sh (SBVApp (SetOp SetHasSize)    args)   = "(set-has-size " ++ unwords (map ssv args) ++ ")"
 
         sh (SBVApp (TupleConstructor 0)   [])    = "mkSBVTuple0"
         sh (SBVApp (TupleConstructor n)   args)  = "(mkSBVTuple" ++ show n ++ " " ++ unwords (map ssv args) ++ ")"
